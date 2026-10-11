@@ -4,6 +4,14 @@ A terminal session manager for Claude Code. When you have a dozen or more Claude
 
 Roost is a session manager, not an orchestrator. It never sends work to a session on its own.
 
+![The Sessions tab: running Sessions grouped into Open, Pinned, and Background, with status, context, and project](assets/sessions.png)
+
+| Projects | Notes | Stats |
+|---|---|---|
+| ![Projects with their Sessions, by section](assets/projects.png) | ![A note read beside the list](assets/notes.png) | ![Spend by day, kind, and project](assets/stats.png) |
+
+<sub>Screenshots are of `roost --demo`: made-up Sessions, projects, and notes.</sub>
+
 ## Install
 
 Requires macOS, Python 3.9 or later (the system one is fine), and Claude Code with background sessions (`claude agents`). Roost's screens are drawn by [Textual](https://textual.textualize.io), which Homebrew brings along or the install script puts in its own environment, `~/.roost/venv`, so nothing is added to your system Python.
