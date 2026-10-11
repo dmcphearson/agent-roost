@@ -1,0 +1,759 @@
+"""The Projects tab."""
+import curses, os, textwrap, threading, time
+from pathlib import Path
+
+from roost.core.statsdata import log_spend
+from roost.core.projectdata import label_of, plural, rename_project, session_name, worked
+from roost.core.notedata import read_notes
+from roost.core.summaries import summary_settings
+from roost.core.adopt import (
+    ADOPT_PROMPT,
+    ADOPT_SYSTEM,
+    adopt_estimate,
+    adopt_input,
+    adopt_plan_text,
+    apply_plan,
+    backfill,
+    parse_plan,
+    plan_problems,
+)
+from roost.core.formatting import clip, plain_text, short
+from roost.app.shell import BAR_KEYS, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES
+from roost.app.widgets import Widget
+from roost.core import config
+from roost.core import sessiondata
+from roost.core import projectdata
+from roost.core import pricing
+from roost.core import handoffs as handoffdata
+from roost.core import summaries
+from roost.core import terminals
+
+if Widget:
+    from textual.containers import Vertical
+    from roost.app.widgets import Region, SearchRow
+else:
+    Region = None
+
+
+class ProjectsTab:
+    """The Projects tab."""
+
+    # roost adopt, from a project's actions: plan (one model call, in the background), read and edit
+    # the plan in the editor, apply it, then write Handoffs for the Sessions it lists. Each step asks.
+    def adopt_plan_path(self, p):
+        return config.ADOPT_PLANS / f"{Path(p['path']).name}.md"
+
+    def busy_job(self):
+        return next((j for j in self.summaries.values() if j["state"] == "running"), None)
+
+    def ask_adopt(self, p):
+        running = self.busy_job()
+        if running:
+            self.msg = f"Wait for {running['name']}'s run to finish first"
+            return None
+        if self.adopt_plan_path(p).exists():  # planned before (here or by roost adopt): reuse it
+            self.confirm = ("adopt-review", p)
+            return None
+        model, cap = summary_settings()
+        try:
+            est = adopt_estimate(adopt_input(Path(p["path"])), model, pricing.prices())
+        except OSError as e:
+            self.msg = f"Can't read its folder: {e}"
+            return None
+        self.offer = (model, cap, est, None)
+        self.confirm = ("adopt", p)
+        return None
+
+    def run_adopt_plan(self, p):
+        model, cap = self.offer[:2]
+        folder, saved = Path(p["path"]), self.adopt_plan_path(p)
+        job = self.summaries[f"adopt:{p['path']}"] = {"state": "running", "name": label_of(p), "step": 1, "steps": 1,
+                                                       "started": time.time(), "adopt": "plan", "path": p["path"]}
+
+        def work():
+            try:
+                body, cost = summaries.claude_print(model, ADOPT_SYSTEM, ADOPT_PROMPT + adopt_input(folder), cap)
+                log_spend("Adopt", cost, project=p["id"], model=model)
+                config.ADOPT_PLANS.mkdir(parents=True, exist_ok=True)
+                saved.write_text(adopt_plan_text(folder, body))
+                job.update(state="done", text=f"Planned {label_of(p)} (${cost:.2f})")
+            except Exception as e:
+                config.log(f"adopt plan {p['id']}: {e}")
+                job.update(state="failed", text=f"Couldn't plan {label_of(p)}, nothing changed: {e}")
+        threading.Thread(target=work, daemon=True).start()
+        self.msg = f"Planning {label_of(p)} in the background…"
+
+    def adopt_job(self, p):
+        return self.summaries.get(f"adopt:{p['path']}")
+
+    def review_adopt(self, p):
+        """Open the plan in the editor, then ask to apply it."""
+        self.edit(str(self.adopt_plan_path(p)))
+        self.confirm = ("adopt-apply", p)
+
+    def apply_adopt(self, p):
+        saved = self.adopt_plan_path(p)
+        try:
+            plan = parse_plan(saved.read_text(errors="replace"))
+            new = apply_plan(Path(p["path"]), plan)
+        except (ValueError, OSError) as e:
+            config.log(f"adopt apply {p['id']}: {e}")
+            self.msg = (f"Couldn't apply it: {e}. Steps before the failure are done, and anything they replaced "
+                        "is in its _archive/")
+            self.load_projects()
+            return
+        saved.unlink()
+        self.load_projects()
+        self.msg = f"Adopted {new.name}: replaced files are in _archive/" + (
+            f" · its INDEX.md names the old folder: rebuild it" if new.name != Path(p["path"]).name
+            and (new.parent / "INDEX.md").exists() else "")
+        np = next((q for q in self.projects or [] if q["path"] == str(new)), None)
+        if np:
+            self.ask_adopt_handoffs(np)
+
+    def ask_adopt_handoffs(self, p):
+        """After adopting: offer a Handoff for each Session it lists, at one price. Sessions open in a
+        window or working are left for later."""
+        model, cap = summary_settings()
+        table, sids, total, left = pricing.prices(), [], 0.0, []
+        for sid in p["sessions"]:
+            s = next((x for x in self.sessions if sid in (x.get("ids") or [x["id"]])), None)
+            if s and (s["kind"] == "interactive" or s.get("attached") or s["state"] in ("busy", "opening")):
+                left.append(f"{s['name']} (it's open in a window or working)")
+                continue
+            try:
+                est = summaries.summary_estimate(dict(summaries.summary_plan(sid), project=False), model, table)
+            except (ValueError, OSError) as e:
+                left.append(f"{session_name(sid)} ({e})")
+                continue
+            sids.append(sid)
+            total = None if est is None or total is None else total + est
+        if left:
+            self.msg += f" · no Handoff yet for {'; '.join(left)}"
+        if sids:
+            self.offer = (model, cap, total, sids)
+            self.confirm = ("adopt-handoffs", p)
+
+    def run_adopt_handoffs(self, p):
+        model, cap, _, sids = self.offer
+        for sid in sids:  # a background Session is stopped first, as a single Handoff does
+            s = next((x for x in self.sessions if sid in (x.get("ids") or [x["id"]])), None)
+            if s and s.get("attach"):
+                try:
+                    sessiondata.stop_session(s["attach"])
+                except Exception as e:
+                    config.log(f"stop {sid[:8]} for adopt: {e}")
+                    sids = [x for x in sids if x != sid]
+        if not sids:
+            self.msg = "Couldn't stop its Sessions, so nothing ran"
+            return
+        job = self.summaries[f"adopt:{p['path']}"] = {"state": "running", "name": label_of(p), "step": 1, "steps": len(sids),
+                                                       "started": time.time(), "adopt": "handoffs", "path": p["path"]}
+        said = []
+
+        def say(line):
+            said.append(line)
+            job.update(step=min(len(said) + 1, len(sids)))
+
+        def work():
+            try:
+                spent = backfill(Path(p["path"]), model, cap, say=say, sids=sids)
+                skipped = [l for l in said if ": skipped, " in l]
+                job.update(state="done", text=f"Wrote {plural(len(said) - len(skipped), 'Handoff')} for {label_of(p)} (${spent:.2f})"
+                           + (f"; {len(skipped)} skipped: {skipped[0].strip()}" if skipped else ""))
+            except Exception as e:
+                config.log(f"adopt handoffs {p['id']}: {e}")
+                job.update(state="failed", text=f"Handoffs for {label_of(p)} stopped: {e}")
+        threading.Thread(target=work, daemon=True).start()
+        self.msg = f"Writing {plural(len(sids), 'Handoff')} for {label_of(p)} in the background…"
+        self.refresh()
+
+    def adopt_problems(self, p):
+        try:
+            return plan_problems(Path(p["path"]), parse_plan(self.adopt_plan_path(p).read_text(errors="replace")))
+        except OSError as e:
+            return [str(e)]
+
+    def adopt_prompt(self, action, p):
+        """An adopt step's question: (title, body lines, keys, color)."""
+        name = clip(label_of(p), 60)
+        if action in ("adopt", "adopt-handoffs"):
+            model, cap, est, sids = self.offer
+            cost = f"about ${est:.2f}" if est is not None else "cost unknown (no price list)"
+            if action == "adopt":
+                return (f"Plan how to adopt {name}?",
+                        [f"One model call: {cost} with {model}, capped at ${cap:g}.",
+                         "It runs in the background. You read the plan before anything changes."],
+                        "y to plan · any other key cancels", self.YELLOW)
+            return (f"Write a Handoff for each of its {plural(len(sids), 'Session')}?",
+                    [f"From their transcripts: {cost} with {model}.", "Any still running in the background is stopped first."],
+                    "y to write · any other key: not now", self.YELLOW)
+        if action == "adopt-review":
+            return (f"The plan to adopt {name} is ready",
+                    [f"Read it, and edit it if you like, in {self.editor_name().split()[0]}. Roost asks before applying it."],
+                    "enter to read it · any other key: later", self.GREEN)
+        problems = self.adopt_problems(p)
+        if problems:
+            return ("The plan can't be applied yet", [f"• {x}" for x in problems],
+                    "e to edit it · any other key: later", self.RED)
+        plan = parse_plan(self.adopt_plan_path(p).read_text(errors="replace"))
+        steps = [f"renames the folder {plan['rename']}" if plan["rename"] != Path(p["path"]).name else "",
+                 f"moves {plural(len(plan['moves']), 'file')}" if plan["moves"] else "",
+                 f"archives {plural(len(plan['archive']), 'file')}" if plan["archive"] else "",
+                 f"splits out {plural(len(plan['split']), 'project')}" if plan["split"] else "",
+                 "writes a first Handoff" if plan["first"] else "", "rewrites the README"]
+        return (f"Apply the plan to {name}?", [f"• It {x}" for x in steps if x] + ["", "Replaced files go to _archive/."],
+                "y to apply · e to edit · any other key: later", self.YELLOW)
+
+    def rename_project_ui(self, p):
+        live = [s["name"] for s in self.linked(p) if s["state"] != "closed"]
+        if live:
+            self.msg = f"{', '.join(live)} {'is' if len(live) == 1 else 'are'} running in it: close {'it' if len(live) == 1 else 'them'} first"
+            return None
+
+        def done(text):
+            try:
+                new = rename_project(p["path"], text)
+            except (ValueError, OSError) as e:
+                self.msg = f"Couldn't rename it: {e}"
+                return None
+            self.expanded.discard(p["id"])
+            self.load_projects()
+            row = next((r for r in self.project_rows() if r.kind == "project" and r.item["path"] == str(new)), None)
+            if row:
+                self.select_key(self.row_key(row))
+            self.msg = f"Renamed {p['id']} to {new.name}" + (
+                " · its INDEX.md still names the old folder: rebuild it" if (new.parent / "INDEX.md").exists() else "")
+            return None
+        self.ask("", p["id"], done, "rename", title=f"Rename {clip(p['id'], 40)} (its folder)")
+        return None
+
+    def load_projects(self):
+        self.projects = projectdata.read_projects(self.sessions)
+        self.recaps = projectdata.read_recaps()
+        self.notes = read_notes()
+
+    def wrapped(self, s):
+        """A closed Session whose newest Handoff, in its project or its Session recap, covers its last
+        message: what it did is saved, so it's never reopened, only picked up by a fresh Session."""
+        p = self.project_of(s)
+        home = p or self.recap_of(s)
+        return bool(home) and self.wrapped_up(home, s)
+
+    def wrapped_up(self, p, s):
+        """A closed Session whose newest Handoff in p (a project, or a recap) covers its last message;
+        under a project it folds into the "N wrapped up" line."""
+        if s["state"] != "closed" or s.get("attach"):
+            return False
+        cov = p.get("covered") or {}
+        to = max((cov.get(i, 0) for i in s.get("ids") or [s["id"]]), default=0)
+        return bool(to) and to >= (s.get("active") or s["last"]) - 60  # a minute's slack for the last records
+
+    def linked(self, p):
+        """The Sessions a project lists, newest first, in any state."""
+        return sorted((s for s in self.sessions if set(s.get("ids") or [s["id"]]) & set(p["sessions"])),
+                      key=lambda s: -s["last"])
+
+    def project_rows(self):
+        """What the Projects tab lists, top to bottom: a header for each section that has anything in
+        it, then (unless the section is folded) its rows; an expanded project's Sessions follow it,
+        indented. Closed comes last, folded until opened, then + New project. Sessions no project
+        lists are on the Sessions tab, and Session recaps on the Notes tab.
+        A search (/) keeps the rows whose name, summary, tags, or folder holds it, unfolded."""
+        ps, cutoff = self.projects or [], time.time() - RECENT_PROJECT_DAYS * 86400
+        q = self.pquery.lower()
+
+        def hit(kind, x):
+            if not q:
+                return True
+            fields = [x.get("name"), x.get("id"), x.get("label"), x.get("summary"), x.get("category"), " ".join(x.get("tags") or []), x.get("cwd")]
+            return any(q in (f or "").lower() for f in fields)
+
+        ps = [p for p in ps if hit("project", p)]
+        sections = [  # one list: Closed comes last, folded until opened
+            ("Recent", [("project", p) for p in ps if not p["closed"] and (p["last"] or 0) >= cutoff]),
+            ("Inactive", [("project", p) for p in ps if not p["closed"] and (p["last"] or 0) < cutoff]),
+            ("Closed", [("project", p) for p in ps if p["closed"]]),
+        ]
+        rows = []
+        for sec, items in sections:
+            if not items:
+                continue
+            rows.append(Row(sec, "head", {"id": sec, "count": len(items)}, 0))
+            if sec in self.folded and not q:
+                continue
+            for kind, item in items:
+                rows.append(Row(sec, kind, item, 0))
+                if kind == "project" and item["id"] in self.expanded:
+                    done = [s for s in self.linked(item) if self.wrapped_up(item, s)]
+                    rows += [Row(sec, "linked", s, 1) for s in self.linked(item) if s not in done]
+                    if done:
+                        fold = {"id": f"{item['id']} wrapped up", "count": len(done), "project": item["id"]}
+                        rows.append(Row(sec, "wrapped", fold, 1))
+                        if fold["id"] in self.unwrapped:
+                            rows += [Row(sec, "linked", s, 1) for s in done]
+        if not q:
+            rows.append(Row("New", "new", {"id": "+ New project"}, 0))
+        return rows
+
+    def row_status(self, r, dim):
+        """STATUS for a Projects row: a Session's live status, a project's status field, or recap."""
+        if r.kind in ("session", "linked"):
+            text, attr = self.status_cell(r.item)
+            return text, self.DIM if r.item["state"] == "closed" else attr
+        if r.kind == "project":
+            job = self.adopt_job(r.item)
+            if job and job["state"] == "running":
+                took = self.progress(job).split(" · ")[1]
+                text = f"planning {took}" if job["adopt"] == "plan" else f"Handoffs {self.progress(job)}"
+                return self.mark("opening", text)
+            return r.item.get("status") or "—", dim
+        return "recap", self.DIM
+
+    def live_counts(self, p):
+        """(mark, count) for a project's running Sessions: needs input, working, then idle."""
+        live = [s for s in self.linked(p) if s["state"] != "closed"]
+        groups = [("input", ("waiting", "blocked")), ("working", ("busy", "opening")), ("idle", ("idle", "watching", "live"))]
+        return [(key, n) for key, states in groups if (n := sum(s["state"] in states for s in live))]
+
+    @staticmethod
+    def row_key(r):
+        return (r.kind, r.item.get("path") or r.item["id"], r.sec)
+
+    def select_key(self, key):
+        keys = [self.row_key(r) for r in self.project_rows()]
+        if key in keys:
+            self.psel = keys.index(key)
+
+    def draw_projects(self):
+        """What the Projects tab shows: its rows, the selected one's panel, the corner note, the search
+        row, and the key bar. ProjectsView draws them."""
+        h, w = self.scr.getmaxyx()
+        rows = self.prows = self.project_rows()
+        self.psel = max(0, min(self.psel, len(rows) - 1))
+        ps = self.projects or []
+        closed = sum(p["closed"] for p in ps)
+        self.corner = (f"{len(ps) - closed} projects · {closed} closed", self.DIM)
+        root = short(str(config.projects_dir()))
+        self.subhead = (f"folder {root}" + (" · missing: run roost setup" if self.projects is None else ""),
+                        self.YELLOW | curses.A_BOLD if self.projects is None else self.DIM)
+        self.pname, self.pfields = self.project_panel(rows, h, w)
+        self.key_bar(BAR_KEYS.replace("←→ views", "←→ open/close"), self.msg or self.warning, self.ACCENT | curses.A_BOLD)
+        return rows
+
+    def project_panel(self, rows, h, w):
+        """The panel under the list: the selected row's name and its labeled fields, with the whole
+        summary when there's room."""
+        if not rows:
+            return "", []
+        r = rows[self.psel]
+        item = r.item
+        if r.kind == "new":
+            return "+ New project", [("", "enter or a click: give it an id (its folder's name) and a one-sentence summary")]
+        if r.kind == "head":
+            return r.sec, [("Section", f"{r.sec}: {SECTION_RULES[r.sec]}"), ("", "enter or a click opens or closes it")]
+        if r.kind == "wrapped":
+            return f"{plural(item['count'], 'Session')} wrapped up", [
+                ("Wrapped up", "closed, and a Handoff covers each one's last message: the project folder has what they did"),
+                ("", "enter or a click shows or hides them")]
+        name = item["name"] if r.kind in ("session", "linked") else label_of(item) if r.kind == "project" else item["id"]
+        if r.kind == "project":
+            n = len(item["sessions"])
+            last = worked(item["last"]) if item["last"] else "never (no Sessions or Handoffs yet)"
+            fields = [("Status", f"{item['status'] or 'none set'}   Last worked  {last}   Sessions  {n}"
+                       + ("" if item["readme"] else "   (no README.md)")),
+                      ("Category", item.get("category") or "none"),
+                      ("Tags", ", ".join(item.get("tags") or []) or "none"),
+                      ("Folder", short(item["path"]) + f"   Id  {item['id']}")]
+            if not item.get("adopted", True) and not item["closed"]:
+                fields.append(("Shape", "not adopted yet (no handoffs/): Adopt it, in its actions (enter), plans its README and files, then its Handoffs"))
+            for folder, days in item.get("archives") or []:
+                fields.append(("Archive", f"_archive/{folder} is {days} days old, from roost adopt: its actions (enter) can move it to the Trash"))
+        elif r.kind in ("session", "linked"):
+            text, _ = self.status_cell(item)
+            fields = [("Status", f"{text}   Last active  {worked(item['last'])}   Session  {item['id'][:8]}"
+                       + "   in this project"),
+                      ("Folder", short(item["cwd"]))]
+            job = self.summaries.get(item["id"])
+            if job and job["state"] != "done":
+                fields.append(("Handoff", f"{job['state']}{' ' + self.progress(job) if job['state'] == 'running' else ''}: {job['text']}"))
+        else:
+            fields = [("Status", f"Session recap   Last worked  {worked(item['last'])}   Sessions  {len(item.get('sessions') or [])}"),
+                      ("File", short(item["path"])),
+                      ("", "enter: start a Session from it, or make it a project (its Handoffs move in)")]
+        summary = textwrap.wrap(plain_text(item["summary"]), max(w - 18, 10)) or ["(none)"]
+        # a Session's "summary" is only its last message, so it's labeled that and kept short
+        last = r.kind in ("session", "linked")
+        room = LAST_MESSAGE_LINES if last else max(2, h // 4)  # the list keeps most of the screen
+        if len(summary) > room:
+            summary = summary[:room - 1] + [clip(summary[room - 1], w - 20) + " …"]
+        return name, fields + [("Last message" if last else "Summary", summary[0])] + [("", line) for line in summary[1:]]
+
+    def project_lines(self, rows, page):
+        """The list's lines: a row's index, or None for the blank line before every header but the
+        first. Scrolls self.ptop so the selected row is in the page."""
+        lines, sel_line = [], None
+        for idx, r in enumerate(rows):
+            if r.kind in ("head", "new") and idx:
+                lines.append(None)
+            lines.append(idx)
+            if idx == self.psel:
+                sel_line = len(lines) - 1
+        if sel_line is not None:
+            if sel_line < self.ptop:
+                self.ptop = sel_line
+            elif sel_line >= self.ptop + page:
+                self.ptop = sel_line - page + 1
+        self.ptop = max(0, min(self.ptop, max(len(lines) - page, 0)))
+        return lines
+
+    PROJECTS_HELP = [
+        ("Sections", f"Recent (active in {RECENT_PROJECT_DAYS} days), Inactive, then Closed, folded until opened"),
+        ("Open", "→ opens a section or a project's Sessions, ← closes it · enter or a click on a header does too"),
+        ("Columns", "SESSIONS counts the project's running Sessions: ◆ need input · ● working · ○ idle"),
+        ("Lists", "your projects (roost setup picks the folder); Sessions no project lists are on the Sessions tab, recaps on Notes"),
+        ("Kinds", "each project has one category (what kind of work) and any tags (what it's about), both from its actions"),
+    ]
+
+    def projects_typing(self):
+        return bool(self.confirm)
+
+    def toggle(self, r, open_=None):
+        """Open or close a section header or a project's Sessions; open_ None flips it."""
+        if r.kind == "head":
+            shut = r.sec in self.folded if open_ is None else bool(open_)
+            (self.folded.discard if shut else self.folded.add)(r.sec)
+        elif r.kind == "wrapped":
+            on = r.item["id"] not in self.unwrapped if open_ is None else open_
+            (self.unwrapped.add if on else self.unwrapped.discard)(r.item["id"])
+        elif r.kind == "project":
+            on = r.item["id"] not in self.expanded if open_ is None else open_
+            if on and not self.linked(r.item):
+                self.msg = "No Sessions list this project yet"
+                return
+            (self.expanded.add if on else self.expanded.discard)(r.item["id"])
+
+    def open_or_close(self, rows, open_):
+        """→ opens the selected section or project (its Sessions); ← closes it. ← on a
+        Session under a project closes the project and selects it."""
+        r = rows[self.psel]
+        if r.kind == "wrapped" and (open_ or r.item["id"] in self.unwrapped):
+            self.toggle(r, open_)
+            return
+        if r.kind in ("linked", "wrapped"):
+            if not open_:
+                p = self.parent(rows, self.psel)
+                self.toggle(p, False)
+                self.select_key(self.row_key(p))
+            return
+        if r.kind == "head" or (r.kind == "project" and (self.linked(r.item) or not open_)):
+            self.toggle(r, open_)
+
+    @staticmethod
+    def parent(rows, i):
+        """The project row a linked Session row sits under."""
+        return next(p for p in reversed(rows[:i]) if p.kind == "project")
+
+    def start_folders(self, p):
+        """Where a Session for p can start: the project folder, then the folders its Sessions worked in
+        (where each was started, else where it last was), newest first, each once."""
+        out = [p["path"]]
+        for s in self.linked(p):
+            d = next((d for d in (s.get("home"), s.get("cwd")) if d and os.path.isdir(d)), None)
+            if d and d not in out:
+                out.append(d)
+        return out
+
+    def start(self, pid, cwd, name=None):
+        """Start a fresh Session for pid in cwd. Returns what to run in this terminal, if there's no other."""
+        try:
+            started = terminals.start_session(pid, cwd, self.term, name)
+        except (ValueError, OSError) as e:
+            self.msg = f"Couldn't start it: {e}"
+            return None
+        if isinstance(started, dict):
+            return started
+        self.msg = started
+        self.load_projects()
+        return None
+
+    def start_for(self, p):
+        """Start a fresh Session for project p, asking which folder when its Sessions used several."""
+        if p["closed"]:
+            self.msg = f"{label_of(p)} is closed"
+            return None
+        folders = self.start_folders(p)
+        if len(folders) == 1:
+            return self.start(p["id"], folders[0])
+        self.choose(f"Start a Session for {clip(label_of(p), 40)} in", [(short(f), f) for f in folders],
+                    lambda f: self.start(p["id"], f))
+        return None
+
+    def project_actions(self, p):
+        acts = []
+        if not p["closed"]:
+            acts.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
+                         lambda: self.start_for(p)))
+        if self.linked(p):
+            shown = p["id"] in self.expanded
+            acts.append(("Hide its Sessions" if shown else "Show its Sessions",
+                         lambda: (self.expanded.discard if shown else self.expanded.add)(p["id"])))
+        if p["readme"] and not p["closed"] and not p.get("adopted", True):  # a demo project counts as adopted
+            acts.append(("Adopt it: plan its README and files, then write its Handoffs…", lambda: self.ask_adopt(p)))
+        if p["readme"]:
+            acts.append(("Set its category…", lambda: self.edit_category(p)))
+            acts.append(("Edit its tags…", lambda: self.edit_tags(p)))
+        if p.get("readme") and Path(p["path"]).is_dir():  # a real folder (the demo's aren't)
+            acts.append(("Rename…", lambda: self.rename_project_ui(p)))
+        acts.append(("Show its folder in Finder", lambda: self.show_in_finder(p["path"])))
+        for name, _ in p.get("archives") or []:
+            path = str(Path(p["path"]) / "_archive" / name)
+            acts.append((f"Move _archive/{name} to the Trash…",
+                         lambda path=path, name=name: self.ask_confirm("archive", {"name": f"{p['id']}/_archive/{name}", "path": path})))
+        acts.append(("New project…", self.new_project))
+        return acts
+
+    def recap_of(self, s):
+        """The Session recap s wrote, if any: /wrap-up writes one when no project lists the Session."""
+        ids = set(s.get("ids") or [s["id"]])
+        return next((n for n in getattr(self, "recaps", None) or [] if ids & set(n.get("sessions") or [])), None)
+
+    def row_actions(self, r):
+        if r.kind == "project":
+            return self.project_actions(r.item)
+        return self.session_actions(r.item)
+
+    def tags_in_use(self):
+        """Every tag on a project or a note, for the tag picker."""
+        return sorted({t for x in (self.projects or []) + (self.notes or []) for t in x.get("tags") or []})
+
+    def edit_tags(self, x):
+        """Tick a project's or a note's tags from the ones in use, or type a new one."""
+        def got(tags):
+            try:
+                projectdata.set_tags(x["path"], tags)
+            except (ValueError, OSError) as e:
+                self.msg = f"Couldn't set them: {e}"
+                return None
+            self.msg = f"Tags: {', '.join(tags)}" if tags else "Tags cleared"
+            self.load_projects()
+            return None
+
+        library = sorted(set(self.tags_in_use()) | set(x["tags"]))
+        self.choose(f"Tags for {clip(x.get('name') or label_of(x), 40)}", [(t, t) for t in library], got,
+                    filtering=True, add="tag", multi=x["tags"])
+        return None
+
+    def edit_category(self, p):
+        """Pick a project's one category from CATEGORIES.md and the ones in use, or type a new one,
+        which joins the list."""
+        listed = projectdata.read_categories()
+
+        def got(category):
+            try:
+                if category and category not in [n for n, _ in listed]:
+                    projectdata.add_category(category)
+                projectdata.set_category(p["path"], category)
+            except (ValueError, OSError) as e:
+                self.msg = f"Couldn't set it: {e}"
+                return None
+            self.msg = f"Category: {category}" if category else "Category cleared"
+            self.load_projects()
+            return None
+
+        cur = p.get("category")
+        in_use = {q["category"] for q in self.projects or [] if q.get("category")}
+        names = [n for n, _ in listed] + sorted(in_use - {n for n, _ in listed})
+        about = dict(listed)
+        w = max([len(n) for n in names] or [0]) + 2
+        options = [((n.ljust(w) + (about.get(n) or ("(no projects yet)" if n not in in_use else ""))).rstrip()
+                    + ("  · current" if n == cur else ""), n) for n in names]
+        self.choose(f"Category for {clip(label_of(p), 40)}", options + ([("No category", "")] if cur else []), got,
+                    filtering=True, add="category")
+        return None
+
+    def new_project(self, note=None):
+        """Make a project: its name, its folder, then a one-sentence summary. From a Session recap,
+        the recap's Handoffs move in and its name and summary are the starting text."""
+        def made(pid, label, text):
+            try:
+                folder = (handoffdata.promote_recap(note["path"], pid, text, label) if note
+                          else projectdata.create_project(pid, text, label))
+            except (ValueError, OSError) as e:
+                self.msg = f"Couldn't create it: {e}"
+                return None
+            self.msg = f"Created {short(str(folder))}"
+            self.load_projects()
+            self.folded.discard("Inactive")  # a new project has no work yet, so it lands in Inactive
+            self.select_key(("project", str(folder), "Inactive"))
+            return None
+
+        label = note["id"].replace("-", " ").capitalize() if note else ""  # a recap printer-fix starts as Printer fix
+        return self.ask_project(label, note["summary"] if note else "", made,
+                                f"Project from the recap {clip(note['id'], 24)}" if note else "New project")
+
+    def keys_projects(self, k, rows):
+        if self.confirm:
+            self.keys_confirm(k)
+            self.load_projects()
+            return None
+        r = rows[self.psel] if rows and self.psel < len(rows) else None
+        if isinstance(k, tuple):
+            _, mx, my, bstate = k
+            if my in self.prow_y:
+                idx = self.prow_y[my]
+                how = self.click(k, idx)
+                if how:
+                    self.psel = idx
+                row = rows[idx]
+                if row.kind == "new":
+                    if how:  # + New project works like a button
+                        return self.new_project()
+                elif row.kind in ("head", "wrapped"):
+                    if how:  # a header opens or closes with one click
+                        self.toggle(row)
+                elif how in ("click", "double") and row.kind == "project" and mx <= 5 and self.linked(row.item):
+                    self.last_click = (0, -1)
+                    self.toggle(row)  # so does a click on a project's ▸ or ▾
+                elif how == "menu":
+                    return self.menu(row.item.get("name") or label_of(row.item), self.row_actions(row))
+                elif how == "double":
+                    acts = self.row_actions(row)
+                    return acts[0][1]() if acts else None
+            return None
+        to = self.move(k, self.psel, len(rows))
+        if to is not None:
+            self.psel = to
+        elif k in ("right", "left") and r:
+            self.open_or_close(rows, k == "right")
+        elif k == "enter":
+            if not r or r.kind == "new":
+                return self.new_project()
+            if r.kind in ("head", "more", "wrapped"):
+                self.toggle(r)
+            else:
+                return self.menu(r.item.get("name") or label_of(r.item), self.row_actions(r))
+        self.psel = max(0, min(self.psel, len(self.project_rows()) - 1))
+        return None
+
+
+if Region:
+    class ProjectList(Region):
+        """The column headers, then the sections and their projects, an open project's Sessions under it."""
+        def lines(self):
+            ui, w, y0 = self.ui, self.size.width, self.region.y
+            rows = getattr(ui, "prows", [])
+            page = ui.page = max(self.size.height - 3, 1)  # the headers, a blank row, and the position at the bottom
+            name_w = max(16, min(ui.name_w, w - 100))
+            # STATUS is as wide as the longest status in the list, plus a gap
+            status_w = max([len("STATUS")] + [len(ui.row_status(r, 0)[0]) for r in rows if r.kind not in ("head", "new")]) + 2
+            head, cx = self.line(), 5
+            for title, cw in [("NAME", name_w), ("STATUS", status_w), ("SESSIONS", 13), ("CATEGORY", 22), ("TAGS", 22),
+                              ("LAST WORKED", 18)]:
+                head.put(cx, title, curses.A_BOLD | ui.DIM)
+                cx += cw
+            out = [head, self.line()]
+            lines = ui.project_lines(rows, page)
+            if not rows:
+                note = self.line()
+                note.put(3, "Nothing here." + (" Press enter to create a project." if not ui.pquery
+                                               else " Try the other view, or esc to clear the search."), ui.DIM)
+                out.append(note)
+            ui.prow_y = {}
+            for i, idx in enumerate(lines[ui.ptop:ui.ptop + page]):
+                row = self.line()
+                out.append(row)
+                if idx is None:
+                    continue
+                y, r = y0 + 2 + i, rows[idx]
+                ui.prow_y[y] = idx
+                hl = idx == ui.psel
+                look = ui.selected if hl else (lambda a: a)
+                if hl:
+                    row.put(1, " " * (w - 2), look(0))
+                    row.put(1, "›", look(curses.A_BOLD | ui.ACCENT))
+                if r.kind == "head":
+                    label = f"{'▸' if r.sec in ui.folded else '▾'} {r.sec} ({r.item['count']}) "
+                    rule = "" if r.sec == "Recent" else f"· {SECTION_RULES[r.sec]} "
+                    row.put(3, label, look(curses.A_BOLD | (ui.ACCENT if r.sec == "Recent" else 0)))
+                    row.put(3 + len(label), rule, look(ui.DIM))
+                    if not hl:
+                        x = 3 + len(label) + len(rule)
+                        row.rule(x, w - x - 2, ui.DIM)
+                    continue
+                if r.kind == "new":
+                    row.put(3, "+ New project", look(ui.ACCENT | (curses.A_BOLD if hl else 0)))
+                    continue
+                if r.kind == "wrapped":
+                    arrow = "▾" if r.item["id"] in ui.unwrapped else "▸"
+                    row.put(3, f"    {arrow} {r.item['count']} wrapped up", look(ui.DIM))
+                    continue
+                dim = ui.DIM if r.sec == "Closed" or (r.kind == "linked" and r.item["state"] == "closed") else 0
+                if r.kind == "project":
+                    n = len(ui.linked(r.item))
+                    name = ("▾ " if r.item["id"] in ui.expanded else "▸ " if n else "  ") + label_of(r.item)
+                elif r.kind == "linked":
+                    name = "    " + r.item["name"]
+                else:
+                    name = "  " + (r.item["name"] if r.kind == "session" else r.item["id"])
+                row.put(3, clip(name, name_w), look((curses.A_BOLD if r.sec == "Recent" and r.kind == "project" else 0) | dim))
+                cx = 5 + name_w
+                text, attr = ui.row_status(r, dim)
+                row.put(cx, text, look(attr)); cx += status_w
+                if r.kind == "project":
+                    sx = cx
+                    for key, n in ui.live_counts(r.item):
+                        part = f"{ui.MARKS[key]}{n} "
+                        row.put(sx, part, look(ui.status[key]))
+                        sx += len(part)
+                cx += 13
+                if r.kind == "project":
+                    row.put(cx, clip(r.item.get("category") or "", 21), look(ui.DIM | dim))
+                    row.put(cx + 22, clip(", ".join(r.item.get("tags") or []), 21), look(ui.DIM | dim))
+                cx += 44
+                last = r.item["last"]
+                row.put(cx, worked(last) if last else "never", look(dim if last else ui.DIM))
+            if len(lines) > page:
+                while len(out) < self.size.height - 1:
+                    out.append(self.line())
+                pos = self.line()
+                pos.put(w - 12, f"{ui.psel + 1}/{len(rows)}", ui.DIM)
+                out.append(pos)
+            return out
+
+    class ProjectPanel(Region):
+        """The selected row: a rule, its name, then its labeled fields."""
+        def lines(self):
+            ui, w = self.ui, self.size.width
+            edge = self.line()
+            edge.rule(1, w - 2, ui.DIM)
+            out = [edge]
+            if not getattr(ui, "prows", None):
+                return out
+            name = self.line()
+            name.put(2, clip(ui.pname, w - 4), curses.A_BOLD)
+            out.append(name)
+            for label, value in ui.pfields:
+                row = self.line()
+                row.put(2, label, ui.DIM)
+                row.put(16, clip(value, w - 18), 0 if label in ("Summary", "Last message") or not label else ui.DIM)
+                out.append(row)
+            return out
+
+    class ProjectsView(Vertical):
+        """The Projects tab."""
+        DEFAULT_CSS = """
+        ProjectsView ProjectList { height: 1fr; }
+        ProjectsView ProjectPanel { height: auto; }
+        """
+
+        def compose(self):
+            yield SearchRow()
+            yield ProjectList()
+            yield ProjectPanel()
+
+        def settle(self):
+            """The panel is as tall as the selected row's fields, three at least, so the list doesn't jump much."""
+            self.query_one(ProjectPanel).styles.height = max(len(getattr(self.app.ui, "pfields", [])), 3) + 3  # its rule, its name, and a gap above the keys
+else:
+    ProjectsView = None

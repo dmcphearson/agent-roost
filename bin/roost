@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""roost's launcher: runs the roost package beside it (a checkout, or a release folder in
+~/.roost/app), or else the installed one in ~/.roost/app/current. Commands run on this Python; the
+screens start again on ~/.roost/venv's, which has Textual."""
+import os, sys
+from pathlib import Path
+
+for root in (Path(os.path.realpath(__file__)).parent.parent, Path.home() / ".roost" / "app" / "current"):
+    if (root / "roost" / "__init__.py").is_file():
+        sys.path.insert(0, str(root))
+        break
+else:
+    sys.exit("roost: its program files aren't in ~/.roost/app. Install roost again with install.sh (see the README).")
+
+from roost.cli import main
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -1,0 +1,144 @@
+# 🐓 Agent Roost
+
+A terminal session manager for Claude Code. When you have a dozen or more Claude sessions running, roost shows them all in one table: what each is doing, when you last used it, how much context it holds, and whether it's open, pinned, or about to be closed for being idle. From there you can open, pin, stop, revive, or delete them.
+
+Roost is a session manager, not an orchestrator. It never sends work to a session on its own.
+
+## Install
+
+Requires macOS, Python 3.9 or later (the system one is fine), and Claude Code with background sessions (`claude agents`). Roost's screens are drawn by [Textual](https://textual.textualize.io), which Homebrew brings along or the install script puts in its own environment, `~/.roost/venv`, so nothing is added to your system Python.
+
+With Homebrew:
+
+```sh
+brew install dmcphearson/tap/roost
+roost setup   # once: checks prerequisites, picks the terminal and Projects folder, installs the plugin
+```
+
+Or with the install script, which needs only curl:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dmcphearson/agent-roost/main/install.sh -o /tmp/roost-install.sh && sh /tmp/roost-install.sh
+roost setup   # once: checks prerequisites, installs Textual, picks the terminal and Projects folder, installs the plugin
+```
+
+The script installs the latest release: its program files in `~/.roost/app/<version>` and the `roost` command in `~/.local/bin`. Saving it first means a failed download stops with curl's error instead of running a partial script, and you can read `/tmp/roost-install.sh` before the second half runs it.
+
+**Updating:** with Homebrew, `brew upgrade roost`, then `roost update` to bring the plugin along. Otherwise, `roost update` installs the latest release, keeps the previous version's files and its launcher (as `~/.local/bin/roost.previous`), and brings Textual in `~/.roost/venv` to the version the release asks for (`roost setup textual` does only that). Roost also checks once a day and says in its bottom bar when a new version is out.
+
+**The plugin:** roost's skills (`/roost:pickup`, `/roost:wrap-up`) are a Claude Code plugin that ships in each release. `roost setup` puts it in `~/.roost/plugin` and registers it with Claude Code as `roost@roost`, through `claude plugin`; `roost setup plugin` does only that step. `roost update` swaps in the new release's plugin folder and changes nothing in Claude Code's settings. Running Sessions keep the old plugin until they're restarted or you run `/reload-plugins` in them.
+
+### Developing
+
+Clone this repo and run `./dev-link.sh`. It links `~/.local/bin/roost` and `~/.roost/plugin` to your checkout so edits take effect immediately. `roost update` and `install.sh` both refuse to replace a dev link. Then run `roost setup plugin` once to register the linked plugin with Claude Code.
+
+
+## Use
+
+| Command | What it does |
+|---|---|
+| `roost` | Open the session browser |
+| `roost <text>` | Open it with a search applied |
+| `roost --list` | Plain-text listing, for scripts |
+| `roost --demo` | Made-up sessions for screenshots; nothing real is read or changed |
+| `roost setup` | Check prerequisites and choose a terminal |
+| `roost adopt [<folder>]` | Bring existing project folders into roost's project layout: shows the cost, plans each one, and applies a plan only after you approve it; replaced files go to the project's `_archive/<date>/` |
+
+### Views and sections
+
+Tabs: **Running**, **Recently closed** (last 3 hours), **Closed**, **Stale**, and **All**. **Stale** lists sessions over 150k tokens that nobody has touched in 2 days or more. Their knowledge belongs in files, not in a session you pay to rebuild. Running sessions are grouped into:
+
+- **Open**: a terminal window has the session
+- **Pinned**: running in the background and never closed for being idle
+- **Background**: running in the background; Claude Code closes these after about an hour idle
+
+### Keys
+
+The keys are the same on every tab. Everything you can do to a row is in its actions.
+
+| Key | Action |
+|---|---|
+| ↑ ↓ | Move |
+| Page Up, Page Down / Option+↑ ↓ | Move a screen |
+| Home / End | Top / bottom |
+| ← → | Sessions: switch views (Running, Recently closed, Closed, Stale, All) · Projects: open or close a section or a project's Sessions · Notes: read the note |
+| Enter / right-click | Open the selected row's actions |
+| Double-click | Run the row's first action: open a Session, start one for a project, or edit a note |
+| / | Search the current tab |
+| ctrl+n | New, from any tab: a Project (P), a Session in a folder you name (S), or a Note (N). The letter or ↑↓ and Enter picks |
+| Esc | Close a list or prompt, or clear the search. It never quits |
+| Tab / Shift+Tab | Switch tabs |
+| ? | Show the keys |
+| Ctrl+q | Quit (a plain q does nothing) |
+
+**A Session's actions:** Open (or go to its window), New project from this Session, Add to a project (or move to another), Write its Handoff or Session recap from the transcript (shows the cost first), Pin or Unpin (on a closed one, restart it in the background, pinned), Rename, Stop or Delete to the Trash (both ask first), Copy its id, and Show its folder in Finder. A closed Session a project lists isn't reopened; its first action starts a fresh Session for the project.
+
+**A project's actions:** Start a Session, Show or hide its Sessions, Set its category, Edit its tags, Show its folder in Finder, clear an old `_archive/` from roost adopt, and New project. **+ New project**, at the bottom of the list, makes one too.
+
+A project has one category (what kind of work it is), its README's `category:` line, and any number of tags (what it's about), its `tags: [a, b]` list. Set its category lists the categories in `CATEGORIES.md` in your Projects folder, one `- name: what it covers` line each, plus any other a project uses; a new one you type joins the list. Edit its tags ticks tags from every tag already in use, or adds a new one. Sessions no project lists are on the Sessions tab. A Session recap (what `/wrap-up` writes for a Session no project lists) shows in its Session's panel, and the Session's actions can read it or make it a project.
+
+### Notes
+
+Notes is your scratchpad: ideas and things to come back to, saved from anywhere in roost or by an agent. Each note is a Markdown file in `~/.roost/notes/`. It may grow into a project, move into one, or get deleted when it's no longer needed. Ctrl+n then N from any tab, or **+ New note** at the bottom of the Notes list, asks for a title, creates the file with its frontmatter (`title`, `created`, `project`, `sessions`, and `tags`), and opens it in your editor with the cursor under the title.
+
+The tab lists your notes, newest edit first. A note has tags but no category; its actions include Edit its tags, which picks from the same library and writes `tags: [a, b]`. The selected note shows in a reading card beside the list (under it, in a window narrower than 120 columns), with its Markdown laid out: headings, bold, code, bullets, checkboxes, and quotes. The footer, as on every tab, holds its facts: the file, when it was created and last edited, its tags, and any other frontmatter fields. → moves into the card to scroll it with ↑ ↓ and Page Up and Page Down; ← or Esc moves back to the list.
+
+From the shell, `roost note "Printer driver idea" Push it from the MDM` saves a note (or pipe its text in). In a Session, ask Claude to save an idea for later, or run `/roost:note`.
+
+**A note's actions:** Edit, Start a Session from it (its first prompt reads the note), Move to a project (it leaves Notes for the project's `notes/` folder), Make it a project (the note moves into the new project's `notes/`), Show it in Finder, and Delete to the Trash (asks first).
+
+Roost opens notes in the `editor` setting in `~/.config/roost/config.json`, else `$VISUAL`, else `$EDITOR`, else [micro](https://micro-editor.github.io) (`brew install micro`). It waits for an editor in the terminal and gets out of the way of one with its own window (VS Code, Zed, and the like); `editor_wait` (true or false) overrides that. Roost never edits a note itself, except for setting its `project:` line when you move it.
+
+While a Handoff is being written from a transcript, the row counts up: `summarizing 2/3 · 1m40s` (the draft, the review, then the README).
+
+Click a column header to sort by it, and click again to reverse.
+
+## Terminals
+
+Ghostty, Terminal.app, and iTerm2 can open sessions in new windows. Choose one with `roost setup`; the choice is saved in `~/.config/roost/config.json`. With no terminal configured, Enter opens the session in the current terminal.
+
+## How it works
+
+Roost reads Claude Code's local state and never calls a model:
+
+- `claude agents --json` for live sessions and their status
+- `~/.claude/projects/**/*.jsonl` transcripts for names, summaries, files touched, and context size (cached in `~/.cache/`)
+- `~/.claude/jobs/pins.json` for pins, written with the same lock Claude Code uses
+- `claude --bg --resume`, `claude stop`, and `claude rm` to revive, stop, and clean up sessions
+- `curl` to github.com for installs, updates, and the daily new-version check
+
+roost runs its commands on any Python 3.9 or later. For the screens it starts again on the Python in `~/.roost/venv`, where Textual is installed.
+
+Several of these are internal to Claude Code and can change between releases. If roost starts showing wrong states after a Claude Code update, check those first.
+
+### Cache and cost
+
+Claude keeps each session's context in the prompt cache after every request. **STATUS** gives each state its own word, symbol, and color, so it reads without color too:
+
+| Status | Meaning |
+|---|---|
+| `● working` (green) | Claude is working |
+| `◆ needs input` (yellow) | Waiting on you |
+| `○ idle` (purple) | Waiting for a prompt, and the next one is cheap |
+| `◔ expires in 8m` (sky blue) | The next prompt is cheap for 8 more minutes |
+| `✕ cache expired` (vermillion) | Expired: the next prompt costs about 2×. Its actions can write its Handoff from the transcript instead |
+| `· closed` (grey) | Not running |
+
+On 256-color terminals the colors come from the Okabe-Ito palette, chosen to stay distinguishable with the common kinds of color blindness. While it's warm, the next message reads the context back at about 0.1× the normal input price. Once it's cold, the next message writes the whole context again: about 2× on the 1-hour cache, 1.25× on the 5-minute one. Roost reads which cache a session uses from its transcript. The bottom line of the detail panel shows the exact time left and that cost for the selected session, and it tells you when a big session is a good moment to wrap up or compact: shortly before it goes cold, or once it has gone stale.
+
+### Session life
+
+Claude Code deletes a session's history 30 days after it was last used (the `cleanupPeriodDays` setting; Claude Desktop sessions are kept). For closed sessions, the detail panel shows the days left: yellow at 20 or fewer, red at 10 or fewer. Restarting it from its actions resets the clock. Running sessions show no countdown, since Claude's docs don't say how cleanup treats them.
+
+## When something looks wrong
+
+Roost logs failed actions and compatibility warnings to `~/.cache/roost.log`. At startup it compares the Claude Code version and the fields in `claude agents --json` with what it was tested against, and shows a yellow warning in the bottom bar if they differ.
+
+## Tests
+
+```sh
+~/.roost/venv/bin/python -m unittest discover -s tests < /dev/null
+```
+
+Under a Python without Textual, the tests of the Textual screens are skipped. The tests use demo data and temporary files only; they never touch your real sessions.
+

@@ -1,0 +1,8 @@
+{
+  "name": "roost",
+  "owner": { "name": "David McPhearson" },
+  "description": "roost's own marketplace: roost setup registers ~/.roost/plugin, which holds only roost's plugin.",
+  "plugins": [
+    { "name": "roost", "source": "./", "description": "Skills for roost: pick up a project, wrap up a Session, and more." }
+  ]
+}
