@@ -10,4 +10,4 @@ The first public release.
 - **Stats:** what your Claude work costs at list price, by day, kind, and project, with a calendar, records, and an optional monthly limit
 - **ctrl+n, from any tab:** a new Project, Session, or Note; P, S, or N picks
 - **The plugin:** `/roost:pickup` and `/roost:wrap-up` carry a Session's work into the next through Handoffs
-- **Install** with Homebrew (this repo is its own tap) or the curl script. `roost --demo` shows made-up Sessions, projects, and notes for screenshots
+- **Install** with `brew install dmcphearson/tap/roost`, or the curl script. `roost --demo` shows made-up Sessions, projects, and notes for screenshots

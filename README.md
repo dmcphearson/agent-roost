@@ -21,8 +21,7 @@ Requires macOS, Python 3.9 or later (the system one is fine), and Claude Code wi
 With Homebrew:
 
 ```sh
-brew tap dmcphearson/roost https://github.com/dmcphearson/agent-roost
-brew install roost
+brew install dmcphearson/tap/roost
 roost setup   # once: checks prerequisites, picks the terminal and Projects folder, installs the plugin
 ```
 
