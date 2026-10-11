@@ -33,4 +33,4 @@ Calendar versions, `YYYY.MM.XX`, in `VERSION` in `roost/core/config.py` and `ver
 
 ## Issues
 
-Features, ideas, and bugs are GitHub Issues on dmcphearson/agent-roost. The repo is public: keep issues free of anything private.
+Plans and tasks are tracked privately, outside this repo. This repo is public: commits, PRs, and code comments name no private plans, people, or companies.
