@@ -29,7 +29,7 @@ A Python 3 package, `roost/`, started by `bin/roost` (a small launcher). Its com
 
 ## Versioning and release
 
-Calendar versions, `YYYY.MM.XX`, in `VERSION` in `roost/core/config.py` and `version` in `plugin/.claude-plugin/plugin.json` (a test fails if they differ). Note changes in `CHANGELOG.md`. A release is a GitHub release (not just a tag) on main: `install.sh` and `roost update` read the latest one with curl, put its `roost/` and `bin/roost` in `~/.roost/app/<version>`, and copy the launcher to `~/.local/bin/roost`. The Homebrew formula lives in `dmcphearson/homebrew-tap` (`Formula/roost.rb`); after a release, update its `url` and `sha256`, and its Textual resources if `TEXTUAL` changed. roost must keep running on the macOS system Python 3.9.
+Calendar versions, `YYYY.MM.XX`, in `VERSION` in `roost/core/config.py` and `version` in `plugin/.claude-plugin/plugin.json` (a test fails if they differ). Note changes in `CHANGELOG.md`. A release is a GitHub release (not just a tag) on main: `install.sh` and `roost update` read the latest one with curl, put its `roost/` and `bin/roost` in `~/.roost/app/<version>`, and copy the launcher to `~/.local/bin/roost`. The Homebrew formula is `Formula/roost.rb` in this repo (the repo is its own tap); after a release, update its `url` and `sha256` in a commit on main, and its Textual resources if `TEXTUAL` changed. roost must keep running on the macOS system Python 3.9.
 
 ## Issues
 

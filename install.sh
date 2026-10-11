@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install or update roost from github.com/dmcphearson/agent-roost, with curl and python3 (both on
-# every Mac). Homebrew users can run `brew install dmcphearson/tap/roost` instead.
+# every Mac). Homebrew users can tap this repo instead (see README).
 #
 #   curl -fsSL https://raw.githubusercontent.com/dmcphearson/agent-roost/main/install.sh -o /tmp/roost-install.sh && sh /tmp/roost-install.sh
 #
