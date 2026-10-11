@@ -4,13 +4,15 @@ A terminal session manager for Claude Code. When you have a dozen or more Claude
 
 Roost is a session manager, not an orchestrator. It never sends work to a session on its own.
 
-![The Sessions tab: running Sessions grouped into Open, Pinned, and Background, with status, context, and project](assets/sessions.png)
+![The Projects tab: projects by section, each with its Sessions, status, category, and tags](assets/projects.png)
 
-| Projects | Notes | Stats |
-|---|---|---|
-| ![Projects with their Sessions, by section](assets/projects.png) | ![A note read beside the list](assets/notes.png) | ![Spend by day, kind, and project](assets/stats.png) |
+<p>
+  <img src="assets/sessions.png" width="32%" alt="The Sessions tab: running Sessions grouped into Open, Pinned, and Background">
+  <img src="assets/notes.png" width="32%" alt="The Notes tab: a note read beside the list">
+  <img src="assets/stats.png" width="32%" alt="The Stats tab: spend by day, kind, and project">
+</p>
 
-<sub>Screenshots are of `roost --demo`: made-up Sessions, projects, and notes.</sub>
+<sub>Projects, then Sessions, Notes, and Stats. Screenshots are of `roost --demo`: made-up Sessions, projects, and notes.</sub>
 
 ## Install
 
