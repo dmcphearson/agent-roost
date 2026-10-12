@@ -1664,6 +1664,48 @@ class Plugin(unittest.TestCase):
         self.assertEqual(roost.plugin_problem(), "")
         self.assertEqual(len(self.downloads), 2)  # the check itself never downloaded anything
 
+    def claude_has(self, version):
+        """Claude Code's record of the plugin copy it loads (its cache), as `claude plugin install` writes it."""
+        (self.cfg / "plugins").mkdir(exist_ok=True)
+        (self.cfg / "plugins" / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {"roost@roost": [{"scope": "user", "version": version}]}}))
+
+    def test_startup_check_notices_claude_codes_copy_is_behind(self):
+        roost.install_plugin("2026.10.08")
+        self.enable()
+        self.claude_has("2026.10.07")
+        self.assertEqual(roost.plugin_problem(), "Claude Code has roost plugin 2026.10.07: run roost update")
+        self.claude_has("2026.10.08")
+        self.assertEqual(roost.plugin_problem(), "")
+
+    def test_update_brings_claude_codes_copy_up_too(self):
+        self.enable()
+        self.claude_has("2026.10.07")
+        calls = []
+        def cli(*args):
+            calls.append(args)
+            if args[0] == "update":
+                self.claude_has("2026.10.08")
+            return True, "ok"
+        roost.claude_plugin = cli
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(roost.update_plugin("2026.10.08"), 0)
+        self.assertEqual(calls, [("marketplace", "update", "roost"), ("update", "roost@roost", "--scope", "user")])
+        self.assertIn("Claude Code now has roost plugin 2026.10.08", out.getvalue())
+        calls.clear()
+        with contextlib.redirect_stdout(io.StringIO()):
+            roost.update_plugin("2026.10.08")
+        self.assertEqual(calls, [])  # already current: no claude calls
+
+    def test_a_failed_claude_update_is_reported_but_does_not_fail_the_update(self):
+        self.enable()
+        self.claude_has("2026.10.07")
+        roost.claude_plugin = lambda *args: (False, "network down")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(roost.update_plugin("2026.10.08"), 0)
+        self.assertIn("Claude Code still has roost plugin 2026.10.07", out.getvalue())
+        self.assertIn("network down", out.getvalue())
+
     def test_setup_registers_it_through_the_claude_cli_and_confirms(self):
         calls = []
         def cli(*args):

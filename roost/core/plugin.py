@@ -22,13 +22,28 @@ def plugin_versions():
     return config.PLUGIN.with_name("plugin.d")
 
 
+def claude_folder():
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude"))
+
+
 def claude_settings():
     """Claude Code's user settings, read only (roost changes them only through `claude plugin`)."""
-    folder = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
     try:
-        return json.loads(Path(folder, "settings.json").read_text())
+        return json.loads((claude_folder() / "settings.json").read_text())
     except (OSError, ValueError):
         return {}
+
+
+def claude_plugin_version():
+    """The version of the copy Claude Code loads: `claude plugin install` copies the plugin into its
+    cache, so a new ~/.roost/plugin reaches Sessions only after `claude plugin update`. None when
+    Claude Code has no record of it."""
+    try:
+        entries = json.loads((claude_folder() / "plugins" / "installed_plugins.json").read_text())["plugins"][PLUGIN_ID]
+        entry = next((e for e in entries if e.get("scope") == "user"), entries[0])
+        return entry.get("version") or None
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return None
 
 
 def plugin_registered(settings=None):
@@ -60,7 +75,27 @@ def plugin_problem():
         return f"roost plugin outdated ({plugin_version()}): run roost update"
     if not plugin_registered():
         return "roost plugin isn't enabled in Claude Code: run roost setup"
+    cached = claude_plugin_version()
+    if not plugin_dev_link() and cached and cached != config.VERSION:
+        return f"Claude Code has roost plugin {cached}: run roost update"
     return ""
+
+
+def update_claude_copy(version):
+    """Bring Claude Code's cached copy of the plugin to version: refresh the roost marketplace, then
+    update roost@roost. Returns a message; it never raises, since the folder swap already happened."""
+    have = claude_plugin_version()
+    if not plugin_registered() or plugin_dev_link() or have in (None, version):
+        return ""
+    for step in (("marketplace", "update", "roost"), ("update", PLUGIN_ID, "--scope", "user")):
+        try:
+            done, message = claude_plugin(*step)
+        except Exception as e:
+            done, message = False, str(e)
+        if not done:
+            return (f"Claude Code still has roost plugin {have} (claude plugin {' '.join(step[:2])} failed: {message}). "
+                    f"Run claude plugin update {PLUGIN_ID} to try again")
+    return f"Claude Code now has roost plugin {claude_plugin_version()}"
 
 
 def plugin_args():

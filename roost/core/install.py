@@ -155,7 +155,8 @@ def setup_textual():
 
 
 def update_plugin(version):
-    """roost update's plugin step: only a folder swap. Claude Code's settings change only in roost setup."""
+    """roost update's plugin step: the folder swap, then Claude Code's own copy through `claude plugin`.
+    Claude Code's settings change only in roost setup."""
     try:
         print(install_plugin(version) + ".")
     except Exception as e:
@@ -163,6 +164,10 @@ def update_plugin(version):
         return 1
     if not plugin.plugin_registered():
         print("Claude Code doesn't have the roost plugin enabled yet: run roost setup plugin.")
+        return 0
+    note = plugin.update_claude_copy(version)
+    if note:
+        print(note + ".")
     return 0
 
 
