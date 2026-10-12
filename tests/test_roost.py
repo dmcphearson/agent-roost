@@ -3007,6 +3007,13 @@ class TextualScreens(unittest.TestCase):
         app = self.run_app([lambda pilot: pilot.click(offset=(24, 0)), scroll])
         self.assertEqual((app.ui.TABS[app.ui.tab].name, app.ui.sel), ("Sessions", 1))
 
+    def test_a_triple_click_acts_once(self):
+        import unittest.mock
+        ran = []
+        with unittest.mock.patch.object(roost.UI, "session_actions", lambda ui, s: [("Open", lambda: ran.append(s["name"]))]):
+            self.run_app([self.keys("tab"), lambda pilot: pilot.click(offset=(10, 6), times=3)])
+        self.assertEqual(len(ran), 1)
+
     def test_a_right_click_opens_a_rows_actions(self):
         app = self.run_app([self.keys("tab"), lambda pilot: pilot.click(offset=(10, 6), button=3)])
         self.assertTrue(app.ui.choosing)

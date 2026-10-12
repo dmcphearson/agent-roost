@@ -350,7 +350,9 @@ if Region:
 
         def on_click(self, event):
             event.stop()
-            state = curses.BUTTON1_DOUBLE_CLICKED if event.chain >= 2 else curses.BUTTON1_CLICKED
+            if event.chain > 2:  # a third click in a row would act a second time
+                return
+            state = curses.BUTTON1_DOUBLE_CLICKED if event.chain == 2 else curses.BUTTON1_CLICKED
             self.app.press(("mouse", event.screen_x, event.screen_y, state))
 
     class NoteCard(Vertical):
