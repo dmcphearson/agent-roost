@@ -366,6 +366,26 @@ class Updates(unittest.TestCase):
         self.assertEqual(self.plugin_updates, ["2026.10.03"])  # the plugin matches what brew installed
         self.assertFalse(roost.APP.exists())
 
+    def test_a_launcher_that_fails_after_the_swap_says_what_is_in_place(self):
+        import unittest.mock
+        me = self.dir / "roost"; me.write_text("old")
+        roost.latest_release = lambda: "2026.11.01"
+        roost.download_tarball = lambda version: release_tarball("2026.11.01", [
+            ("dmcphearson-agent-roost-abc123/bin/roost", b'#!/usr/bin/env python3\nprint("roost 2026.11.01")\n'),
+            ("dmcphearson-agent-roost-abc123/roost/__init__.py", b"")])
+        real = roost.shutil.copy2
+        def copy2(src, dst, **kw):
+            if Path(dst).name == ".roost-update":
+                raise OSError("disk full")
+            return real(src, dst, **kw)
+        with unittest.mock.patch.object(roost.shutil, "copy2", copy2), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(roost.self_update(me), 1)
+        self.assertNotIn("nothing changed", out.getvalue())
+        self.assertIn("roost runs 2026.11.01", out.getvalue())
+        self.assertIn("disk full", out.getvalue())
+        self.assertEqual(me.read_text(), "old")
+        self.assertEqual(os.readlink(self.dir / "app" / "current"), "2026.11.01")
+
     def test_a_release_without_the_package_changes_nothing(self):
         me = self.dir / "roost"; me.write_text("old")
         roost.latest_release = lambda: "2026.11.01"

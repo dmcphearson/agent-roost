@@ -90,6 +90,7 @@ def self_update(me=None):
         print(f"roost {config.VERSION} is the latest version.")
         return update_textual(me) | update_plugin(config.VERSION)
     folder, tmp = config.APP / latest, config.APP / f".{latest}.download"
+    swapped = False  # once ~/.roost/app/current is the new version, even the old launcher runs it
     try:
         config.APP.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -101,14 +102,19 @@ def self_update(me=None):
         shutil.rmtree(folder, ignore_errors=True)
         os.replace(tmp, folder)
         swap_app(folder)
+        swapped = True
         shutil.copy2(me, me.with_name("roost.previous"))
         launcher = me.with_name(".roost-update")
         shutil.copy2(folder / "bin" / "roost", launcher)
         os.replace(launcher, me)
     except Exception as e:
         shutil.rmtree(tmp, ignore_errors=True)
-        print(f"Update failed, nothing changed: {e}")
-        return 1
+        if not swapped:
+            print(f"Update failed, nothing changed: {e}")
+            return 1
+        print(f"Update stopped partway: roost runs {latest} from {short(str(folder))}, but the launcher at {me} "
+              f"wasn't replaced ({e}). Run roost update again to finish.")
+        return update_textual(me) | update_plugin(latest) | 1
     try:
         config.UPDATE_CHECK.unlink()
     except OSError:
