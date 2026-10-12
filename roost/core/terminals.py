@@ -206,7 +206,12 @@ def attach_clients():
 
 
 def osa(script, *args):
-    r = subprocess.run(["osascript", "-", *args], input=script, capture_output=True, text=True, timeout=10)
+    """Run an AppleScript; its output, or None when it fails or hangs (macOS waiting on an Automation prompt)."""
+    try:
+        r = subprocess.run(["osascript", "-", *args], input=script, capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        config.log("osascript took over 10s and was stopped")
+        return None
     return r.stdout.strip() if r.returncode == 0 else None
 
 

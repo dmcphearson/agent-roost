@@ -426,6 +426,15 @@ class Updates(unittest.TestCase):
         self.assertEqual(me.read_text(), "old")
 
 
+class Osa(unittest.TestCase):
+    def test_a_script_that_hangs_is_a_failure_not_an_exception(self):
+        import subprocess, unittest.mock
+        def hang(*a, **kw):
+            raise subprocess.TimeoutExpired("osascript", 10)
+        with unittest.mock.patch.object(roost.subprocess, "run", hang), unittest.mock.patch.object(roost, "log"):
+            self.assertIsNone(roost.osa("tell application \"Ghostty\" to activate"))
+
+
 class Refresh(unittest.TestCase):
     def setUp(self):
         self.saved = (roost.load, roost.live_sessions, roost.read_pins)
@@ -3019,6 +3028,16 @@ class TextualScreens(unittest.TestCase):
         app = self.run_app([done])  # a success stays a note in the corner
         self.assertIsNone(app.ui.alerting)
         self.assertIn("Moved it to the Trash", self.screen(app)[-1])
+
+    def test_a_key_handler_that_raises_is_a_box_not_a_crash(self):
+        import unittest.mock
+        def boom(ui, k, rows):
+            raise RuntimeError("boom")
+        tabs = [roost.UI.TABS[0]._replace(keys=boom)] + roost.UI.TABS[1:]  # the Projects tab, the first one shown
+        with unittest.mock.patch.object(roost.UI, "TABS", tabs), unittest.mock.patch.object(roost, "log"):
+            app = self.run_app([self.keys("j")])
+        self.assertTrue(app.ui.alerting)
+        self.assertIn("boom", "\n".join(self.screen(app)))
 
     def test_ctrl_q_quits_and_plain_q_is_a_letter(self):
         app = self.run_app([self.keys("q")])

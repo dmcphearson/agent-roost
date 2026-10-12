@@ -1,5 +1,5 @@
 """The Textual front end: the screens as widgets, and the keys and the mouse fed back to them."""
-import curses, time
+import curses, time, traceback
 
 from roost.app.shell import QUIT
 from roost.app.ui import UI
@@ -250,7 +250,11 @@ if Widget:
             self.last_key = time.time()
             if self.ui.too_small and k != "ctrl+q":
                 return  # the window is too small to show what a key would do
-            result = self.ui.dispatch(k, self.drawn)
+            try:
+                result = self.ui.dispatch(k, self.drawn)
+            except Exception as e:  # a bug in one action is a box, not the end of roost (and its background runs)
+                config.log(f"key {k!r}: {traceback.format_exc()}")
+                self.ui.msg, result = f"Couldn't do that: {e} · roost's log has the details", None
             if result is not None:
                 self.exit(None if result is QUIT else result)
                 return
