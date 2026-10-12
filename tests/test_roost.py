@@ -185,6 +185,17 @@ class Demo(unittest.TestCase):
         for s in roost.demo_sessions():
             self.assertIn("/projects/", s["cwd"])
 
+    def test_the_demo_starts_a_session_the_way_the_projects_tab_asks(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as home:  # use_demo() patches every module, so it runs on its own
+            r = subprocess.run([sys.executable, "-c", "from roost.demo import use_demo; use_demo()\n"
+                                "from roost.core import terminals\n"
+                                "print(terminals.start_session('printer-rollout', '/tmp', 'ghostty', 'Printer fix'))"],
+                               cwd=ROOT, env={**os.environ, "HOME": home}, stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("(demo)", r.stdout)
+
 
 class Compat(unittest.TestCase):
     def test_a_newer_claude_code_alone_is_only_logged(self):

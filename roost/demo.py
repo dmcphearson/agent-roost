@@ -281,7 +281,7 @@ def use_demo():
         DEMO_LINKS[sid] = pid
         return sid not in listed.get(pid, []), moved
 
-    patch(assign_session=assign, start_session=lambda pid, cwd, term: f"Started a Session for {pid} in {short(cwd)} (demo)")
+    patch(assign_session=assign, start_session=lambda pid, cwd, term, name=None: f"Started a Session for {pid} in {short(cwd)} (demo)")
     patch(read_projects=lambda ss=(): made + demo_projects(ss), create_project=new_project, set_tags=demo_set_tags,
              set_category=demo_set_category, read_categories=lambda: list(DEMO_CATEGORY_LIST),
              add_category=demo_add_category,
