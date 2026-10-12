@@ -182,8 +182,6 @@ class NotesTab:
         return acts
 
     def keys_notes(self, k, rows):
-        if self.confirm:
-            return self.keys_confirm(k)
         r = rows[self.nsel] if rows else None
         if isinstance(k, tuple):
             if k[2] in self.nrow_y and k[1] < self.nlist_w:

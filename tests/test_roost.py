@@ -667,7 +667,8 @@ class Tabs(unittest.TestCase):
         self.ui = object.__new__(roost.UI)
         self.ui.TABS = [tab("Sessions"), tab("Projects")]
         self.ui.tab, self.ui.tab_x, self.ui.helping, self.ui.typing, self.ui.msg = 0, [(11, 21, 0), (22, 32, 1)], False, False, ""
-        self.ui.choosing, self.ui.summaries, self.ui.quit_anyway = None, {}, False
+        self.ui.choosing, self.ui.confirm, self.ui.summaries, self.ui.quit_anyway = None, None, {}, False
+        self.ui.load_projects = lambda: None
         self.ui.asking, self.ui.searching, self.ui.query, self.ui.pquery = None, False, "", ""
 
     def tearDown(self):
@@ -707,6 +708,14 @@ class Tabs(unittest.TestCase):
         self.ui.dispatch("j", None)
         self.ui.dispatch(("mouse", 5, 6, roost.curses.BUTTON1_CLICKED), None)
         self.assertEqual(self.got, [("Sessions", "j"), ("Projects", "j"), ("Projects", ("mouse", 5, 6, roost.curses.BUTTON1_CLICKED))])
+
+    def test_a_confirm_is_answered_on_whatever_tab_is_open(self):
+        self.ui.switch_tab(1)
+        self.ui.confirm = ("note", {"name": "x", "path": "/nowhere"})  # as a background run puts one up
+        self.ui.dispatch("n", None)
+        self.assertEqual((self.ui.confirm, self.ui.msg, self.got), (None, "Cancelled", []))
+        self.ui.dispatch("j", None)  # the next key is the tab's again
+        self.assertEqual(self.got, [("Projects", "j")])
 
     def test_a_prompt_gets_the_shared_keys_too(self):
         self.ui.typing = True
@@ -1347,13 +1356,13 @@ class StartingSessions(unittest.TestCase):
             ui.psel = live
             act(ui, ui.keys_projects, rows, "Stop…")
             self.assertTrue(ui.projects_typing())
-            ui.keys_projects("n", rows)  # any other key cancels
+            ui.keys_confirm("n")  # any other key cancels
             self.assertEqual((did, ui.msg), ([], "Cancelled"))
             act(ui, ui.keys_projects, rows, "Stop…")
-            ui.keys_projects("y", rows)
+            ui.keys_confirm("y")
             ui.psel = old
             act(ui, ui.keys_projects, ui.project_rows(), "Delete to the Trash…")
-            ui.keys_projects("y", ui.project_rows())
+            ui.keys_confirm("y")
             self.assertEqual(did, [("stop", ui.sessions[0]["attach"]), ("delete", "Old")])
         finally:
             roost.stop_session, roost.delete_session = saved
@@ -2840,7 +2849,7 @@ class Notes(unittest.TestCase):
         ui.load_projects()
         ui.nsel = 0
         act(ui, keys, None, "Delete to the Trash")
-        ui.keys_notes("y", ui.note_rows())
+        ui.keys_confirm("y")
         self.assertEqual((len(self.trashed), ui.note_rows()[1:]), (1, []))
 
     def test_roost_note_saves_from_the_command_line(self):

@@ -430,8 +430,6 @@ class SessionsTab:
         return self.ask_project(s["name"], s["name"], made)
 
     def keys_sessions(self, k, rows):
-        if self.confirm:
-            return self.keys_confirm(k)
         if isinstance(k, tuple):
             _, mx, my, bstate = k
             if my == 2 and bstate & CLICK:

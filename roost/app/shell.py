@@ -365,6 +365,10 @@ class Shell:
             return self.keys_ask(k)
         if self.searching:
             return self.keys_search(k)
+        if self.confirm:  # on any tab: one can come up from a background run, wherever the person is
+            self.keys_confirm(k)
+            self.load_projects()
+            return None
         tab = self.TABS[self.tab]
         if not tab.typing(self):  # a confirmation or the category picker takes every key
             if k in ("tab", "shift+tab"):
