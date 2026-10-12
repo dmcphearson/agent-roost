@@ -1867,6 +1867,21 @@ class Handoffs(unittest.TestCase):
         roost.PRICES.unlink()
         self.assertIsNone(roost.prices(now=1000 + 2 * 86400))
 
+    def test_a_failed_fetch_waits_an_hour_before_the_next(self):
+        self.page = None
+        self.assertIsNone(roost.prices(now=1000))
+        self.assertIsNone(roost.prices(now=1000 + 60))
+        self.assertEqual(len(self.fetches), 1)
+        self.assertIsNone(roost.prices(now=1000 + 3700))
+        self.assertEqual(len(self.fetches), 2)
+        self.page = PRICE_PAGE
+        roost.PRICES.unlink()
+        roost.prices(now=5000)
+        self.page = None
+        roost.prices(now=5000 + 2 * 86400)
+        self.assertEqual(roost.prices(now=5000 + 2 * 86400 + 60)["fetched"], 5000)  # the old copy, no new fetch
+        self.assertEqual(len(self.fetches), 4)
+
     # facts
 
     def test_facts_come_from_the_transcript(self):
