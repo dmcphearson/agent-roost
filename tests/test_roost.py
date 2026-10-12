@@ -2467,6 +2467,13 @@ class Adopt(unittest.TestCase):
             roost.apply_plan(self.old, self.plan(bad))
         self.assertTrue((self.old / "export.csv").exists())  # nothing changed
 
+    def test_two_moves_to_one_path_stop_the_plan(self):
+        bad = self.plan(PLAN_BODY.replace("`out/report.pdf`", "`data/export.csv`"))
+        self.assertIn("more than one Move", " ".join(roost.plan_problems(self.old, bad)))
+        with self.assertRaises(ValueError):
+            roost.apply_plan(self.old, bad)
+        self.assertTrue((self.old / "export.csv").exists() and (self.old / "report.pdf").exists())
+
     def test_applying_moves_archives_and_renames_and_deletes_nothing(self):
         before = len(self.files(self.old))
         new = roost.apply_plan(self.old, self.plan(), today="2026-10-09")

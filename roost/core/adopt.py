@@ -179,12 +179,16 @@ def plan_problems(folder, plan, taken=()):
         out.append(f"Status {plan['status']!r} isn't a few lowercase words")
     if not plan["readme"] or "## Current state" not in plan["readme"]:
         out.append("README has no ## Current state section")
+    dests = set()
     for a, b in plan["moves"]:
         src, dst = claim(a, "Move"), inside(folder, b)
         if src is not None and not src.is_file():
             out.append(f"Move: `{a}` isn't a file in the folder")
         if dst is None or (dst.exists() and dst != src):
             out.append(f"Move: `{b}` already exists or is outside the folder")
+        elif dst in dests:  # the second rename would replace the first file
+            out.append(f"Move: `{b}` is the destination of more than one Move")
+        dests.add(dst)
     for rel, _ in plan["archive"]:
         p = claim(rel, "Archive")
         if p is not None and not p.exists():
