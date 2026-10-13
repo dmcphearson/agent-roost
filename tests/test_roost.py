@@ -2409,6 +2409,17 @@ class SessionRecaps(unittest.TestCase):
             roost.promote_recap(roost.RECAPS / "x.md", "printer-rollout", "Again.")
         self.assertTrue((roost.RECAPS / "x.md").exists())  # a failure keeps the note
 
+    def test_a_crafted_marker_writes_nothing_outside_the_project(self):
+        roost.RECAPS.mkdir()
+        mark = "<!-- roost handoff %s session: s1 from:  to:  -->"
+        (roost.RECAPS / "evil.md").write_text("\n".join(["---", "summary: x", "---", "",
+                                                         mark % "2026-10-09-1600-ok", "Fine.", "",
+                                                         mark % "../../../escaped", "Out.", "", mark % "..", "Dots.", ""]))
+        folder = roost.promote_recap(roost.RECAPS / "evil.md", "evil", "Crafted.")
+        self.assertEqual([h.name for h in (folder / "handoffs").iterdir()], ["2026-10-09-1600-ok.md"])
+        self.assertFalse(list(folder.parent.parent.rglob("escaped.md")))
+        self.assertEqual([s[0] for s in roost.recap_sections(mark % "a/b" + "\nx")], [])
+
     def test_a_hand_written_note_becomes_one_handoff(self):
         roost.RECAPS.mkdir()
         (roost.RECAPS / "vpn.md").write_text("---\nsummary: VPN client\n---\n\nInstalled the VPN client on two Macs.\n")

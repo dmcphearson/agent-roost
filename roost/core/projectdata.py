@@ -464,12 +464,13 @@ def project_flags(parser):
                         description="Print a project's status, or set it. Only the README's status: line changes.")
     st.add_argument("id", help="the project's folder name")
     st.add_argument("value", nargs="?", help=f"the new status: active, blocked, {CLOSED[0]} (closed hides it), or a few lowercase words")
-RECAP_MARK = re.compile(r"^<!-- roost handoff (\S+) session: (\S+) from: (\S*) to: (\S*) -->$", re.M)
+RECAP_MARK = re.compile(r"^<!-- roost handoff ([\w.-]+) session: (\S+) from: (\S*) to: (\S*) -->$", re.M)
 
 
 def recap_sections(text):
-    """A recap's Handoffs as (file stem, session, from, to, body), oldest first."""
-    marks = list(RECAP_MARK.finditer(text))
+    """A recap's Handoffs as (file stem, session, from, to, body), oldest first. The stem names a
+    file in handoffs/, so a marker whose stem has .. in it isn't one."""
+    marks = [m for m in RECAP_MARK.finditer(text) if ".." not in m.group(1)]
     return [(m.group(1), m.group(2), m.group(3), m.group(4),
              text[m.end():marks[i + 1].start() if i + 1 < len(marks) else len(text)].strip())
             for i, m in enumerate(marks)]
