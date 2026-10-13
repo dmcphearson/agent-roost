@@ -1,5 +1,5 @@
 """The summary from a transcript: the model calls that write a Handoff."""
-import json, os, re, subprocess
+import json, os, re, subprocess, threading
 from pathlib import Path
 
 from roost.core.sessiondata import parse
@@ -320,6 +320,16 @@ def folder_files(folder):
     return out[:200]
 
 
+README_TURNS, TURNS_LOCK = {}, threading.Lock()
+
+
+def readme_turn(folder):
+    """The lock a summary holds from reading a project's README to writing it back, so two at once
+    take turns and the second rewrites what the first wrote."""
+    with TURNS_LOCK:
+        return README_TURNS.setdefault(os.path.realpath(folder), threading.Lock())
+
+
 def summarize(sid, model=None, cap=None, now=None, call=None, readme=True, at=None, progress=None):
     """Write a Session's Handoff and README update from its transcript, without resuming it. Every
     model call comes first, so a failure writes nothing. progress(n) is called as model call n starts. Returns (Handoff path, redacted kinds,
@@ -353,17 +363,18 @@ def summarize(sid, model=None, cap=None, now=None, call=None, readme=True, at=No
     if not plan["project"] or not readme:  # a Session recap has no README to update; adopt's backfill writes its own
         handoff, kinds = write_handoff(sid, summary, now, recap=True, at=at)
         return handoff, kinds, spent, None
-    path, lines, end = readme_lines(plan["folder"])
-    body = ask(SUMMARY_SYSTEM, README_PROMPT % ("".join(lines[end + 1:]).strip() or "(empty)",
-                                                "\n".join(folder_files(plan["folder"])) or "(none)", summary))
-    body = re.sub(r"\A```\w*\n(.*)\n```\Z", r"\1", body.strip(), flags=re.S).strip()
-    if "## Current state" not in body:
-        raise ValueError("the README rewrite came back without a Current state section")
-    handoff, kinds = write_handoff(sid, summary, now)
-    body, more = redact(body)
-    before = lines[end + 1:]
-    path, lines, end = readme_lines(plan["folder"])  # re-read: keep frontmatter written meanwhile
-    if lines[end + 1:] != before:  # the body changed during the rewrite: the person's edit wins
-        return handoff, kinds, spent, False
-    write_lines(path, lines[:end + 1] + ["\n", body + "\n"])
-    return handoff, kinds + more, spent, True
+    with readme_turn(plan["folder"]):
+        path, lines, end = readme_lines(plan["folder"])
+        body = ask(SUMMARY_SYSTEM, README_PROMPT % ("".join(lines[end + 1:]).strip() or "(empty)",
+                                                    "\n".join(folder_files(plan["folder"])) or "(none)", summary))
+        body = re.sub(r"\A```\w*\n(.*)\n```\Z", r"\1", body.strip(), flags=re.S).strip()
+        if "## Current state" not in body:
+            raise ValueError("the README rewrite came back without a Current state section")
+        handoff, kinds = write_handoff(sid, summary, now)
+        body, more = redact(body)
+        before = lines[end + 1:]
+        path, lines, end = readme_lines(plan["folder"])  # re-read: keep frontmatter written meanwhile
+        if lines[end + 1:] != before:  # the body changed during the rewrite: the person's edit wins
+            return handoff, kinds, spent, False
+        write_lines(path, lines[:end + 1] + ["\n", body + "\n"])
+        return handoff, kinds + more, spent, True

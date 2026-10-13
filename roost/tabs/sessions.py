@@ -149,12 +149,19 @@ class SessionsTab:
             warns.append((cost[0].split(" · ", 1)[-1], cost[1]))  # Context already says what it costs
         return warns, cleanup
 
+    MAX_SUMMARIES = 3  # Handoffs and recaps written at once; two in one project take turns on its README
+
     def ask_summary(self, s):
         """w on a Session: offer to write its Handoff and README update from its transcript, with the
-        estimated cost. Never on a working Session or one open in a window."""
-        running = next((j for j in self.summaries.values() if j["state"] == "running"), None)
-        if running:
-            self.msg = f"A summary is already running for {running['name']}: wait for it"
+        estimated cost. Never on a working Session or one open in a window. Up to MAX_SUMMARIES run at
+        once; an adopt or a question runs alone."""
+        other = next((j for k, j in self.summaries.items() if j["state"] == "running" and ":" in k), None)
+        if s["id"] in self.summarizing():
+            self.msg = "Its summary is already running"
+        elif other:
+            self.msg = f"Wait for {other['name']}'s run to finish first"
+        elif len(self.summarizing()) >= self.MAX_SUMMARIES:
+            self.msg = f"{self.MAX_SUMMARIES} summaries are running: wait for one"
         elif s["state"] in ("busy", "opening"):
             self.msg = "It's working: wait until it's idle"
         elif s["kind"] == "interactive" or s.get("attached"):

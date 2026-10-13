@@ -2164,6 +2164,40 @@ class TranscriptSummary(unittest.TestCase):
         self.assertIn("id: other", readme.read_text())
         self.assertIn("## Current state", readme.read_text())
 
+    def test_two_summaries_in_one_project_take_turns_on_the_readme(self):
+        import threading
+        other = "99999999-2222-3333-4444-555555555555"
+        readme = self.folder / "README.md"
+        readme.write_text(f"---\nsummary: Printers\nsessions:\n  - name: Printer fix\n    id: {SID}\n"
+                          f"  - name: Toner\n    id: {other}\n---\n\n# Printers\n\nOld state.\n")
+        self.transcript(TRANSCRIPT, sid=other)
+        in_rewrite, prompts = threading.Event(), {}
+
+        def model(name):
+            def call(model, system, prompt, budget):
+                if "Old state" in prompt or "## Current state" in prompt:  # the README rewrite
+                    prompts[name] = prompt
+                    if name == "first":
+                        in_rewrite.set()
+                        time.sleep(0.3)  # the second would read the README now, without a turn
+                    return f"# Printers\n\n## Current state\n\n{name} done.\n", 1.0
+                return DRAFT, 1.0
+            return call
+        saved = roost.read_only
+        roost.read_only = lambda cmd: "(stub)"
+        try:
+            a = threading.Thread(target=roost.summarize, args=(SID, "m", 5.0), kwargs={"call": model("first")})
+            a.start()
+            in_rewrite.wait(5)
+            _, _, _, updated = roost.summarize(other, "m", 5.0, call=model("second"))
+            a.join(5)
+        finally:
+            roost.read_only = saved
+        self.assertTrue(updated)
+        self.assertIn("first done.", prompts["second"])  # the second rewrote what the first wrote
+        self.assertIn("second done.", readme.read_text())
+        self.assertEqual(len(list((self.folder / "handoffs").iterdir())), 2)
+
     def test_a_failure_writes_nothing(self):
         readme = (self.folder / "README.md").read_text()
         for kwargs in ({"fail_at": 2}, {"fail_at": 3}, {"cap": 1.5},
@@ -2230,6 +2264,37 @@ class TranscriptSummary(unittest.TestCase):
                 roost.claude_print("claude-sonnet-5-5", "sys", "prompt", 4.5)
         finally:
             roost.subprocess.run = saved
+
+    def test_up_to_three_summaries_run_at_once(self):
+        ui = object.__new__(roost.UI)
+        ui.msg, ui.confirm, ui.offer, ui.sessions = "", None, None, []
+        ui.projects = [{"id": "printers", "sessions": [SID]}]
+        job = lambda name, state="running": {"state": state, "name": name, "text": "", "step": 1, "steps": 3, "started": 0}
+        mine = dict(session("Printer fix"), id=SID)
+        saved = roost.prices
+        roost.prices = lambda now=None: None
+        try:
+            ui.summaries = {"a": job("A"), "b": job("B"), "c": job("C", "done")}
+            ui.ask_summary(mine)
+            self.assertEqual(ui.confirm, ("summary", mine))  # two running: a third may start
+            ui.confirm, ui.summaries["c"] = None, job("C")
+            ui.ask_summary(mine)
+            self.assertEqual((ui.msg, ui.confirm), ("3 summaries are running: wait for one", None))
+            ui.summaries = {SID: job("Printer fix")}
+            ui.ask_summary(mine)
+            self.assertEqual((ui.msg, ui.confirm), ("Its summary is already running", None))
+            ui.summaries = {"adopt:/p": job("Printers")}  # an adopt or a question still runs on its own
+            ui.ask_summary(mine)
+            self.assertEqual((ui.msg, ui.confirm), ("Wait for Printers's run to finish first", None))
+            ui.summaries, ui.quit_anyway, ui.tab = {"a": job("A"), "b": job("B")}, False, 0
+            ui.helping = ui.choosing = ui.asking = ui.searching = ui.confirm = None
+            ui.TABS = [ui.TABS[0]._replace(typing=lambda ui: False)]
+            ui.dispatch("ctrl+q", None)
+            self.assertEqual(ui.msg, "2 summaries are running and would be lost: ctrl+q again to quit anyway")
+            for m in ("3 summaries are running: wait for one", "Its summary is already running"):
+                self.assertTrue(roost.REFUSED.match(m), m)
+        finally:
+            roost.prices = saved
 
     def test_the_key_refuses_working_and_window_sessions_and_stops_background_ones(self):
         ui = object.__new__(roost.UI)

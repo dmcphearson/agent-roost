@@ -44,7 +44,7 @@ def start_tab(names):
     last = config.read_config().get("tab")
     return names.index(last) if last in names else 0
 FAILED = re.compile(r"^(Couldn't|Can't|No editor found|Its folder no longer exists|Summary of .+ failed|Handoffs for .+ stopped)")
-REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|A summary is already running|That's .+ work:|"
+REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|\d summaries are running|Its summary is already running|That's .+ work:|"
                      r"It's wrapped up:|No Sessions list this project|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
 
 
@@ -381,7 +381,8 @@ class Shell:
                 running = [j for j in self.summaries.values() if j["state"] == "running"]
                 if running and not self.quit_anyway:
                     self.quit_anyway = True
-                    self.msg = f"A summary of {running[0]['name']} is running and would be lost: ctrl+q again to quit anyway"
+                    what = f"A summary of {running[0]['name']} is" if len(running) == 1 else f"{len(running)} summaries are"
+                    self.msg = f"{what} running and would be lost: ctrl+q again to quit anyway"
                     return None
                 return QUIT
             self.quit_anyway = False
