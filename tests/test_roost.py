@@ -52,7 +52,7 @@ roost.NOTES, roost.RECAPS = Path(_SCRATCH.name) / "notes", Path(_SCRATCH.name) /
 # nor their settings, pins, or installed files: a test that misses a stand-in writes here instead
 for _name, _rel in [("CONFIG", "config.json"), ("PINS", "pins.json"), ("UPDATE_CHECK", "update-check.json"),
                     ("DONE", "_done"), ("ADOPT_PLANS", "adopt"), ("APP", "app"), ("SPEND_LOG", "spend.jsonl"),
-                    ("SPEND_CACHE", "spend-cache.json")]:
+                    ("SPEND_CACHE", "spend-cache.json"), ("LOG", "roost.log")]:
     setattr(roost, _name, Path(_SCRATCH.name) / _rel)
 
 
@@ -180,6 +180,13 @@ class Demo(unittest.TestCase):
     def test_demo_sessions_cover_every_section(self):
         groups = {roost.group(s) for s in roost.demo_sessions()}
         self.assertEqual(groups, {0, 1, 2, 3})
+
+    def test_the_suite_logs_to_scratch_not_the_persons_log(self):
+        real = Path.home() / ".cache" / "roost.log"
+        before = real.stat().st_mtime if real.exists() else None
+        roost.log("a line from the test suite")
+        self.assertEqual(real.stat().st_mtime if real.exists() else None, before)
+        self.assertIn("a line from the test suite", roost.LOG.read_text())
 
     def test_demo_projects_use_the_demos_own_categories(self):
         names = {c for c, _ in roost.DEMO_CATEGORY_LIST}
