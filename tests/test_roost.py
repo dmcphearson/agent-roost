@@ -2594,6 +2594,17 @@ class Adopt(unittest.TestCase):
         # every file is still somewhere: moved, archived, or split out (plus the new README copy and Handoff)
         self.assertEqual(len(self.files(new, split)), before + 3)
 
+    def test_a_second_adopt_the_same_day_archives_beside_the_first(self):
+        (self.old / "_archive" / "2026-10-09").mkdir(parents=True)
+        (self.old / "_archive" / "2026-10-09" / "README.md").write_text("The first adopt's README.\n")
+        new = roost.apply_plan(self.old, self.plan(), today="2026-10-09")
+        self.assertEqual((new / "_archive" / "2026-10-09" / "README.md").read_text(), "The first adopt's README.\n")
+        arch = new / "_archive" / "2026-10-09-2"
+        self.assertIn("Old notes.", (arch / "README.md").read_text())
+        self.assertTrue((arch / "HANDOFF.md").exists())
+        [h] = (new / "handoffs").iterdir()
+        self.assertIn("now in `_archive/2026-10-09-2/`", h.read_text())
+
     def test_backfill_writes_handoffs_oldest_first_dated_by_each_session(self):
         ran = []
         saved = roost.summarize
@@ -2616,9 +2627,9 @@ class Adopt(unittest.TestCase):
     def test_old_archives_are_suggested_for_clearing(self):
         arch = self.old / "_archive"
         now = time.mktime((2026, 10, 15, 12, 0, 0, 0, 0, -1))
-        for d in ("2026-10-09", "2026-10-14", "notes"):
+        for d in ("2026-10-09", "2026-10-09-2", "2026-10-14", "notes"):
             (arch / d).mkdir(parents=True)
-        self.assertEqual(roost.archives_due(self.old, now), [("2026-10-09", 6)])
+        self.assertEqual(roost.archives_due(self.old, now), [("2026-10-09", 6), ("2026-10-09-2", 6)])
         roost.save_config(adopt_archive_days=10)
         self.assertEqual(roost.archives_due(self.old, now), [])
         self.assertNotIn("_archive", roost.adopt_input(self.old))

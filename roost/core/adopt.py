@@ -223,12 +223,16 @@ def set_summary(folder, summary):
 
 
 def apply_plan(folder, plan, today=None):
-    """Carry out a checked plan. Every replaced or dropped file goes to _archive/<today>/. Returns
-    the project's folder after the rename."""
+    """Carry out a checked plan. Every replaced or dropped file goes to _archive/<today>/, or
+    <today>-2/ and on when an adopt already ran that day. Returns the project's folder after the rename."""
     problems = plan_problems(folder, plan)
     if problems:
         raise ValueError("; ".join(problems))
-    today = today or datetime.now().strftime("%Y-%m-%d")
+    today = day = today or datetime.now().strftime("%Y-%m-%d")
+    n = 1
+    while (folder / "_archive" / today).exists():
+        n += 1
+        today = f"{day}-{n}"
     archive = folder / "_archive" / today
 
     def put_away(rel):

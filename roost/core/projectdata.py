@@ -477,16 +477,18 @@ ADOPT_ARCHIVE_DAYS = 5     # config: adopt_archive_days; after this roost sugges
 
 
 def archives_due(folder, now=None):
-    """The project's _archive/<date>/ folders older than adopt_archive_days, as (name, days old)."""
+    """The project's _archive/<date>/ folders (and <date>-2/ from a second adopt that day) older
+    than adopt_archive_days, as (name, days old)."""
     try:
         days = float(config.read_config().get("adopt_archive_days") or ADOPT_ARCHIVE_DAYS)
     except (TypeError, ValueError):
         days = ADOPT_ARCHIVE_DAYS
     out = []
     for d in sorted((Path(folder) / "_archive").glob("*")):
+        m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})(-\d+)?", d.name)
         try:
-            age = ((now or time.time()) - datetime.strptime(d.name, "%Y-%m-%d").timestamp()) / 86400
-        except ValueError:
+            age = ((now or time.time()) - datetime.strptime(m[1], "%Y-%m-%d").timestamp()) / 86400
+        except (TypeError, ValueError):
             continue
         if d.is_dir() and age >= days:
             out.append((d.name, int(age)))
