@@ -3137,7 +3137,13 @@ class TextualScreens(unittest.TestCase):
         self.assertIn(app.ui.choosing["title"], [s["name"] for s in self.sessions])
 
     def test_ctrl_n_asks_for_a_title_then_makes_the_note(self):
-        app = self.run_app([self.keys("ctrl+n", "n"), self.keys(*"Q4 ideas"), self.keys("enter")])
+        import unittest.mock
+        with tempfile.TemporaryDirectory() as tmp:  # a stand-in editor, so the test needs none installed
+            stub = Path(tmp) / "stub-editor"
+            stub.write_text("#!/bin/sh\nexit 0\n")
+            stub.chmod(0o755)
+            with unittest.mock.patch.multiple(roost, read_config=lambda: {"editor": str(stub)}):
+                app = self.run_app([self.keys("ctrl+n", "n"), self.keys(*"Q4 ideas"), self.keys("enter")])
         self.assertTrue((roost.NOTES / "q4-ideas.md").exists())
         self.assertIn("Couldn't open the editor", app.ui.alerting)  # a test has no terminal to give it; a failure is a box
 
