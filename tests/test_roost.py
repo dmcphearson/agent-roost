@@ -181,6 +181,10 @@ class Demo(unittest.TestCase):
         groups = {roost.group(s) for s in roost.demo_sessions()}
         self.assertEqual(groups, {0, 1, 2, 3})
 
+    def test_demo_projects_use_the_demos_own_categories(self):
+        names = {c for c, _ in roost.DEMO_CATEGORY_LIST}
+        self.assertEqual(set(roost.DEMO_CATEGORIES.values()) - names, set())
+
     def test_demo_paths_are_fake(self):
         for s in roost.demo_sessions():
             self.assertIn("/projects/", s["cwd"])

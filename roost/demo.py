@@ -17,7 +17,7 @@ from roost.core import notedata
 DEMO = [
     # name, state, kind, pinned, open, minutes ago, tokens, folder, summary, files
     ("Quarterly access review", "busy", "background", True, True, 1, 88_000, "it-ops",
-     "Pulled the current user list for all 29 apps and matched it against the HR roster. Three accounts belong "
+     "Pulled the current user list for all 17 apps and matched it against the HR roster. Three accounts belong "
      "to people who left last month; drafted removal tickets for each and flagged one shared admin login.",
      ["access-review.csv", "removals.md"]),
     ("Laptop refresh rollout", "waiting", "interactive", False, True, 4, 41_000, "it-ops/devices",
@@ -32,7 +32,7 @@ DEMO = [
      "fake new hire; all steps passed and the cleanup step removed the test account.",
      ["onboarding.json", "README.md"]),
     ("Backup restore drill", "idle", "background", True, False, 58, 156_000, "infra/backups",
-     "Restored last night's database snapshot into a scratch account in 38 minutes, inside the 48-hour target. "
+     "Restored last night's database snapshot into a scratch account in 38 minutes, inside the 12-hour target. "
      "Wrote up the steps and the two places where the runbook was out of date.",
      ["restore-drill.md", "runbook.md"]),
     ("Helpdesk ticket triage", "idle", "background", True, False, 80, 64_000, "helpdesk",
@@ -109,9 +109,9 @@ DEMO_EXTRA = {"Shared drive permissions": {"entrypoint": "claude-desktop"}}
 
 DEMO_PROJECTS = [
     # id, status, summary, DEMO sessions it lists (by index), hours since its last Handoff
-    ("2026-10-access-review-q4", "active", "Quarterly access review for the 29 apps in scope, with removal tickets for leavers.", [0, 21], 2),
+    ("2026-10-access-review-q4", "active", "Quarterly access review for the 17 apps in scope, with removal tickets for leavers.", [0, 21], 2),
     ("2026-09-vendor-security-reviews", "active", "Security questionnaires and reviews for the three vendors up for renewal this quarter.", [2, 19], 30),
-    ("2026-09-backup-restore-drill", "active", "Prove last night's backups restore inside the 48-hour target, and fix the runbook.", [4, 22], 5),
+    ("2026-09-backup-restore-drill", "active", "Prove last night's backups restore inside the 12-hour target, and fix the runbook.", [4, 22], 5),
     ("2026-10-mfa-rollout", "planning", "Roll out MFA in three waves: admins, engineering, then everyone.", [], None),
     ("2026-08-network-refresh", "closed", "New firewall and guest Wi-Fi split for the office.", [8], 24 * 20),
     ("2026-10-laptop-refresh", "active", "Replace the six laptops past four years old, with a pilot group first.", [1, 10], 4),
@@ -130,17 +130,17 @@ DEMO_LABELS = {  # each README's heading: the name the screens show
     "2026-07-endpoint-encryption": "Laptop encryption"}
 DEMO_WRAPPED = {10, 19, 20, 21, 22}  # closed Sessions whose project's newest Handoff covers their last message
 DEMO_NOT_ADOPTED = {"2026-09-data-sharing-cleanup"}  # no handoffs/ yet: its actions offer Adopt it
-DEMO_CATEGORIES = {"2026-10-access-review-q4": "identity-and-access", "2026-09-vendor-security-reviews": "vendor-evaluation",
-                   "2026-09-backup-restore-drill": "security-hardening", "2026-08-network-refresh": "systems-and-automation",
-                   "2026-10-mfa-rollout": "identity-and-access", "2026-10-laptop-refresh": "systems-and-automation",
-                   "2026-10-network-hardening": "security-hardening", "2026-09-password-manager": "identity-and-access",
-                   "2026-10-asset-inventory": "systems-and-automation", "2026-09-data-sharing-cleanup": "security-hardening",
-                   "2026-07-endpoint-encryption": "security-hardening"}
-DEMO_CATEGORY_LIST = [("identity-and-access", "joiners, leavers, and access reviews"),
-                      ("security-hardening", "controls, backups, and disaster recovery"),
-                      ("systems-and-automation", "devices, networks, and internal tools"),
-                      ("vendor-evaluation", "buying tools and reviewing vendors"),
-                      ("security-incident", "incident write-ups")]
+DEMO_CATEGORIES = {"2026-10-access-review-q4": "access", "2026-09-vendor-security-reviews": "vendors",
+                   "2026-09-backup-restore-drill": "hardening", "2026-08-network-refresh": "infrastructure",
+                   "2026-10-mfa-rollout": "access", "2026-10-laptop-refresh": "infrastructure",
+                   "2026-10-network-hardening": "hardening", "2026-09-password-manager": "access",
+                   "2026-10-asset-inventory": "infrastructure", "2026-09-data-sharing-cleanup": "hardening",
+                   "2026-07-endpoint-encryption": "hardening"}
+DEMO_CATEGORY_LIST = [("access", "accounts, permissions, and reviews"),
+                      ("hardening", "controls, backups, and recovery drills"),
+                      ("infrastructure", "laptops, networks, and shared tools"),
+                      ("vendors", "renewals and security questionnaires"),
+                      ("incidents", "what happened and what changed")]
 DEMO_TAGS = {"2026-10-access-review-q4": ["access", "quarterly"], "2026-09-vendor-security-reviews": ["vendors"],
              "2026-09-backup-restore-drill": ["backups", "dr"], "2026-08-network-refresh": ["network"],
              "2026-10-mfa-rollout": ["mfa"], "2026-10-laptop-refresh": ["devices", "budget"],
