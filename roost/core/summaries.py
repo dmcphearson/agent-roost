@@ -323,7 +323,8 @@ def folder_files(folder):
 def summarize(sid, model=None, cap=None, now=None, call=None, readme=True, at=None, progress=None):
     """Write a Session's Handoff and README update from its transcript, without resuming it. Every
     model call comes first, so a failure writes nothing. progress(n) is called as model call n starts. Returns (Handoff path, redacted kinds,
-    dollars spent). Raises ValueError with the reason."""
+    dollars spent, README updated: None when there's no README to update, False when its body was
+    edited during the rewrite and so kept). Raises ValueError with the reason."""
     dflt_model, dflt_cap = summary_settings()
     model, cap, call = model or dflt_model, cap if cap is not None else dflt_cap, call or claude_print
     plan = summary_plan(sid)
@@ -351,7 +352,7 @@ def summarize(sid, model=None, cap=None, now=None, call=None, readme=True, at=No
         raise ValueError("the summary came back without its Next section")
     if not plan["project"] or not readme:  # a Session recap has no README to update; adopt's backfill writes its own
         handoff, kinds = write_handoff(sid, summary, now, recap=True, at=at)
-        return handoff, kinds, spent
+        return handoff, kinds, spent, None
     path, lines, end = readme_lines(plan["folder"])
     body = ask(SUMMARY_SYSTEM, README_PROMPT % ("".join(lines[end + 1:]).strip() or "(empty)",
                                                 "\n".join(folder_files(plan["folder"])) or "(none)", summary))
@@ -360,6 +361,9 @@ def summarize(sid, model=None, cap=None, now=None, call=None, readme=True, at=No
         raise ValueError("the README rewrite came back without a Current state section")
     handoff, kinds = write_handoff(sid, summary, now)
     body, more = redact(body)
+    before = lines[end + 1:]
     path, lines, end = readme_lines(plan["folder"])  # re-read: keep frontmatter written meanwhile
+    if lines[end + 1:] != before:  # the body changed during the rewrite: the person's edit wins
+        return handoff, kinds, spent, False
     write_lines(path, lines[:end + 1] + ["\n", body + "\n"])
-    return handoff, kinds + more, spent
+    return handoff, kinds + more, spent, True

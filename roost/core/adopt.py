@@ -292,7 +292,7 @@ def backfill(folder, model, cap, say=print, sids=None):
     spent = 0.0
     for last, sid in sorted(order):
         try:
-            path, _, cost = summaries.summarize(sid, model, cap, readme=False, at=last)
+            path, _, cost, _ = summaries.summarize(sid, model, cap, readme=False, at=last)
             spent += cost
             say(f"  Handoff from {session_name(sid)}: {short(str(path))} (${cost:.2f})")
         except ValueError as e:

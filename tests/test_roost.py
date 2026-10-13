@@ -2057,8 +2057,9 @@ class TranscriptSummary(unittest.TestCase):
     """#52: the Handoff and README update from a transcript, without resuming the Session."""
     setUp, tearDown, urlopen, transcript = Handoffs.setUp, Handoffs.tearDown, Handoffs.urlopen, Handoffs.transcript
 
-    def run_summary(self, replies=None, cap=5.0, fail_at=None):
-        """summarize() with a stand-in for the model: each call gets the next reply and costs $1."""
+    def run_summary(self, replies=None, cap=5.0, fail_at=None, during=None):
+        """summarize() with a stand-in for the model: each call gets the next reply and costs $1.
+        during(n) runs while call n is out, standing in for someone working meanwhile."""
         replies = list(replies or [DRAFT, DRAFT + "\n<!-- review: 0 changes: none -->",
                                    "# Printers\n\n## Current state\n\nFixed.\n\n## Next\n\nCheck the second office.\n"])
         self.calls, self.steps = [], []
@@ -2067,6 +2068,8 @@ class TranscriptSummary(unittest.TestCase):
             self.calls.append((model, prompt, budget))
             if fail_at == len(self.calls):
                 raise ValueError("the model is down")
+            if during:
+                during(len(self.calls))
             return replies.pop(0), 1.0
         saved = roost.read_only
         roost.read_only = lambda cmd: "(stub)"
@@ -2097,7 +2100,8 @@ class TranscriptSummary(unittest.TestCase):
     def test_it_writes_the_handoff_and_the_readme_body_and_keeps_the_frontmatter(self):
         readme = self.folder / "README.md"
         readme.write_text(readme.read_text() + "\n# Printers\n\nOld state.\n")
-        path, kinds, spent = self.run_summary()
+        path, kinds, spent, updated = self.run_summary()
+        self.assertTrue(updated)
         self.assertEqual(self.steps, [1, 2, 3])  # draft, review, README: the row shows which
         self.assertEqual(roost.UI.progress({"step": 2, "steps": 3, "started": time.time() - 100}), "2/3 · 1m40s")
         text = path.read_text()
@@ -2112,6 +2116,31 @@ class TranscriptSummary(unittest.TestCase):
         self.assertEqual([b for _, _, b in self.calls], [5.0, 4.0, 3.0])  # each call gets what's left of the cap
         self.assertIn("Old state", self.calls[2][1])  # the rewrite starts from the README body
         self.assertIn("[1] USER: go", self.calls[0][1])
+
+    def test_a_readme_edited_during_the_rewrite_keeps_the_edit(self):
+        readme = self.folder / "README.md"
+        readme.write_text(readme.read_text() + "\n# Printers\n\nOld state.\n")
+
+        def edit(n):
+            if n == 3:  # the person edits the body while the rewrite is out
+                readme.write_text(readme.read_text().replace("Old state.", "Ordered toner."))
+        path, _, spent, updated = self.run_summary(during=edit)
+        self.assertFalse(updated)
+        self.assertTrue(path.exists())  # the Handoff is still written
+        self.assertIn("Ordered toner.", readme.read_text())
+        self.assertNotIn("## Current state", readme.read_text())
+        self.assertEqual(spent, 3.0)
+
+    def test_frontmatter_written_during_the_rewrite_doesnt_stop_it(self):
+        readme = self.folder / "README.md"
+
+        def record(n):
+            if n == 3:  # roost records another Session meanwhile
+                readme.write_text(readme.read_text().replace("sessions:\n", "sessions:\n  - name: Other\n    id: other\n", 1))
+        _, _, _, updated = self.run_summary(during=record)
+        self.assertTrue(updated)
+        self.assertIn("id: other", readme.read_text())
+        self.assertIn("## Current state", readme.read_text())
 
     def test_a_failure_writes_nothing(self):
         readme = (self.folder / "README.md").read_text()
@@ -2139,8 +2168,8 @@ class TranscriptSummary(unittest.TestCase):
         table = roost.parse_prices(PRICE_PAGE)
         self.assertLess(roost.summary_estimate(plan, "claude-opus-5-5", table),
                         roost.summary_estimate(dict(plan, project=True), "claude-opus-5-5", table))
-        path, _, spent = self.run_summary()
-        self.assertEqual((path, spent), (roost.RECAPS / "printer-fix.md", 2.0))  # no README call
+        path, _, spent, updated = self.run_summary()
+        self.assertEqual((path, spent, updated), (roost.RECAPS / "printer-fix.md", 2.0, None))  # no README call
         self.assertEqual(len(self.calls), 2)
 
     def test_the_estimate_comes_from_the_input_size_and_list_prices(self):
@@ -2193,7 +2222,7 @@ class TranscriptSummary(unittest.TestCase):
         stopped, ran = [], []
         saved = roost.stop_session, roost.summarize, roost.prices
         roost.stop_session, roost.prices = stopped.append, lambda now=None: None
-        roost.summarize = lambda sid, model, cap, progress: progress(2) or ran.append((sid, model, cap)) or (self.folder / "handoffs" / "h.md", [], 0.4)
+        roost.summarize = lambda sid, model, cap, progress: progress(2) or ran.append((sid, model, cap)) or (self.folder / "handoffs" / "h.md", [], 0.4, False)
         ui.refresh = lambda: None
         try:
             s = dict(mine(), attach="job1")
@@ -2208,6 +2237,7 @@ class TranscriptSummary(unittest.TestCase):
             self.assertEqual(stopped, ["job1"])  # stopped before the summary ran
             self.assertEqual(ran, [(SID, "claude-sonnet-5-5", 5.0)])
             self.assertEqual(ui.summaries[SID]["state"], "done")
+            self.assertIn("left the README alone: it was edited while the summary ran", ui.summaries[SID]["text"])
         finally:
             roost.stop_session, roost.summarize, roost.prices = saved
 
@@ -2567,7 +2597,7 @@ class Adopt(unittest.TestCase):
     def test_backfill_writes_handoffs_oldest_first_dated_by_each_session(self):
         ran = []
         saved = roost.summarize
-        roost.summarize = lambda sid, model, cap, readme=True, at=None: ran.append((sid, readme, at)) or (Path("/x/h.md"), [], 0.5)
+        roost.summarize = lambda sid, model, cap, readme=True, at=None: ran.append((sid, readme, at)) or (Path("/x/h.md"), [], 0.5, None)
         try:
             self.transcript(TRANSCRIPT)
             spent = roost.backfill(self.old, "claude-sonnet-5-5", 5.0, say=lambda *a: None)
@@ -2641,7 +2671,7 @@ class Adopt(unittest.TestCase):
         saved = roost.claude_print, roost.threading.Thread, roost.summarize
         roost.claude_print = lambda model, system, prompt, budget: (PLAN_BODY, 0.3)
         roost.threading.Thread = sync
-        roost.summarize = lambda sid, model, cap, readme=True, at=None: ran.append((sid, readme)) or (Path("/x/h.md"), [], 0.5)
+        roost.summarize = lambda sid, model, cap, readme=True, at=None: ran.append((sid, readme)) or (Path("/x/h.md"), [], 0.5, None)
         self.addCleanup(lambda: (setattr(roost, "claude_print", saved[0]), setattr(roost.threading, "Thread", saved[1]),
                                  setattr(roost, "summarize", saved[2])))
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("2026-09-printer-rollout")

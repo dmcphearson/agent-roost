@@ -252,8 +252,9 @@ class SessionsTab:
 
         def work():
             try:
-                path, kinds, cost = summaries.summarize(s["id"], model, cap, progress=lambda n: job.update(step=n))
-                job.update(state="done", text=f"Wrote {short(str(path))}{'' if path.parent == config.RECAPS else ' and updated the README'} (${cost:.2f})" + (
+                path, kinds, cost, updated = summaries.summarize(s["id"], model, cap, progress=lambda n: job.update(step=n))
+                readme = {True: " and updated the README", False: "; left the README alone: it was edited while the summary ran"}.get(updated, "")
+                job.update(state="done", text=f"Wrote {short(str(path))}{readme} (${cost:.2f})" + (
                     f"; redacted {len(kinds)} secret{'s' if len(kinds) != 1 else ''}: check it and rotate anything real" if kinds else ""))
             except Exception as e:
                 config.log(f"summary {s['id'][:8]}: {e}")
