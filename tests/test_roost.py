@@ -573,6 +573,17 @@ class Governor(unittest.TestCase):
         self.assertFalse(roost.in_view(s, running))
         self.assertTrue(roost.in_view(s, running, keep={"abc"}))
 
+    def test_a_session_being_summarized_sits_in_wrapping_up_after_closed(self):
+        now = time.time()
+        wrapping = self.sess(id="abc", state="closed", kind=None, last=now)  # stopped so its Handoff can be written
+        bg = self.sess(id="bg", state="idle", kind="background", last=now - 60)
+        closed = self.sess(id="old", state="closed", kind=None, last=now - 120)
+        self.assertEqual(roost.SECTIONS[roost.group(wrapping, keep={"abc"})], "Wrapping up")
+        self.assertEqual(roost.SECTIONS[roost.group(wrapping)], "Closed")  # once the run ends, it moves to Closed
+        rows = roost.visible([wrapping, bg, closed], ALL, "", keep={"abc"})
+        self.assertEqual([s["id"] for s in rows], ["bg", "old", "abc"])
+        self.assertEqual([s["id"] for s in roost.visible([wrapping, bg, closed], RUNNING, "", keep={"abc"})], ["bg", "abc"])
+
     def test_stale_tab(self):
         i = roost.VIEWS.index("Stale")
         old = time.time() - 3 * 86400
@@ -3035,6 +3046,20 @@ class TextualScreens(unittest.TestCase):
 
     def screen(self, app):
         return app.lines
+
+    def test_a_wrap_up_shows_under_its_own_heading_at_the_bottom(self):
+        done = dict(self.sessions[0], state="closed", kind=None, attach=None)  # stopped for its summary
+        self.sessions = [done, self.sessions[1]]
+
+        async def start(pilot):
+            pilot.app.ui.summaries = {done["id"]: {"state": "running", "text": "writing", "name": done["name"],
+                                                   "step": 1, "steps": 3, "started": time.time()}}
+            await pilot.press("tab")
+        lines = self.screen(self.run_app([start]))
+        heads = [l.strip().split(" (")[0] for l in lines if "(1)" in l]
+        self.assertEqual(heads[-1], "Wrapping up")
+        self.assertLess(next(i for i, l in enumerate(lines) if "Laptop refresh" in l),
+                        next(i for i, l in enumerate(lines) if "Printer fix" in l))
 
     def test_the_sessions_tab_names_each_sessions_project(self):
         import unittest.mock

@@ -498,11 +498,14 @@ def matches(s, query):
     return all(q in hay for q in query.lower().split())
 
 
-SECTIONS = ["Open", "Pinned", "Background", "Closed"]
+SECTIONS = ["Open", "Pinned", "Background", "Closed", "Wrapping up"]
 
 
-def group(s):
-    """Section index: open in a window, then pinned, then other background, then closed."""
+def group(s, keep=()):
+    """Section index: open in a window, then pinned, then other background, then closed, then the
+    Sessions in keep, whose Handoff or recap roost is writing now."""
+    if s.get("id") in keep:
+        return 4
     if s["kind"] == "interactive" or s["state"] == "opening" or s.get("attached"):
         return 0
     if s["kind"] == "background":
@@ -526,5 +529,5 @@ def visible(sessions, view, query, sort=("LAST ACTIVE", True), keep=()):
     rows = [s for s in sessions if in_view(s, view, keep) and matches(s, query)]
     rows.sort(key=lambda s: -s["last"])  # tiebreak: most recent first
     rows.sort(key=SORTS[col][0], reverse=desc)
-    rows.sort(key=group)  # stable, so each section keeps the column order
+    rows.sort(key=lambda s: group(s, keep))  # stable, so each section keeps the column order
     return rows

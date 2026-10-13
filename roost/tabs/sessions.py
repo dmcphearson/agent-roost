@@ -85,7 +85,8 @@ class SessionsTab:
         for x in self.sessions:  # the project that lists it, for the PROJECT column and its sort
             p = self.project_of(x)
             x["proj"] = projectdata.label_of(p) if p else ""
-        rows = self.srows = visible(self.sessions, self.view, self.query, self.sort, self.summarizing())
+        self.wrapping = self.summarizing()  # the Wrapping up section, fixed for this draw
+        rows = self.srows = visible(self.sessions, self.view, self.query, self.sort, self.wrapping)
         self.sel = max(0, min(self.sel, len(rows) - 1))
         live = sum(s["state"] != "closed" for s in self.sessions)
         waiting = sum(s["state"] in ("waiting", "blocked") for s in self.sessions)
@@ -100,10 +101,11 @@ class SessionsTab:
         section, ("h", section) at the start of each and ("s", None) between them. Scrolls self.top
         so the selected row (and its section's header, at the start of a section) is in the page."""
         lines, sec_line = [], None
-        multi = len({group(s) for s in rows}) > 1
+        sec = lambda s: group(s, self.wrapping)
+        multi = len({sec(s) for s in rows}) > 1
         for idx, s in enumerate(rows):
-            g = group(s)
-            if multi and (idx == 0 or group(rows[idx - 1]) != g):
+            g = sec(s)
+            if multi and (idx == 0 or sec(rows[idx - 1]) != g):
                 if idx:
                     lines.append(("s", None))  # a blank line between sections
                 lines.append(("h", g))
@@ -512,7 +514,7 @@ if Region:
                     continue
                 if kind_ == "h":
                     row = self.line()
-                    n = sum(group(s) == val for s in rows)
+                    n = sum(group(s, ui.wrapping) == val for s in rows)
                     label = f"{SECTIONS[val]} ({n}) "
                     row.put(2, label, curses.A_BOLD | (ui.ACCENT if val == 0 else 0))
                     row.rule(2 + len(label), w - len(label) - 4, ui.DIM)
