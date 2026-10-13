@@ -30,7 +30,7 @@ def start_plain(cwd, term):
     if not term:
         return {"start": argv, "cwd": cwd}
     t = TERMINALS[term]
-    if osa(t["new"], cwd, *window_command(shlex.join(argv), os.path.basename(cwd.rstrip("/")) or cwd, cwd)) is None:
+    if osa(t["new"], cwd, *window_command(shlex.join(argv), os.path.basename(cwd.rstrip("/")) or cwd)) is None:
         return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
     return f"Started a Session in {short(cwd)}"
 
@@ -48,7 +48,7 @@ def start_session(pid, cwd, term, name=None):
         projectdata.assign_session(sid, name, folder)
         return {"start": argv, "cwd": cwd}
     t = TERMINALS[term]
-    if osa(t["new"], cwd, *window_command(shlex.join(argv), name, cwd)) is None:
+    if osa(t["new"], cwd, *window_command(shlex.join(argv), name)) is None:
         return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
     projectdata.assign_session(sid, name, folder)
     return f"Started a Session for {name} in {short(cwd)}"
@@ -215,16 +215,13 @@ def osa(script, *args):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def window_command(cmd, title, cwd):
+def window_command(cmd, title):
     """Shell line that titles the window after the session, runs cmd, then leaves
     a normal shell. Returns (typed form, direct-exec form); Ghostty uses the
-    direct form so its shell integration can't rename the window to the command.
-    The direct form cds into cwd itself: Ghostty's working-directory setting (home,
-    say) can win over the folder the window was asked to start in. The typed form
-    is preceded by a cd in each terminal's own script."""
+    direct form so its shell integration can't rename the window to the command."""
     line = f"printf '\\033]0;%s\\007' {shlex.quote(title)}; {cmd}"
     shell = os.environ.get("SHELL", "/bin/zsh")
-    direct = f"{shell} -lic {shlex.quote(f'cd -- {shlex.quote(cwd)} && {line}; exec {shell} -l')}"
+    direct = f"{shell} -lic {shlex.quote(line + f'; exec {shell} -l')}"
     return line, direct
 
 
@@ -238,7 +235,7 @@ def open_in_window(s, term):
         return f"{s['name']} is already open, but its window wasn't found"
     cmd = f"claude attach {s['attach']}" if s.get("attach") else f"claude --resume {s['id']}"
     cwd = launch_dir(s)
-    if osa(t["new"], cwd, *window_command(cmd, s["name"], cwd)) is None:
+    if osa(t["new"], cwd, *window_command(cmd, s["name"])) is None:
         return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
     s["opening"] = time.time()
     return f"Opened {s['name']} in a new window"

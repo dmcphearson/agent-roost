@@ -438,23 +438,6 @@ class Updates(unittest.TestCase):
 
 
 class Osa(unittest.TestCase):
-    def test_a_closed_session_opens_where_it_was_started_whatever_the_terminal_says(self):
-        """Ghostty runs the direct form in the folder its working-directory setting names, which can be
-        home, so that command cds into the Session's folder itself."""
-        import subprocess, unittest.mock
-        with tempfile.TemporaryDirectory() as start, tempfile.TemporaryDirectory() as later, \
-                tempfile.TemporaryDirectory() as elsewhere, unittest.mock.patch.dict(os.environ, {"SHELL": "/bin/sh"}):
-            s = dict(session("Printer fix", state="closed", kind=None), id=SID, home=start, cwd=later)
-            ran = []
-            with unittest.mock.patch.object(roost, "osa", lambda script, *args: ran.append(args) or "ok"):
-                roost.open_in_window(s, "ghostty")
-            folder, _, direct = ran[0]
-            self.assertEqual(folder, start)
-            line = direct.replace(f"claude --resume {SID}", "pwd -P").replace("exec /bin/sh -l", "true")
-            out = subprocess.run(["/bin/sh", "-c", line], cwd=elsewhere, stdin=subprocess.DEVNULL,
-                                 capture_output=True, text=True).stdout
-            self.assertEqual(out.split("\x07")[-1].strip(), os.path.realpath(start))  # after the window title
-
     def test_a_script_that_hangs_is_a_failure_not_an_exception(self):
         import subprocess, unittest.mock
         def hang(*a, **kw):
