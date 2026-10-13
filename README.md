@@ -36,7 +36,7 @@ The script installs the latest release: its program files in `~/.roost/app/<vers
 
 **Updating:** with Homebrew, `brew upgrade roost`, then `roost update` to bring the plugin along. Otherwise, `roost update` installs the latest release, keeps the previous version's files and its launcher (as `~/.local/bin/roost.previous`), and brings Textual in `~/.roost/venv` to the version the release asks for (`roost setup textual` does only that). Roost also checks once a day and says in its bottom bar when a new version is out.
 
-**The plugin:** roost's skills (`/roost:pickup`, `/roost:wrap-up`) are a Claude Code plugin that ships in each release. `roost setup` puts it in `~/.roost/plugin` and registers it with Claude Code as `roost@roost`, through `claude plugin`; `roost setup plugin` does only that step. `roost update` swaps in the new release's plugin folder and changes nothing in Claude Code's settings. Running Sessions keep the old plugin until they're restarted or you run `/reload-plugins` in them.
+**The plugin:** roost's skills (`/roost:pickup`, `/roost:wrap-up`, `/roost:note`) are a Claude Code plugin that ships in each release. `roost setup` puts it in `~/.roost/plugin` and registers it with Claude Code as `roost@roost`, through `claude plugin`; `roost setup plugin` does only that step. `roost update` swaps in the new release's plugin folder, then runs `claude plugin update` so Claude Code loads it; it changes nothing in Claude Code's settings. Running Sessions keep the old plugin until they're restarted or you run `/reload-plugins` in them.
 
 ### Developing
 
@@ -51,7 +51,12 @@ Clone this repo and run `./dev-link.sh`. It links `~/.local/bin/roost` and `~/.r
 | `roost <text>` | Open it with a search applied |
 | `roost --list` | Plain-text listing, for scripts |
 | `roost --demo` | Made-up sessions for screenshots; nothing real is read or changed |
-| `roost setup` | Check prerequisites and choose a terminal |
+| `roost setup` | Check prerequisites, choose a terminal and the Projects folder, and install the plugin |
+| `roost update` | Install the latest release and bring the plugin along (Homebrew: `brew upgrade roost` first) |
+| `roost project new <id> --summary "…"` | Make a project folder and its README; `brief`, `list`, and `status` read and set the rest |
+| `roost note "title" [text]` | Save a note to the Notes tab, or pipe its text in |
+| `roost ledger <id>` | Print a project's timeline: every Handoff's facts, oldest first |
+| `roost handoff` | Write a Session's Handoff from a summary on stdin; `/roost:wrap-up` runs it |
 | `roost adopt [<folder>]` | Bring existing project folders into roost's project layout: shows the cost, plans each one, and applies a plan only after you approve it; replaced files go to the project's `_archive/<date>/` |
 
 ### Views and sections
@@ -109,13 +114,14 @@ Ghostty, Terminal.app, and iTerm2 can open sessions in new windows. Choose one w
 
 ## How it works
 
-Roost reads Claude Code's local state and never calls a model:
+Roost reads Claude Code's local state. It calls a model only when you ask for a Handoff, a Session recap, or an adopt plan, shows the estimated cost first, and logs what each call cost in `~/.roost/spend.jsonl`. Everything else comes from:
 
 - `claude agents --json` for live sessions and their status
 - `~/.claude/projects/**/*.jsonl` transcripts for names, summaries, files touched, and context size (cached in `~/.cache/`)
 - `~/.claude/jobs/pins.json` for pins, written with the same lock Claude Code uses
 - `claude --bg --resume`, `claude stop`, and `claude rm` to revive, stop, and clean up sessions
 - `curl` to github.com for installs, updates, and the daily new-version check
+- a daily fetch of Anthropic's pricing page (platform.claude.com), for those cost estimates
 
 roost runs its commands on any Python 3.9 or later. For the screens it starts again on the Python in `~/.roost/venv`, where Textual is installed.
 
