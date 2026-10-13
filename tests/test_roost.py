@@ -438,6 +438,23 @@ class Updates(unittest.TestCase):
 
 
 class Osa(unittest.TestCase):
+    def test_a_closed_session_opens_where_it_was_started_whatever_the_terminal_says(self):
+        """Ghostty runs the direct form in the folder its working-directory setting names, which can be
+        home, so that command cds into the Session's folder itself."""
+        import subprocess, unittest.mock
+        with tempfile.TemporaryDirectory() as start, tempfile.TemporaryDirectory() as later, \
+                tempfile.TemporaryDirectory() as elsewhere, unittest.mock.patch.dict(os.environ, {"SHELL": "/bin/sh"}):
+            s = dict(session("Printer fix", state="closed", kind=None), id=SID, home=start, cwd=later)
+            ran = []
+            with unittest.mock.patch.object(roost, "osa", lambda script, *args: ran.append(args) or "ok"):
+                roost.open_in_window(s, "ghostty")
+            folder, _, direct = ran[0]
+            self.assertEqual(folder, start)
+            line = direct.replace(f"claude --resume {SID}", "pwd -P").replace("exec /bin/sh -l", "true")
+            out = subprocess.run(["/bin/sh", "-c", line], cwd=elsewhere, stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True).stdout
+            self.assertEqual(out.split("\x07")[-1].strip(), os.path.realpath(start))  # after the window title
+
     def test_a_script_that_hangs_is_a_failure_not_an_exception(self):
         import subprocess, unittest.mock
         def hang(*a, **kw):
@@ -2486,7 +2503,8 @@ class SessionRecaps(unittest.TestCase):
 
     def test_a_recap_on_the_notes_tab_becomes_a_project_with_its_handoffs(self):
         self.unlist()
-        self.note()
+        path, _ = self.note()
+        path.write_text(path.read_text().replace('folder: "/w"', f'folder: "{self.root}"'))  # a folder that exists
         ui = object.__new__(roost.UI)
         ui.sessions, ui.msg, ui.page, ui.last_click = [], "", 10, (0, -1)
         ui.psel, ui.ptop, ui.prow_y, ui.asking = 0, 0, {}, None
@@ -2496,6 +2514,11 @@ class SessionRecaps(unittest.TestCase):
         ui.summaries = {}
         ui.load_projects()
         [n] = ui.notes
+        started = []
+        ui.start = lambda pid, cwd, name=None: started.append(cwd)
+        dict(ui.note_actions(n))["Start a Session from it"]()
+        self.assertEqual(started, [str(self.root)])  # where its Session worked, not home
+        del ui.start
         dict(ui.note_actions(n))["Make it a project…"]()
         typed(ui, "\n")
         typed(ui, "\n")

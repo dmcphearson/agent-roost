@@ -130,8 +130,10 @@ class NotesTab:
         return self.start(recap["id"], cwd, s["name"])
 
     def start_from_note(self, n):
-        """A fresh Session whose first prompt picks up the note: in its project's folder, if it's in one."""
-        cwd = str(Path(n["path"]).parent.parent) if n["project"] else HOME
+        """A fresh Session whose first prompt picks up the note: in its project's folder if it's in one,
+        where its Session worked if it's a Session recap, else home."""
+        recap = n["extra"].get("folder") if projectdata.RECAP_TAG in n["tags"] else None
+        cwd = str(Path(n["path"]).parent.parent) if n["project"] else recap if recap and os.path.isdir(recap) else HOME
         return self.start(short(n["path"]), cwd, n["name"])
 
     def move_note(self, n):
