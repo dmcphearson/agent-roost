@@ -153,7 +153,10 @@ class NotesTab:
 
     def note_to_project(self, n):
         """A new project from a note: its name, its folder, then its summary (the note's title to start
-        with); the note moves in."""
+        with); the note moves in. A Session recap's Handoffs become the project's, as from the Sessions tab."""
+        if projectdata.RECAP_TAG in n["tags"]:
+            return self.new_project({"id": Path(n["path"]).stem, "path": n["path"], "summary": n["extra"].get("summary") or n["name"]})
+
         def made(pid, label, text):
             try:
                 folder = projectdata.create_project(pid, text, label)

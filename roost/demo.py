@@ -291,15 +291,15 @@ def use_demo():
     scratch = Path(tempfile.mkdtemp(prefix="roost-demo-"))
     atexit.register(shutil.rmtree, str(scratch), True)
     config.NOTES, config.RECAPS, filed = scratch / "notes", scratch / "sessions", scratch / "projects"
-    config.RECAPS.mkdir()
-    for name, text, hrs in DEMO_RECAPS:  # each written by the closed Session with the same name
-        path = config.RECAPS / f"{name}.md"
+    config.NOTES.mkdir()
+    for name, text, hrs in DEMO_RECAPS:  # each written by the closed Session with the same name: a note tagged recap
+        path = config.NOTES / f"{name}.md"
         s = next(s for s in sessions if slug(s["name"]) == name)
-        path.write_text(f"---\nsummary: {text}\nsessions:\n  - name: {s['name']}\n    id: {s['id']}\n---\n\n"
-                        f"### What I did\n- {text}\n")
+        path.write_text(f"---\ntitle: {s['name']}\ncreated: {datetime.fromtimestamp(now - hrs * 3600):%Y-%m-%d}\nproject:\n"
+                        f"summary: {text}\nsessions:\n  - name: {s['name']}\n    id: {s['id']}\ntags: [recap]\n---\n\n"
+                        f"# {s['name']}\n\n### What I did\n- {text}\n")
         os.utime(path, (now - hrs * 3600, now - hrs * 3600))
     formatting.SHOWN[:] = [(str(config.NOTES), short(str(notedata_home() / "notes"))),
-                           (str(config.RECAPS), short(str(notedata_home() / "sessions"))),
                            (str(filed), short(str(Path(HOME, ".roost", "projects"))))]
     for title, pid, tags, body, hrs in DEMO_NOTES:
         folder = filed / pid / "notes" if pid else config.NOTES
@@ -323,10 +323,13 @@ def use_demo():
              plugin_problem=lambda: "", taken_plugin_change=lambda: "", plugin_registered=lambda s=None: True,
              chosen_terminal=lambda: "ghostty", open_session=lambda s: None)
 
-    def fake_summary(sid, model=None, cap=None):
-        time.sleep(4)
+    def fake_summary(sid, model=None, cap=None, progress=None, **kw):
+        for step in (1, 2, 3):
+            if progress:
+                progress(step)
+            time.sleep(1.5)
         pid = DEMO_LINKS.get(sid) or next((p["id"] for p in demo_projects(sessions) if sid in p["sessions"]), "project")
-        return Path(HOME, ".roost", "projects", pid, "handoffs", f"{datetime.now():%Y-%m-%d-%H%M}-{sid[:8]}.md"), [], 0.41
+        return Path(HOME, ".roost", "projects", pid, "handoffs", f"{datetime.now():%Y-%m-%d-%H%M}-{sid[:8]}.md"), [], 0.41, True
     patch(summary_plan=lambda sid: {}, summary_estimate=lambda plan, model, table: 0.42, prices=lambda now=None: None,
              summarize=fake_summary)
     patch(gather_spend=lambda table=None, now=None: demo_spend(sessions), monthly_limit=lambda: 1500.0)

@@ -1209,8 +1209,8 @@ class StartingSessions(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
-        self.saved = roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings
-        roost.CONFIG, roost.DONE, roost.RECAPS = base / "config.json", base / "_done", base / "notes"
+        self.saved = roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings, roost.NOTES
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.NOTES = base / "config.json", base / "_done", base / "sessions", base / "notes"
         roost.claude_settings = lambda: {}  # not the person's real Claude Code settings
         roost.PLUGIN, roost.PROJECTS = base / "plugin", base / "transcripts"
         (roost.PLUGIN / ".claude-plugin").mkdir(parents=True)
@@ -1222,7 +1222,7 @@ class StartingSessions(unittest.TestCase):
         roost.osa = lambda script, *args: self.scripts.append(args) or "ok"
 
     def tearDown(self):
-        roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings = self.saved
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings, roost.NOTES = self.saved
         self.tmp.cleanup()
 
     def project(self, name, text=README, handoffs=()):
@@ -1254,9 +1254,12 @@ class StartingSessions(unittest.TestCase):
 
     def test_brief_with_no_handoffs_and_for_a_note(self):
         self.assertIn("# No Handoffs yet", roost.brief(self.project("p")))
-        roost.RECAPS.mkdir()
-        (roost.RECAPS / "fix.md").write_text("Restarted two Macs.")
+        roost.NOTES.mkdir()
+        (roost.NOTES / "fix.md").write_text("---\ntags: [recap]\n---\n\nRestarted two Macs.")
         self.assertIn("Restarted two Macs.", roost.brief(roost.find_project("fix")))
+        (roost.NOTES / "idea.md").write_text("---\ntags: [devices]\n---\n\nAn idea.")
+        with self.assertRaises(ValueError):  # only a recap is found by its name; a note by its path
+            roost.find_project("idea")
         with self.assertRaises(ValueError):
             roost.find_project("nope")
         with self.assertRaises(ValueError):
@@ -1846,8 +1849,8 @@ class Handoffs(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         self.saved = (roost.CONFIG, roost.DONE, roost.RECAPS, roost.PROJECTS, roost.PRICES,
-                      roost.urllib.request.urlopen, roost.LOG)
-        roost.CONFIG, roost.DONE, roost.RECAPS = base / "config.json", base / "_done", base / "notes"
+                      roost.urllib.request.urlopen, roost.LOG, roost.NOTES)
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.NOTES = base / "config.json", base / "_done", base / "sessions", base / "notes"
         roost.PROJECTS, roost.PRICES, roost.LOG = base / "transcripts", base / "prices.json", base / "roost.log"
         self.fetches = []
         roost.urllib.request.urlopen = self.urlopen
@@ -1862,7 +1865,7 @@ class Handoffs(unittest.TestCase):
 
     def tearDown(self):
         (roost.CONFIG, roost.DONE, roost.RECAPS, roost.PROJECTS, roost.PRICES,
-         roost.urllib.request.urlopen, roost.LOG) = self.saved
+         roost.urllib.request.urlopen, roost.LOG, roost.NOTES) = self.saved
         self.tmp.cleanup()
 
     def urlopen(self, req, timeout=None):
@@ -2225,7 +2228,7 @@ class TranscriptSummary(unittest.TestCase):
         self.assertLess(roost.summary_estimate(plan, "claude-opus-5-5", table),
                         roost.summary_estimate(dict(plan, project=True), "claude-opus-5-5", table))
         path, _, spent, updated = self.run_summary()
-        self.assertEqual((path, spent, updated), (roost.RECAPS / "printer-fix.md", 2.0, None))  # no README call
+        self.assertEqual((path, spent, updated), (roost.NOTES / "printer-fix.md", 2.0, None))  # no README call
         self.assertEqual(len(self.calls), 2)
 
     def test_the_estimate_comes_from_the_input_size_and_list_prices(self):
@@ -2420,9 +2423,12 @@ class SessionRecaps(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--recap"):
             roost.write_handoff(SID, DRAFT)
         path, kinds = self.note()
-        self.assertEqual(path, roost.RECAPS / "printer-fix.md")
+        self.assertEqual(path, roost.NOTES / "printer-fix.md")
         text = path.read_text()
         meta = roost.frontmatter(text)
+        self.assertEqual((meta["title"], roost.tag_list(meta["tags"]), meta["created"]), ("Printer fix", ["recap"], "2026-10-09"))
+        [n] = roost.read_notes()  # on the Notes tab, with every note action
+        self.assertEqual((n["name"], n["tags"], n["sessions"]), ("Printer fix", ["recap"], [SID]))
         self.assertEqual(meta["summary"], "Fixed the printers [3]")  # its first point, when none is given
         self.assertEqual(meta["sessions"], [{"name": "Printer fix", "id": SID}])
         self.assertEqual(meta["folder"], "/w")
@@ -2447,13 +2453,65 @@ class SessionRecaps(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "never overwrites"):
             roost.write_handoff(SID, "again", now=self.at(17))
 
-    def test_notes_never_replace_each_other(self):
+    def test_old_recaps_move_into_notes_once(self):
         self.unlist()
         roost.RECAPS.mkdir(parents=True)
-        (roost.RECAPS / "printer-fix.md").write_text("someone else's note\n")
+        old = roost.RECAPS / "printer-fix.md"
+        original = (f"---\nsummary: Fixed it\nfolder: /w\nsessions:\n  - name: Printer fix\n    id: {SID}\n---\n\n"
+                    f"# Session recap printer-fix\n\n<!-- roost handoff 2026-10-09-1600-11111111 session: {SID} from:  "
+                    f"to: 2026-10-09T11:00:00.000Z -->\n\nDone.\n")
+        old.write_text(original)
+        (roost.RECAPS / "loose.md").write_text("Restarted two Macs.\n")  # written by hand, no frontmatter
+        roost.NOTES.mkdir()
+        (roost.NOTES / "printer-fix.md").write_text("my own note\n")
+        self.assertEqual(roost.move_recaps(), 2)
+        self.assertFalse(roost.RECAPS.exists())
+        self.assertEqual((roost.NOTES / "printer-fix.md").read_text(), "my own note\n")  # never replaced
+        moved = roost.NOTES / "printer-fix-2.md"
+        text = moved.read_text()
+        meta = roost.frontmatter(text)
+        self.assertEqual((meta["title"], meta["summary"], meta["folder"], roost.tag_list(meta["tags"])),
+                         ("Printer fix", "Fixed it", "/w", ["recap"]))
+        self.assertIn("Done.", text)
+        self.assertEqual(roost.owner([SID]), moved)  # the next wrap-up adds to it
+        self.assertEqual(roost.last_covered(moved, [SID]), "2026-10-09T11:00:00.000Z")
+        self.assertEqual(sorted(r["id"] for r in roost.read_recaps()), ["loose", "printer-fix-2"])
+        self.assertIn("Restarted two Macs.", (roost.NOTES / "loose.md").read_text())
+        self.assertEqual(roost.move_recaps(), 0)  # a second run changes nothing
+        roost.RECAPS.mkdir()
+        old.write_text(original)  # as if the last run stopped after writing the note, before removing this
+        self.assertEqual(roost.move_recaps(), 1)
+        self.assertFalse(old.exists())
+        self.assertFalse((roost.NOTES / "printer-fix-3.md").exists())  # its note was already there
+
+    def test_a_recap_on_the_notes_tab_becomes_a_project_with_its_handoffs(self):
+        self.unlist()
+        self.note()
+        ui = object.__new__(roost.UI)
+        ui.sessions, ui.msg, ui.page, ui.last_click = [], "", 10, (0, -1)
+        ui.psel, ui.ptop, ui.prow_y, ui.asking = 0, 0, {}, None
+        ui.pquery, ui.searching, ui.term, ui.plugin_ok = "", False, None, True
+        ui.folded, ui.expanded, ui.unwrapped = set(), set(), set()
+        ui.choosing = ui.confirm = None
+        ui.summaries = {}
+        ui.load_projects()
+        [n] = ui.notes
+        dict(ui.note_actions(n))["Make it a project…"]()
+        typed(ui, "\n")
+        typed(ui, "\n")
+        self.assertEqual(ui.asking["text"], "Fixed the printers [3]")  # the recap's summary to start from
+        typed(ui, "\n")
+        self.assertIn("Created", ui.msg)
+        self.assertEqual(len(list((self.root / "printer-fix" / "handoffs").iterdir())), 1)
+        self.assertEqual(roost.read_recaps(), [])
+
+    def test_notes_never_replace_each_other(self):
+        self.unlist()
+        roost.NOTES.mkdir(parents=True)
+        (roost.NOTES / "printer-fix.md").write_text("someone else's note\n")
         path, _ = self.note()
         self.assertEqual(path.name, "printer-fix-2.md")
-        self.assertEqual((roost.RECAPS / "printer-fix.md").read_text(), "someone else's note\n")
+        self.assertEqual((roost.NOTES / "printer-fix.md").read_text(), "someone else's note\n")
 
     def test_pickup_and_starting_from_a_note_list_the_new_session_in_it(self):
         self.unlist()
@@ -2529,7 +2587,7 @@ class SessionRecaps(unittest.TestCase):
         ui.summaries = {}
         ui.load_projects()
         self.assertEqual(ui.project_rows()[-1].kind, "new")  # recaps aren't on the Projects tab
-        self.assertEqual(ui.notes, [])  # nor on Notes: a recap is shown with the Session that wrote it
+        self.assertEqual([(n["id"], n["tags"]) for n in ui.notes], [("printer-fix", ["recap"])])  # it's a note, tagged recap
         self.assertEqual(ui.recap_of(s)["id"], "printer-fix")
         acts = dict(ui.session_actions(s))
         self.assertTrue(any(l.startswith("Read its Session recap") for l in acts))

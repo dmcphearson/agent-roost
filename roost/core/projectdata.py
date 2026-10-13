@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from roost.core.sessiondata import parse, stamp
-from roost.core.notedata import is_note, read_note, set_note_project, tag_list
+from roost.core.notedata import is_note, new_file, read_note, set_note_project, tag_list
 from roost.core.formatting import clip, plain_text, short
 from roost.core.mdfiles import frontmatter, readme_lines, write_lines, yaml_text
 from roost.core import config
@@ -244,15 +244,29 @@ def read_projects(sessions=()):
     return out
 
 
+RECAP_TAG = "recap"  # a Session recap is a note with this tag
+
+
+def is_recap(path):
+    """Whether path is a Session recap: a note in ~/.roost/notes tagged recap."""
+    path = Path(path)
+    try:
+        return path.parent == config.NOTES and RECAP_TAG in tag_list(frontmatter(path.read_text(errors="replace")).get("tags"))
+    except OSError:
+        return False
+
+
 def read_recaps():
-    """Session recaps: one Markdown file per Session that had no project."""
+    """Session recaps: the notes tagged recap, each holding the Handoffs of Sessions that had no project."""
     out = []
-    for path in config.RECAPS.glob("*.md"):
+    for path in config.NOTES.glob("*.md"):
         try:
             text = path.read_text(errors="replace")
         except OSError:
             continue
         meta = frontmatter(text)
+        if RECAP_TAG not in tag_list(meta.get("tags")):
+            continue
         summary = meta.get("summary")
         if not isinstance(summary, str) or not summary:
             body = text.split("---", 2)[-1] if text.startswith("---") else text
@@ -266,6 +280,47 @@ def read_recaps():
                     "sessions": ids, "folder": meta.get("folder") if isinstance(meta.get("folder"), str) else None,
                     "covered": covered})
     return sorted(out, key=lambda n: n["last"], reverse=True)
+
+
+def recap_as_note(path):
+    """An old Session recap's text as a note: title, created, and project: lines added, tagged recap,
+    and the rest kept as it was."""
+    text = path.read_text(errors="replace")
+    st = path.stat()
+    meta = frontmatter(text) if text.startswith("---") else {}
+    name = next((x["name"] for x in meta.get("sessions") or [] if isinstance(x, dict) and isinstance(x.get("name"), str)), "")
+    tags = tag_list(meta.get("tags"))
+    head = [f"title: {yaml_text(name.strip() or path.stem.replace('-', ' ').capitalize())}\n",
+            f"created: {datetime.fromtimestamp(getattr(st, 'st_birthtime', st.st_mtime)):%Y-%m-%d}\n", "project:\n"]
+    tail = [f"tags: [{', '.join(tags + [RECAP_TAG])}]\n", "---\n"]
+    if not meta and not text.startswith("---"):
+        return "".join(["---\n"] + head + tail + ["\n", text])
+    _, lines, end = readme_lines(path)
+    if any(re.match(r"tags\s*:\s*$", l) for l in lines[1:end]):
+        raise ValueError("its tags: are a list of lines; add recap to them and move it into ~/.roost/notes by hand")
+    keep = [l for l in lines[1:end] if not re.match(r"(title|created|project|tags)\s*:", l)]
+    return "".join(["---\n"] + head + keep + tail + lines[end + 1:])
+
+
+def move_recaps():
+    """Session recaps from before they were notes: move each from ~/.roost/sessions into ~/.roost/notes,
+    once. The old file goes only after its note is written; a run after a crash between the two finds
+    the note there and only removes the old file. Returns how many moved."""
+    moved = 0
+    for path in sorted(config.RECAPS.glob("*.md")):
+        try:
+            text = recap_as_note(path)
+            if not any(n.read_text(errors="replace") == text for n in config.NOTES.glob(f"{path.stem}*.md")):
+                new_file(config.NOTES, path.stem, text)
+            path.unlink()
+            moved += 1
+        except (OSError, ValueError) as e:
+            config.log(f"move recap {path.name} into notes: {e}")
+    try:
+        config.RECAPS.rmdir()  # only when nothing else is in it
+    except OSError:
+        pass
+    return moved
 
 
 def readme(pid, summary, label=None):
@@ -350,15 +405,15 @@ def find_project(pid):
     if pid and "/" not in pid and not pid.startswith(("_", ".")):
         if (config.projects_dir() / pid).is_dir():
             return config.projects_dir() / pid
-        if (config.RECAPS / f"{pid}.md").is_file():
-            return config.RECAPS / f"{pid}.md"
+        if is_recap(config.NOTES / f"{pid}.md"):
+            return config.NOTES / f"{pid}.md"
     raise ValueError(f"no project or Session recap named {pid!r} (roost project list shows them)")
 
 
 def brief(target):
     """What a Session reads to catch up: the README, then the newest Handoffs, newest first.
     For a Session recap, the recap."""
-    if target.is_file() and target.parent != config.RECAPS:
+    if target.is_file() and not is_recap(target):
         note = read_note(target)
         return (f"# Note: {note['name']}\nFile: {target}" + (f"\nProject: {note['project']}" if note["project"] else "")
                 + f"\n\n{target.read_text(errors='replace').rstrip()}\n")

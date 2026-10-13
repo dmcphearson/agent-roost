@@ -102,6 +102,8 @@ From the shell, `roost note "Printer driver idea" Push it from the MDM` saves a 
 
 **A note's actions:** Edit, Start a Session from it (its first prompt reads the note), Move to a project (it leaves Notes for the project's `notes/` folder), Make it a project (the note moves into the new project's `notes/`), Show it in Finder, and Delete to the Trash (asks first).
 
+**Session recaps are notes too.** Wrapping up a Session that no project lists writes its Handoff to a note named after the Session and tagged `recap`; later wrap-ups add to the end of the same note. The Session's panel still shows it. Make it a project moves the recap's Handoffs into the new project's `handoffs/`. Recaps from before this release move from `~/.roost/sessions/` into `~/.roost/notes/` the first time roost runs.
+
 Roost opens notes in the `editor` setting in `~/.config/roost/config.json`, else `$VISUAL`, else `$EDITOR`, else [micro](https://micro-editor.github.io) (`brew install micro`). It waits for an editor in the terminal and gets out of the way of one with its own window (VS Code, Zed, and the like); `editor_wait` (true or false) overrides that. Roost never edits a note itself, except for setting its `project:` line when you move it.
 
 While a Handoff is being written from a transcript, the row counts up: `summarizing 2/3 · 1m40s` (the draft, the review, then the README).

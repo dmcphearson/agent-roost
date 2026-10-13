@@ -26,10 +26,10 @@ Wrap-up leaves the next Session everything it needs: a Handoff in the project, a
    ROOST_SUMMARY
    ```
 
-   - It prints `Wrote <path>`. The project folder is the folder above `handoffs/`. A path in `~/.roost/sessions/` is a Session recap: skip steps 3 and 4, since a recap has no README or status.
+   - It prints `Wrote <path>`. The project folder is the folder above `handoffs/`. A path in `~/.roost/notes/` is a Session recap: skip steps 3 and 4, since a recap has no README or status.
    - If it says it redacted secrets, tell the person what kinds, and that they should check the Handoff and rotate anything real.
    - **"no project lists Session …":** this Session has no project or recap. Ask the person which they want:
-     - **A Session recap**, for one-off work: suggest it when the work has no finish line. Run the handoff again with `--recap --summary "<one sentence>"` added. The recap lands in `~/.roost/sessions/`, named after the Session; later wrap-ups add to it, and it can become a project from roost (enter on the recap, then Make it a project).
+     - **A Session recap**, for one-off work: suggest it when the work has no finish line. Run the handoff again with `--recap --summary "<one sentence>"` added. The recap is a note in `~/.roost/notes/`, named after the Session and tagged `recap`, so it shows on roost's Notes tab; later wrap-ups add to it, and it can become a project from roost (enter on the recap, then Make it a project).
      - **A new project**, when the work has a finish line: suggest an id and a one-sentence summary. Run `roost project new <id> --summary "…"`, then `roost project brief <id> --session ${CLAUDE_SESSION_ID}` to list this Session in it, then run the handoff again.
      Don't pick for them.
    - Any other error ("more than one project lists this Session", "already exists"): show it to the person and stop. Don't work around it.
