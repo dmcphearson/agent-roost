@@ -808,7 +808,7 @@ class Tabs(unittest.TestCase):
 
 
 README = """---
-category: vendor-evaluation
+category: vendor-reviews
 summary: "Two password managers compared: cost and rollout."
 status: active
 sessions:
@@ -848,7 +848,7 @@ class Projects(unittest.TestCase):
     def test_frontmatter_reads_it_workbench_format(self):
         meta = roost.frontmatter(README)
         self.assertEqual(meta["summary"], "Two password managers compared: cost and rollout.")
-        self.assertEqual((meta["status"], meta["category"]), ("active", "vendor-evaluation"))
+        self.assertEqual((meta["status"], meta["category"]), ("active", "vendor-reviews"))
         self.assertEqual([x["id"] for x in meta["sessions"]], ["aa1b9a71-0000", "bb2c0000-0000"])
         self.assertEqual(roost.frontmatter("---\nsummary: Plain one\nsessions: []\n---\n")["sessions"], [])
         self.assertEqual(roost.frontmatter("# no frontmatter\nsummary: x"), {})
@@ -899,7 +899,7 @@ class Projects(unittest.TestCase):
         for pid, summary in [("taken", "s"), ("a/b", "s"), ("_x", "s"), ("two words", "s"), ("ok", " ")]:
             with self.assertRaises(ValueError):
                 roost.create_project(pid, summary)
-        self.assertEqual(roost.frontmatter((self.root / "taken" / "README.md").read_text())["category"], "vendor-evaluation")
+        self.assertEqual(roost.frontmatter((self.root / "taken" / "README.md").read_text())["category"], "vendor-reviews")
         roost.save_config(projects_dir=str(self.root / "nope"))
         with self.assertRaises(ValueError):
             roost.create_project("ok", "s")
@@ -1061,7 +1061,7 @@ class Projects(unittest.TestCase):
         self.assertEqual((ui.choosing["multi"], ui.choosing["typed"]), (["printers", "macs"], ""))
         ui.keys_choice("enter")  # a new tag leaves the cursor on Save
         text = (self.root / "a" / "README.md").read_text()
-        self.assertEqual(text, README.replace("category: vendor-evaluation\n", "tags: [printers, macs]\ncategory: vendor-evaluation\n"))
+        self.assertEqual(text, README.replace("category: vendor-reviews\n", "tags: [printers, macs]\ncategory: vendor-reviews\n"))
         self.assertEqual(next(p for p in ui.projects if p["id"] == "a")["tags"], ["printers", "macs"])
         act(ui, ui.keys_projects, ui.project_rows(), "Edit its tags")
         self.assertEqual(ui.choosing["multi"], ["printers", "macs"])
@@ -1070,24 +1070,24 @@ class Projects(unittest.TestCase):
 
     def test_set_its_category_picks_one_in_use_or_a_new_one(self):
         self.project("a", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
-        self.project("b", README.replace("vendor-evaluation", "ai-enablement"))
+        self.project("b", README.replace("vendor-reviews", "ai-tools"))
         ui = self.ui()
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("a")
-        (self.root / "CATEGORIES.md").write_text("# Categories\n\n- security-incident: incident write-ups\n- `ai-enablement`\nprose\n")
+        (self.root / "CATEGORIES.md").write_text("# Categories\n\n- incident-notes: what went wrong and why\n- `ai-tools`\nprose\n")
         act(ui, ui.keys_projects, ui.project_rows(), "Set its category")
         self.assertEqual([o[0] for o in ui.choice_options()],
-                         ["security-incident  incident write-ups", "ai-enablement", "vendor-evaluation  · current", "No category"])
+                         ["incident-notes  what went wrong and why", "ai-tools", "vendor-reviews  · current", "No category"])
         ui.keys_choice("down")
         ui.keys_choice("enter")
-        self.assertIn("category: ai-enablement\n", (self.root / "a" / "README.md").read_text())
-        self.assertEqual(ui.msg, "Category: ai-enablement")
+        self.assertIn("category: ai-tools\n", (self.root / "a" / "README.md").read_text())
+        self.assertEqual(ui.msg, "Category: ai-tools")
         act(ui, ui.keys_projects, ui.project_rows(), "Set its category")
         for k in names("Networking"):
             ui.keys_choice(k)
         self.assertEqual([o[0] for o in ui.choice_options()], ["+ New category: networking"])
         ui.keys_choice("enter")
         self.assertEqual(roost.read_project(self.root / "a")["category"], "networking")
-        self.assertEqual(roost.read_categories(), [("security-incident", "incident write-ups"), ("ai-enablement", ""), ("networking", "")])
+        self.assertEqual(roost.read_categories(), [("incident-notes", "what went wrong and why"), ("ai-tools", ""), ("networking", "")])
         (self.root / "CATEGORIES.md").unlink()
         roost.add_category("first")
         self.assertEqual(roost.read_categories(), [("first", "")])
@@ -1124,12 +1124,12 @@ class Projects(unittest.TestCase):
     def test_set_category_changes_only_that_line(self):
         folder = self.project("a")
         before = (folder / "README.md").read_text()
-        roost.set_category(folder, "ai-enablement")
+        roost.set_category(folder, "ai-tools")
         after = (folder / "README.md").read_text()
-        self.assertEqual(after, before.replace("category: vendor-evaluation", "category: ai-enablement"))
+        self.assertEqual(after, before.replace("category: vendor-reviews", "category: ai-tools"))
         bare = self.project("b", "---\nsummary: s\nsessions: []\n---\n\n# B\n")
-        roost.set_category(bare, "security-hardening")
-        self.assertEqual((bare / "README.md").read_text(), "---\ncategory: security-hardening\nsummary: s\nsessions: []\n---\n\n# B\n")
+        roost.set_category(bare, "hardening")
+        self.assertEqual((bare / "README.md").read_text(), "---\ncategory: hardening\nsummary: s\nsessions: []\n---\n\n# B\n")
         roost.set_category(bare, "")
         self.assertEqual((bare / "README.md").read_text(), "---\nsummary: s\nsessions: []\n---\n\n# B\n")
         for bad in ["Has Spaces", "x\ny"]:
@@ -2525,7 +2525,7 @@ class Adopt(unittest.TestCase):
         roost.ADOPT_PLANS = Path(self.tmp.name) / "adopt"
         self.old = self.root / "2026-09-printer-rollout"
         (self.old / "badge-printers").mkdir(parents=True)
-        (self.old / "README.md").write_text(f"---\ncategory: systems-and-automation\nsummary: Printers\nsessions:\n"
+        (self.old / "README.md").write_text(f"---\ncategory: infrastructure\nsummary: Printers\nsessions:\n"
                                             f"  - name: Printer fix\n    id: {SID}\n---\n\n# Printer rollout\n\nOld notes.\n")
         for name, text in (("notes.md", "Working notes."), ("notes-backup.md", "Older notes."), ("HANDOFF.md", "Start here."),
                            ("export.csv", "a,b\n1,2\n"), ("badge-printers/plan.md", "Badges."), (".DS_Store", "x")):
@@ -2605,7 +2605,7 @@ class Adopt(unittest.TestCase):
         self.assertIn("- Packaged the driver", h.read_text())
         text = (new / "README.md").read_text()
         meta = roost.frontmatter(text)
-        self.assertEqual((meta["category"], meta["status"]), ("systems-and-automation", "active"))
+        self.assertEqual((meta["category"], meta["status"]), ("infrastructure", "active"))
         self.assertEqual(meta["summary"], "Roll the new printer driver out to every office Mac.")
         self.assertEqual(meta["sessions"], [{"name": "Printer fix", "id": SID}])  # Sessions stay linked through their ids
         self.assertIn("Driver packaged", text)

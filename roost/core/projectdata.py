@@ -87,7 +87,7 @@ def clean_tags(text):
         t = "-".join(t.strip().lstrip("#").lower().split())
         if t and t not in out:
             if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", t):
-                raise ValueError(f"{t!r} isn't a tag: use lowercase letters, digits, and hyphens, like ai-enablement")
+                raise ValueError(f"{t!r} isn't a tag: use lowercase letters, digits, and hyphens, like ai-tools")
             out.append(t)
     return out
 
@@ -139,7 +139,7 @@ def set_category(folder, category):
     none. Every other byte of the README stays as it was. An empty category removes the line."""
     category = category.strip()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*|", category):
-        raise ValueError("a category is lowercase letters, digits, and hyphens, like ai-enablement")
+        raise ValueError("a category is lowercase letters, digits, and hyphens, like ai-tools")
     path, lines, end = readme_lines(folder)
     at = next((i for i in range(1, end) if re.match(r"category\s*:", lines[i])), None)
     new = [f"category: {category}\n"] if category else []
