@@ -115,8 +115,8 @@ if Widget:
 
         def on_click(self, event):
             event.stop()
-            if event.button == 1:
-                state = curses.BUTTON1_DOUBLE_CLICKED if event.chain >= 2 else curses.BUTTON1_CLICKED
+            if event.button == 1 and event.chain <= 2:  # a third click in a row would act a second time
+                state = curses.BUTTON1_DOUBLE_CLICKED if event.chain == 2 else curses.BUTTON1_CLICKED
                 self.app.press(("mouse", event.screen_x, event.screen_y, state))
 
         def on_mouse_down(self, event):

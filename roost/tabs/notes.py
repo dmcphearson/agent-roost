@@ -130,8 +130,10 @@ class NotesTab:
         return self.start(recap["id"], cwd, s["name"])
 
     def start_from_note(self, n):
-        """A fresh Session whose first prompt picks up the note: in its project's folder, if it's in one."""
-        cwd = str(Path(n["path"]).parent.parent) if n["project"] else HOME
+        """A fresh Session whose first prompt picks up the note: in its project's folder if it's in one,
+        where its Session worked if it's a Session recap, else home."""
+        recap = n["extra"].get("folder") if projectdata.RECAP_TAG in n["tags"] else None
+        cwd = str(Path(n["path"]).parent.parent) if n["project"] else recap if recap and os.path.isdir(recap) else HOME
         return self.start(short(n["path"]), cwd, n["name"])
 
     def move_note(self, n):
@@ -153,7 +155,10 @@ class NotesTab:
 
     def note_to_project(self, n):
         """A new project from a note: its name, its folder, then its summary (the note's title to start
-        with); the note moves in."""
+        with); the note moves in. A Session recap's Handoffs become the project's, as from the Sessions tab."""
+        if projectdata.RECAP_TAG in n["tags"]:
+            return self.new_project({"id": Path(n["path"]).stem, "path": n["path"], "summary": n["extra"].get("summary") or n["name"]})
+
         def made(pid, label, text):
             try:
                 folder = projectdata.create_project(pid, text, label)
@@ -182,8 +187,6 @@ class NotesTab:
         return acts
 
     def keys_notes(self, k, rows):
-        if self.confirm:
-            return self.keys_confirm(k)
         r = rows[self.nsel] if rows else None
         if isinstance(k, tuple):
             if k[2] in self.nrow_y and k[1] < self.nlist_w:
@@ -352,7 +355,9 @@ if Region:
 
         def on_click(self, event):
             event.stop()
-            state = curses.BUTTON1_DOUBLE_CLICKED if event.chain >= 2 else curses.BUTTON1_CLICKED
+            if event.chain > 2:  # a third click in a row would act a second time
+                return
+            state = curses.BUTTON1_DOUBLE_CLICKED if event.chain == 2 else curses.BUTTON1_CLICKED
             self.app.press(("mouse", event.screen_x, event.screen_y, state))
 
     class NoteCard(Vertical):

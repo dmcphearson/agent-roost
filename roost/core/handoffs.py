@@ -4,7 +4,8 @@ from datetime import datetime
 from pathlib import Path
 
 from roost.core.sessiondata import parse, stamp
-from roost.core.projectdata import find_project, handoff_time, link_session, recap_sections, worked
+from roost.core.projectdata import RECAP_TAG, find_project, handoff_time, link_session, recap_sections, worked
+from roost.core.notedata import new_file
 from roost.core.pricing import reply_cost
 from roost.core.formatting import clip, redact, short, slug
 from roost.core.mdfiles import frontmatter, write_lines, yaml_text
@@ -211,7 +212,7 @@ def last_covered(folder, ids):
 def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=None):
     """Write a Handoff for a Session into the project or Session recap that lists it: the facts since
     its last Handoff, then the summary, with secrets redacted. With recap, a Session nothing lists gets
-    a new recap in ~/.roost/sessions/, named after it. `at` dates the Handoff's file name (default now).
+    a new Session recap: a note in ~/.roost/notes/, named after it and tagged recap. `at` dates the Handoff's file name (default now).
     Returns (path, redacted kinds). Raises ValueError with a reason, and never overwrites a Handoff."""
     summary = summary.strip()
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid or ""):
@@ -262,22 +263,13 @@ def write_recap_handoff(path, sid, f, stem, body, info, summary):
                              "try again in a minute")
         write_lines(path, [text.rstrip("\n") + "\n\n", section])
         return path, kinds
-    config.RECAPS.mkdir(parents=True, exist_ok=True)
-    name = slug(f["name"])
-    summary, more = redact(summary or f["name"])
-    head = ["---", f"summary: {yaml_text(summary)}"] + ([f"folder: {yaml_text(info['home'] or info['cwd'])}"]
-                                                        if info.get("home") or info.get("cwd") else [])
-    text = "\n".join(head + ["sessions:", f"  - name: {yaml_text(f['name'])}", f"    id: {sid}", "---", "",
-                             f"# Session recap {name}", "", section])
-    for n in range(1, 100):
-        path = config.RECAPS / (f"{name}.md" if n == 1 else f"{name}-{n}.md")
-        try:
-            with open(path, "x") as fh:  # never replaces another recap
-                fh.write(text)
-            return path, kinds + more
-        except FileExistsError:
-            continue
-    raise ValueError(f"there are already 99 recaps named {name}")
+    title = " ".join(f["name"].split()) or sid[:8]
+    summary, more = redact(summary or title)
+    head = ["---", f"title: {yaml_text(title)}", f"created: {stem[:10]}", "project:", f"summary: {yaml_text(summary)}"] + (
+        [f"folder: {yaml_text(info['home'] or info['cwd'])}"] if info.get("home") or info.get("cwd") else [])
+    text = "\n".join(head + ["sessions:", f"  - name: {yaml_text(f['name'])}", f"    id: {sid}", f"tags: [{RECAP_TAG}]",
+                             "---", "", f"# {title}", "", section])
+    return new_file(config.NOTES, slug(title), text), kinds + more  # never replaces another note
 
 
 def promote_recap(path, pid, summary, label=None):
@@ -324,7 +316,7 @@ def handoff_flags(parser):
     parser.add_argument("--session", required=True, metavar="ID",
                         help="the Session's full id (in a Session: ${CLAUDE_SESSION_ID}); a project or Session recap must list it")
     parser.add_argument("--recap", "--note", dest="recap", action="store_true",
-                        help="if nothing lists the Session, start a Session recap for it in ~/.roost/sessions/")
+                        help="if nothing lists the Session, start a Session recap for it: a note in ~/.roost/notes/, tagged recap")
     parser.add_argument("--summary", metavar="TEXT", help="a new recap's one-sentence summary (default: its first point)")
 
 

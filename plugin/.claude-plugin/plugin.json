@@ -1,6 +1,6 @@
 {
   "name": "roost",
-  "version": "2026.10.19",
+  "version": "2026.10.20",
   "description": "Skills for roost: pick up a project, wrap up a Session, and more. Each skill runs the matching roost command.",
   "author": { "name": "David McPhearson" },
   "repository": "https://github.com/dmcphearson/agent-roost"

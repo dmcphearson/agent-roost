@@ -593,10 +593,6 @@ class ProjectsTab:
                                 f"Project from the recap {clip(note['id'], 24)}" if note else "New project")
 
     def keys_projects(self, k, rows):
-        if self.confirm:
-            self.keys_confirm(k)
-            self.load_projects()
-            return None
         r = rows[self.psel] if rows and self.psel < len(rows) else None
         if isinstance(k, tuple):
             _, mx, my, bstate = k

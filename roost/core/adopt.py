@@ -179,12 +179,16 @@ def plan_problems(folder, plan, taken=()):
         out.append(f"Status {plan['status']!r} isn't a few lowercase words")
     if not plan["readme"] or "## Current state" not in plan["readme"]:
         out.append("README has no ## Current state section")
+    dests = set()
     for a, b in plan["moves"]:
         src, dst = claim(a, "Move"), inside(folder, b)
         if src is not None and not src.is_file():
             out.append(f"Move: `{a}` isn't a file in the folder")
         if dst is None or (dst.exists() and dst != src):
             out.append(f"Move: `{b}` already exists or is outside the folder")
+        elif dst in dests:  # the second rename would replace the first file
+            out.append(f"Move: `{b}` is the destination of more than one Move")
+        dests.add(dst)
     for rel, _ in plan["archive"]:
         p = claim(rel, "Archive")
         if p is not None and not p.exists():
@@ -219,12 +223,16 @@ def set_summary(folder, summary):
 
 
 def apply_plan(folder, plan, today=None):
-    """Carry out a checked plan. Every replaced or dropped file goes to _archive/<today>/. Returns
-    the project's folder after the rename."""
+    """Carry out a checked plan. Every replaced or dropped file goes to _archive/<today>/, or
+    <today>-2/ and on when an adopt already ran that day. Returns the project's folder after the rename."""
     problems = plan_problems(folder, plan)
     if problems:
         raise ValueError("; ".join(problems))
-    today = today or datetime.now().strftime("%Y-%m-%d")
+    today = day = today or datetime.now().strftime("%Y-%m-%d")
+    n = 1
+    while (folder / "_archive" / today).exists():
+        n += 1
+        today = f"{day}-{n}"
     archive = folder / "_archive" / today
 
     def put_away(rel):
@@ -288,7 +296,7 @@ def backfill(folder, model, cap, say=print, sids=None):
     spent = 0.0
     for last, sid in sorted(order):
         try:
-            path, _, cost = summaries.summarize(sid, model, cap, readme=False, at=last)
+            path, _, cost, _ = summaries.summarize(sid, model, cap, readme=False, at=last)
             spent += cost
             say(f"  Handoff from {session_name(sid)}: {short(str(path))} (${cost:.2f})")
         except ValueError as e:

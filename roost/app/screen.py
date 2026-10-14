@@ -1,5 +1,5 @@
 """The Textual front end: the screens as widgets, and the keys and the mouse fed back to them."""
-import curses, time
+import curses, time, traceback
 
 from roost.app.shell import QUIT
 from roost.app.ui import UI
@@ -17,6 +17,7 @@ from roost.core import config
 if Widget:
     from rich.style import Style
     from textual.app import App
+    from textual.screen import Screen
     from textual.containers import Horizontal, Vertical
     from textual.widgets import Input, Label
     from roost.app.widgets import AlertBox, ConfirmBox, HelpBox, KeyBar, Menu, Region, TooSmall, TopBar
@@ -96,6 +97,9 @@ if Widget:
         def on_key(self, event):
             event.stop()
             event.prevent_default()
+            if event.key == "ctrl+c" and self.screen.get_selected_text():  # copies a selection; quits without one
+                self.screen.copy_selection()
+                return
             self.app.press(event.character if event.is_printable and event.character else event.key)
 
     class Prompt(Vertical):
@@ -156,6 +160,21 @@ if Widget:
                 if event.key == "escape":
                     self.app.press("escape")
 
+    class RoostScreen(Screen):
+        """The one screen. A double or triple click acts on a row, so it doesn't also select the whole
+        widget's text, as Textual does by default. Text dragged over is copied when the mouse is let go:
+        the terminal keeps cmd+c for its own selection, so it never reaches roost."""
+        def _select_all_in_widget(self, widget):
+            pass
+
+        def on_text_selected(self, event):
+            if self.get_selected_text():  # a plain click selects nothing
+                self.copy_selection()
+
+        def copy_selection(self):
+            self.app.ui.copy_text(self.get_selected_text(), "Copied the selected text")
+            self.app.redraw()
+
     class RoostApp(App):
         """roost on Textual. Returns a Session to open in this terminal when there's no other, or None."""
         # the app's CSS, so it wins over the Textual widgets' own
@@ -181,6 +200,9 @@ if Widget:
             super().__init__(ansi_color=True)  # the frame is the terminal's own background, translucency and all
             self.ui = TextualUI(self, sessions, query)
             self.drawn, self.last_key, self.last_refresh = None, time.time(), time.time()
+
+        def get_default_screen(self):
+            return RoostScreen(id="_default")
 
         def compose(self):
             yield Keys()
@@ -250,7 +272,11 @@ if Widget:
             self.last_key = time.time()
             if self.ui.too_small and k != "ctrl+q":
                 return  # the window is too small to show what a key would do
-            result = self.ui.dispatch(k, self.drawn)
+            try:
+                result = self.ui.dispatch(k, self.drawn)
+            except Exception as e:  # a bug in one action is a box, not the end of roost (and its background runs)
+                config.log(f"key {k!r}: {traceback.format_exc()}")
+                self.ui.msg, result = f"Couldn't do that: {e} · roost's log has the details", None
             if result is not None:
                 self.exit(None if result is QUIT else result)
                 return

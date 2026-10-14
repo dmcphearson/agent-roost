@@ -25,10 +25,32 @@ def live_sessions():
                              text=True, timeout=15).stdout
         # Background entries with no worker process are leftovers from a retired
         # session; the roster keeps listing them, so drop them here.
-        return {a["sessionId"]: a for a in json.loads(out)
+        live = {a["sessionId"]: a for a in json.loads(out)
                 if not (a.get("kind") == "background" and not a.get("pid"))}
     except Exception:
         return {}
+    desktop = desktop_pids([a["pid"] for a in live.values() if a.get("kind") == "interactive" and a.get("pid")])
+    for a in live.values():
+        a["desktop"] = a.get("pid") in desktop
+    return live
+
+
+# Claude Desktop runs its sessions with its own copy of claude, kept under here
+DESKTOP_CLAUDE = "/Library/Application Support/Claude/claude-code/"
+
+
+def desktop_pids(pids):
+    """Which of these processes are sessions Claude Desktop runs. `claude agents` lists those as
+    interactive, like a terminal's, so only the program's path tells them apart."""
+    if not pids:
+        return set()
+    try:
+        out = subprocess.run(["ps", "-o", "pid=,command=", f"-p{','.join(map(str, pids))}"], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return set()
+    return {int(pid) for pid, cmd in (line.strip().split(" ", 1) for line in out.splitlines() if " " in line.strip())
+            if DESKTOP_CLAUDE in cmd}
 
 
 def compat_warning(version_out, agents):
@@ -339,6 +361,7 @@ def attach_live(sessions, live):
         if not agent and time.time() - s.get("opening", 0) < 20:
             s["state"] = "opening"
         s["kind"] = agent.get("kind") if agent else None
+        s["desktop"] = bool(agent and agent.get("desktop"))
         s["attach"] = agent.get("id") if agent and agent.get("kind") == "background" else None
         s["pinned"] = bool(s["attach"]) and s["attach"] in pins
     # /bg can start a copy that holds only messages sent after the handoff; once
@@ -498,11 +521,14 @@ def matches(s, query):
     return all(q in hay for q in query.lower().split())
 
 
-SECTIONS = ["Open", "Pinned", "Background", "Closed"]
+SECTIONS = ["Open", "Pinned", "Background", "Closed", "Wrapping up"]
 
 
-def group(s):
-    """Section index: open in a window, then pinned, then other background, then closed."""
+def group(s, keep=()):
+    """Section index: open in a window, then pinned, then other background, then closed, then the
+    Sessions in keep, whose Handoff or recap roost is writing now."""
+    if s.get("id") in keep:
+        return 4
     if s["kind"] == "interactive" or s["state"] == "opening" or s.get("attached"):
         return 0
     if s["kind"] == "background":
@@ -526,5 +552,5 @@ def visible(sessions, view, query, sort=("LAST ACTIVE", True), keep=()):
     rows = [s for s in sessions if in_view(s, view, keep) and matches(s, query)]
     rows.sort(key=lambda s: -s["last"])  # tiebreak: most recent first
     rows.sort(key=SORTS[col][0], reverse=desc)
-    rows.sort(key=group)  # stable, so each section keeps the column order
+    rows.sort(key=lambda s: group(s, keep))  # stable, so each section keeps the column order
     return rows

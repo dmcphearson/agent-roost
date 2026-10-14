@@ -52,7 +52,7 @@ roost.NOTES, roost.RECAPS = Path(_SCRATCH.name) / "notes", Path(_SCRATCH.name) /
 # nor their settings, pins, or installed files: a test that misses a stand-in writes here instead
 for _name, _rel in [("CONFIG", "config.json"), ("PINS", "pins.json"), ("UPDATE_CHECK", "update-check.json"),
                     ("DONE", "_done"), ("ADOPT_PLANS", "adopt"), ("APP", "app"), ("SPEND_LOG", "spend.jsonl"),
-                    ("SPEND_CACHE", "spend-cache.json")]:
+                    ("SPEND_CACHE", "spend-cache.json"), ("LOG", "roost.log")]:
     setattr(roost, _name, Path(_SCRATCH.name) / _rel)
 
 
@@ -181,9 +181,31 @@ class Demo(unittest.TestCase):
         groups = {roost.group(s) for s in roost.demo_sessions()}
         self.assertEqual(groups, {0, 1, 2, 3})
 
+    def test_the_suite_logs_to_scratch_not_the_persons_log(self):
+        real = Path.home() / ".cache" / "roost.log"
+        before = real.stat().st_mtime if real.exists() else None
+        roost.log("a line from the test suite")
+        self.assertEqual(real.stat().st_mtime if real.exists() else None, before)
+        self.assertIn("a line from the test suite", roost.LOG.read_text())
+
+    def test_demo_projects_use_the_demos_own_categories(self):
+        names = {c for c, _ in roost.DEMO_CATEGORY_LIST}
+        self.assertEqual(set(roost.DEMO_CATEGORIES.values()) - names, set())
+
     def test_demo_paths_are_fake(self):
         for s in roost.demo_sessions():
             self.assertIn("/projects/", s["cwd"])
+
+    def test_the_demo_starts_a_session_the_way_the_projects_tab_asks(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as home:  # use_demo() patches every module, so it runs on its own
+            r = subprocess.run([sys.executable, "-c", "from roost.demo import use_demo; use_demo()\n"
+                                "from roost.core import terminals\n"
+                                "print(terminals.start_session('printer-rollout', '/tmp', 'ghostty', 'Printer fix'))"],
+                               cwd=ROOT, env={**os.environ, "HOME": home}, stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("(demo)", r.stdout)
 
 
 class Compat(unittest.TestCase):
@@ -355,6 +377,26 @@ class Updates(unittest.TestCase):
         self.assertEqual(self.plugin_updates, ["2026.10.03"])  # the plugin matches what brew installed
         self.assertFalse(roost.APP.exists())
 
+    def test_a_launcher_that_fails_after_the_swap_says_what_is_in_place(self):
+        import unittest.mock
+        me = self.dir / "roost"; me.write_text("old")
+        roost.latest_release = lambda: "2026.11.01"
+        roost.download_tarball = lambda version: release_tarball("2026.11.01", [
+            ("dmcphearson-agent-roost-abc123/bin/roost", b'#!/usr/bin/env python3\nprint("roost 2026.11.01")\n'),
+            ("dmcphearson-agent-roost-abc123/roost/__init__.py", b"")])
+        real = roost.shutil.copy2
+        def copy2(src, dst, **kw):
+            if Path(dst).name == ".roost-update":
+                raise OSError("disk full")
+            return real(src, dst, **kw)
+        with unittest.mock.patch.object(roost.shutil, "copy2", copy2), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(roost.self_update(me), 1)
+        self.assertNotIn("nothing changed", out.getvalue())
+        self.assertIn("roost runs 2026.11.01", out.getvalue())
+        self.assertIn("disk full", out.getvalue())
+        self.assertEqual(me.read_text(), "old")
+        self.assertEqual(os.readlink(self.dir / "app" / "current"), "2026.11.01")
+
     def test_a_release_without_the_package_changes_nothing(self):
         me = self.dir / "roost"; me.write_text("old")
         roost.latest_release = lambda: "2026.11.01"
@@ -393,6 +435,15 @@ class Updates(unittest.TestCase):
         roost.latest_release = lambda: "2026.10.03"
         self.assertEqual(roost.self_update(me), 0)
         self.assertEqual(me.read_text(), "old")
+
+
+class Osa(unittest.TestCase):
+    def test_a_script_that_hangs_is_a_failure_not_an_exception(self):
+        import subprocess, unittest.mock
+        def hang(*a, **kw):
+            raise subprocess.TimeoutExpired("osascript", 10)
+        with unittest.mock.patch.object(roost.subprocess, "run", hang), unittest.mock.patch.object(roost, "log"):
+            self.assertIsNone(roost.osa("tell application \"Ghostty\" to activate"))
 
 
 class Refresh(unittest.TestCase):
@@ -521,6 +572,17 @@ class Governor(unittest.TestCase):
         running = roost.VIEWS.index("Running")
         self.assertFalse(roost.in_view(s, running))
         self.assertTrue(roost.in_view(s, running, keep={"abc"}))
+
+    def test_a_session_being_summarized_sits_in_wrapping_up_after_closed(self):
+        now = time.time()
+        wrapping = self.sess(id="abc", state="closed", kind=None, last=now)  # stopped so its Handoff can be written
+        bg = self.sess(id="bg", state="idle", kind="background", last=now - 60)
+        closed = self.sess(id="old", state="closed", kind=None, last=now - 120)
+        self.assertEqual(roost.SECTIONS[roost.group(wrapping, keep={"abc"})], "Wrapping up")
+        self.assertEqual(roost.SECTIONS[roost.group(wrapping)], "Closed")  # once the run ends, it moves to Closed
+        rows = roost.visible([wrapping, bg, closed], ALL, "", keep={"abc"})
+        self.assertEqual([s["id"] for s in rows], ["bg", "old", "abc"])
+        self.assertEqual([s["id"] for s in roost.visible([wrapping, bg, closed], RUNNING, "", keep={"abc"})], ["bg", "abc"])
 
     def test_stale_tab(self):
         i = roost.VIEWS.index("Stale")
@@ -656,7 +718,8 @@ class Tabs(unittest.TestCase):
         self.ui = object.__new__(roost.UI)
         self.ui.TABS = [tab("Sessions"), tab("Projects")]
         self.ui.tab, self.ui.tab_x, self.ui.helping, self.ui.typing, self.ui.msg = 0, [(11, 21, 0), (22, 32, 1)], False, False, ""
-        self.ui.choosing, self.ui.summaries, self.ui.quit_anyway = None, {}, False
+        self.ui.choosing, self.ui.confirm, self.ui.summaries, self.ui.quit_anyway = None, None, {}, False
+        self.ui.load_projects = lambda: None
         self.ui.asking, self.ui.searching, self.ui.query, self.ui.pquery = None, False, "", ""
 
     def tearDown(self):
@@ -696,6 +759,14 @@ class Tabs(unittest.TestCase):
         self.ui.dispatch("j", None)
         self.ui.dispatch(("mouse", 5, 6, roost.curses.BUTTON1_CLICKED), None)
         self.assertEqual(self.got, [("Sessions", "j"), ("Projects", "j"), ("Projects", ("mouse", 5, 6, roost.curses.BUTTON1_CLICKED))])
+
+    def test_a_confirm_is_answered_on_whatever_tab_is_open(self):
+        self.ui.switch_tab(1)
+        self.ui.confirm = ("note", {"name": "x", "path": "/nowhere"})  # as a background run puts one up
+        self.ui.dispatch("n", None)
+        self.assertEqual((self.ui.confirm, self.ui.msg, self.got), (None, "Cancelled", []))
+        self.ui.dispatch("j", None)  # the next key is the tab's again
+        self.assertEqual(self.got, [("Projects", "j")])
 
     def test_a_prompt_gets_the_shared_keys_too(self):
         self.ui.typing = True
@@ -748,7 +819,7 @@ class Tabs(unittest.TestCase):
 
 
 README = """---
-category: vendor-evaluation
+category: vendor-reviews
 summary: "Two password managers compared: cost and rollout."
 status: active
 sessions:
@@ -788,7 +859,7 @@ class Projects(unittest.TestCase):
     def test_frontmatter_reads_it_workbench_format(self):
         meta = roost.frontmatter(README)
         self.assertEqual(meta["summary"], "Two password managers compared: cost and rollout.")
-        self.assertEqual((meta["status"], meta["category"]), ("active", "vendor-evaluation"))
+        self.assertEqual((meta["status"], meta["category"]), ("active", "vendor-reviews"))
         self.assertEqual([x["id"] for x in meta["sessions"]], ["aa1b9a71-0000", "bb2c0000-0000"])
         self.assertEqual(roost.frontmatter("---\nsummary: Plain one\nsessions: []\n---\n")["sessions"], [])
         self.assertEqual(roost.frontmatter("# no frontmatter\nsummary: x"), {})
@@ -839,7 +910,7 @@ class Projects(unittest.TestCase):
         for pid, summary in [("taken", "s"), ("a/b", "s"), ("_x", "s"), ("two words", "s"), ("ok", " ")]:
             with self.assertRaises(ValueError):
                 roost.create_project(pid, summary)
-        self.assertEqual(roost.frontmatter((self.root / "taken" / "README.md").read_text())["category"], "vendor-evaluation")
+        self.assertEqual(roost.frontmatter((self.root / "taken" / "README.md").read_text())["category"], "vendor-reviews")
         roost.save_config(projects_dir=str(self.root / "nope"))
         with self.assertRaises(ValueError):
             roost.create_project("ok", "s")
@@ -1001,7 +1072,7 @@ class Projects(unittest.TestCase):
         self.assertEqual((ui.choosing["multi"], ui.choosing["typed"]), (["printers", "macs"], ""))
         ui.keys_choice("enter")  # a new tag leaves the cursor on Save
         text = (self.root / "a" / "README.md").read_text()
-        self.assertEqual(text, README.replace("category: vendor-evaluation\n", "tags: [printers, macs]\ncategory: vendor-evaluation\n"))
+        self.assertEqual(text, README.replace("category: vendor-reviews\n", "tags: [printers, macs]\ncategory: vendor-reviews\n"))
         self.assertEqual(next(p for p in ui.projects if p["id"] == "a")["tags"], ["printers", "macs"])
         act(ui, ui.keys_projects, ui.project_rows(), "Edit its tags")
         self.assertEqual(ui.choosing["multi"], ["printers", "macs"])
@@ -1010,24 +1081,24 @@ class Projects(unittest.TestCase):
 
     def test_set_its_category_picks_one_in_use_or_a_new_one(self):
         self.project("a", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
-        self.project("b", README.replace("vendor-evaluation", "ai-enablement"))
+        self.project("b", README.replace("vendor-reviews", "ai-tools"))
         ui = self.ui()
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("a")
-        (self.root / "CATEGORIES.md").write_text("# Categories\n\n- security-incident: incident write-ups\n- `ai-enablement`\nprose\n")
+        (self.root / "CATEGORIES.md").write_text("# Categories\n\n- incident-notes: what went wrong and why\n- `ai-tools`\nprose\n")
         act(ui, ui.keys_projects, ui.project_rows(), "Set its category")
         self.assertEqual([o[0] for o in ui.choice_options()],
-                         ["security-incident  incident write-ups", "ai-enablement", "vendor-evaluation  · current", "No category"])
+                         ["incident-notes  what went wrong and why", "ai-tools", "vendor-reviews  · current", "No category"])
         ui.keys_choice("down")
         ui.keys_choice("enter")
-        self.assertIn("category: ai-enablement\n", (self.root / "a" / "README.md").read_text())
-        self.assertEqual(ui.msg, "Category: ai-enablement")
+        self.assertIn("category: ai-tools\n", (self.root / "a" / "README.md").read_text())
+        self.assertEqual(ui.msg, "Category: ai-tools")
         act(ui, ui.keys_projects, ui.project_rows(), "Set its category")
         for k in names("Networking"):
             ui.keys_choice(k)
         self.assertEqual([o[0] for o in ui.choice_options()], ["+ New category: networking"])
         ui.keys_choice("enter")
         self.assertEqual(roost.read_project(self.root / "a")["category"], "networking")
-        self.assertEqual(roost.read_categories(), [("security-incident", "incident write-ups"), ("ai-enablement", ""), ("networking", "")])
+        self.assertEqual(roost.read_categories(), [("incident-notes", "what went wrong and why"), ("ai-tools", ""), ("networking", "")])
         (self.root / "CATEGORIES.md").unlink()
         roost.add_category("first")
         self.assertEqual(roost.read_categories(), [("first", "")])
@@ -1064,12 +1135,12 @@ class Projects(unittest.TestCase):
     def test_set_category_changes_only_that_line(self):
         folder = self.project("a")
         before = (folder / "README.md").read_text()
-        roost.set_category(folder, "ai-enablement")
+        roost.set_category(folder, "ai-tools")
         after = (folder / "README.md").read_text()
-        self.assertEqual(after, before.replace("category: vendor-evaluation", "category: ai-enablement"))
+        self.assertEqual(after, before.replace("category: vendor-reviews", "category: ai-tools"))
         bare = self.project("b", "---\nsummary: s\nsessions: []\n---\n\n# B\n")
-        roost.set_category(bare, "security-hardening")
-        self.assertEqual((bare / "README.md").read_text(), "---\ncategory: security-hardening\nsummary: s\nsessions: []\n---\n\n# B\n")
+        roost.set_category(bare, "hardening")
+        self.assertEqual((bare / "README.md").read_text(), "---\ncategory: hardening\nsummary: s\nsessions: []\n---\n\n# B\n")
         roost.set_category(bare, "")
         self.assertEqual((bare / "README.md").read_text(), "---\nsummary: s\nsessions: []\n---\n\n# B\n")
         for bad in ["Has Spaces", "x\ny"]:
@@ -1138,8 +1209,8 @@ class StartingSessions(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
-        self.saved = roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings
-        roost.CONFIG, roost.DONE, roost.RECAPS = base / "config.json", base / "_done", base / "notes"
+        self.saved = roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings, roost.NOTES
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.NOTES = base / "config.json", base / "_done", base / "sessions", base / "notes"
         roost.claude_settings = lambda: {}  # not the person's real Claude Code settings
         roost.PLUGIN, roost.PROJECTS = base / "plugin", base / "transcripts"
         (roost.PLUGIN / ".claude-plugin").mkdir(parents=True)
@@ -1151,7 +1222,7 @@ class StartingSessions(unittest.TestCase):
         roost.osa = lambda script, *args: self.scripts.append(args) or "ok"
 
     def tearDown(self):
-        roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings = self.saved
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings, roost.NOTES = self.saved
         self.tmp.cleanup()
 
     def project(self, name, text=README, handoffs=()):
@@ -1183,9 +1254,12 @@ class StartingSessions(unittest.TestCase):
 
     def test_brief_with_no_handoffs_and_for_a_note(self):
         self.assertIn("# No Handoffs yet", roost.brief(self.project("p")))
-        roost.RECAPS.mkdir()
-        (roost.RECAPS / "fix.md").write_text("Restarted two Macs.")
+        roost.NOTES.mkdir()
+        (roost.NOTES / "fix.md").write_text("---\ntags: [recap]\n---\n\nRestarted two Macs.")
         self.assertIn("Restarted two Macs.", roost.brief(roost.find_project("fix")))
+        (roost.NOTES / "idea.md").write_text("---\ntags: [devices]\n---\n\nAn idea.")
+        with self.assertRaises(ValueError):  # only a recap is found by its name; a note by its path
+            roost.find_project("idea")
         with self.assertRaises(ValueError):
             roost.find_project("nope")
         with self.assertRaises(ValueError):
@@ -1319,6 +1393,31 @@ class StartingSessions(unittest.TestCase):
         finally:
             roost.open_in_window = saved
 
+    def test_a_session_open_in_claude_desktop_says_so_and_enter_goes_there(self):
+        """Claude Desktop runs its sessions with its own copy of claude, which `claude agents` lists as
+        interactive like a terminal's: roost tags it Desktop and Enter switches to the Desktop app."""
+        import subprocess, unittest.mock
+        ps = ("47108 /Users/x/Library/Application Support/Claude/claude-code/2.1.295/abc/claude.app/Contents/MacOS/claude --output-format stream-json\n"
+              " 5720 claude\n")
+        with unittest.mock.patch.object(roost.subprocess, "run",
+                                        lambda *a, **kw: subprocess.CompletedProcess(a, 0, ps, "")):
+            self.assertEqual(roost.desktop_pids([47108, 5720]), {47108})
+        live = {"d-id": {"sessionId": "d-id", "kind": "interactive", "status": "idle", "pid": 47108, "desktop": True}}
+        s = dict(session("Budget", state="closed", kind=None), id="d-id", ids=["d-id"])
+        roost.attach_live([s], live)
+        self.assertTrue(s["desktop"])
+        ui = self.ui()
+        ui.DIM, ui.status = 0, {}
+        ui.sessions = [s]
+        self.assertEqual(ui.status_cell(s)[0], "○ open in Desktop")
+        self.assertEqual(ui.session_actions(s)[0][0], "Go to Claude Desktop")
+        scripts = []
+        with unittest.mock.patch.object(roost, "osa", lambda script, *a: scripts.append(script) or ""):
+            self.assertEqual(roost.open_in_window(s, "ghostty"), "Switched to Claude Desktop, where Budget is open")
+            ui.term = None  # no terminal set: still never resumed here, where Desktop already has it
+            self.assertIsNone(ui.open_one(s))
+        self.assertEqual(scripts, ['tell application "Claude" to activate'] * 2)
+
     def test_stop_and_delete_are_actions_that_ask_first(self):
         self.project("p", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
         ui = self.ui()
@@ -1336,13 +1435,13 @@ class StartingSessions(unittest.TestCase):
             ui.psel = live
             act(ui, ui.keys_projects, rows, "Stop…")
             self.assertTrue(ui.projects_typing())
-            ui.keys_projects("n", rows)  # any other key cancels
+            ui.keys_confirm("n")  # any other key cancels
             self.assertEqual((did, ui.msg), ([], "Cancelled"))
             act(ui, ui.keys_projects, rows, "Stop…")
-            ui.keys_projects("y", rows)
+            ui.keys_confirm("y")
             ui.psel = old
             act(ui, ui.keys_projects, ui.project_rows(), "Delete to the Trash…")
-            ui.keys_projects("y", ui.project_rows())
+            ui.keys_confirm("y")
             self.assertEqual(did, [("stop", ui.sessions[0]["attach"]), ("delete", "Old")])
         finally:
             roost.stop_session, roost.delete_session = saved
@@ -1664,6 +1763,48 @@ class Plugin(unittest.TestCase):
         self.assertEqual(roost.plugin_problem(), "")
         self.assertEqual(len(self.downloads), 2)  # the check itself never downloaded anything
 
+    def claude_has(self, version):
+        """Claude Code's record of the plugin copy it loads (its cache), as `claude plugin install` writes it."""
+        (self.cfg / "plugins").mkdir(exist_ok=True)
+        (self.cfg / "plugins" / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {"roost@roost": [{"scope": "user", "version": version}]}}))
+
+    def test_startup_check_notices_claude_codes_copy_is_behind(self):
+        roost.install_plugin("2026.10.08")
+        self.enable()
+        self.claude_has("2026.10.07")
+        self.assertEqual(roost.plugin_problem(), "Claude Code has roost plugin 2026.10.07: run roost update")
+        self.claude_has("2026.10.08")
+        self.assertEqual(roost.plugin_problem(), "")
+
+    def test_update_brings_claude_codes_copy_up_too(self):
+        self.enable()
+        self.claude_has("2026.10.07")
+        calls = []
+        def cli(*args):
+            calls.append(args)
+            if args[0] == "update":
+                self.claude_has("2026.10.08")
+            return True, "ok"
+        roost.claude_plugin = cli
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(roost.update_plugin("2026.10.08"), 0)
+        self.assertEqual(calls, [("marketplace", "update", "roost"), ("update", "roost@roost", "--scope", "user")])
+        self.assertIn("Claude Code now has roost plugin 2026.10.08", out.getvalue())
+        calls.clear()
+        with contextlib.redirect_stdout(io.StringIO()):
+            roost.update_plugin("2026.10.08")
+        self.assertEqual(calls, [])  # already current: no claude calls
+
+    def test_a_failed_claude_update_is_reported_but_does_not_fail_the_update(self):
+        self.enable()
+        self.claude_has("2026.10.07")
+        roost.claude_plugin = lambda *args: (False, "network down")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(roost.update_plugin("2026.10.08"), 0)
+        self.assertIn("Claude Code still has roost plugin 2026.10.07", out.getvalue())
+        self.assertIn("network down", out.getvalue())
+
     def test_setup_registers_it_through_the_claude_cli_and_confirms(self):
         calls = []
         def cli(*args):
@@ -1733,8 +1874,8 @@ class Handoffs(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         self.saved = (roost.CONFIG, roost.DONE, roost.RECAPS, roost.PROJECTS, roost.PRICES,
-                      roost.urllib.request.urlopen, roost.LOG)
-        roost.CONFIG, roost.DONE, roost.RECAPS = base / "config.json", base / "_done", base / "notes"
+                      roost.urllib.request.urlopen, roost.LOG, roost.NOTES)
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.NOTES = base / "config.json", base / "_done", base / "sessions", base / "notes"
         roost.PROJECTS, roost.PRICES, roost.LOG = base / "transcripts", base / "prices.json", base / "roost.log"
         self.fetches = []
         roost.urllib.request.urlopen = self.urlopen
@@ -1749,7 +1890,7 @@ class Handoffs(unittest.TestCase):
 
     def tearDown(self):
         (roost.CONFIG, roost.DONE, roost.RECAPS, roost.PROJECTS, roost.PRICES,
-         roost.urllib.request.urlopen, roost.LOG) = self.saved
+         roost.urllib.request.urlopen, roost.LOG, roost.NOTES) = self.saved
         self.tmp.cleanup()
 
     def urlopen(self, req, timeout=None):
@@ -1804,6 +1945,21 @@ class Handoffs(unittest.TestCase):
         self.assertEqual(roost.prices(now=1000 + 2 * 86400)["fetched"], 1000)
         roost.PRICES.unlink()
         self.assertIsNone(roost.prices(now=1000 + 2 * 86400))
+
+    def test_a_failed_fetch_waits_an_hour_before_the_next(self):
+        self.page = None
+        self.assertIsNone(roost.prices(now=1000))
+        self.assertIsNone(roost.prices(now=1000 + 60))
+        self.assertEqual(len(self.fetches), 1)
+        self.assertIsNone(roost.prices(now=1000 + 3700))
+        self.assertEqual(len(self.fetches), 2)
+        self.page = PRICE_PAGE
+        roost.PRICES.unlink()
+        roost.prices(now=5000)
+        self.page = None
+        roost.prices(now=5000 + 2 * 86400)
+        self.assertEqual(roost.prices(now=5000 + 2 * 86400 + 60)["fetched"], 5000)  # the old copy, no new fetch
+        self.assertEqual(len(self.fetches), 4)
 
     # facts
 
@@ -1951,8 +2107,9 @@ class TranscriptSummary(unittest.TestCase):
     """#52: the Handoff and README update from a transcript, without resuming the Session."""
     setUp, tearDown, urlopen, transcript = Handoffs.setUp, Handoffs.tearDown, Handoffs.urlopen, Handoffs.transcript
 
-    def run_summary(self, replies=None, cap=5.0, fail_at=None):
-        """summarize() with a stand-in for the model: each call gets the next reply and costs $1."""
+    def run_summary(self, replies=None, cap=5.0, fail_at=None, during=None):
+        """summarize() with a stand-in for the model: each call gets the next reply and costs $1.
+        during(n) runs while call n is out, standing in for someone working meanwhile."""
         replies = list(replies or [DRAFT, DRAFT + "\n<!-- review: 0 changes: none -->",
                                    "# Printers\n\n## Current state\n\nFixed.\n\n## Next\n\nCheck the second office.\n"])
         self.calls, self.steps = [], []
@@ -1961,6 +2118,8 @@ class TranscriptSummary(unittest.TestCase):
             self.calls.append((model, prompt, budget))
             if fail_at == len(self.calls):
                 raise ValueError("the model is down")
+            if during:
+                during(len(self.calls))
             return replies.pop(0), 1.0
         saved = roost.read_only
         roost.read_only = lambda cmd: "(stub)"
@@ -1991,7 +2150,8 @@ class TranscriptSummary(unittest.TestCase):
     def test_it_writes_the_handoff_and_the_readme_body_and_keeps_the_frontmatter(self):
         readme = self.folder / "README.md"
         readme.write_text(readme.read_text() + "\n# Printers\n\nOld state.\n")
-        path, kinds, spent = self.run_summary()
+        path, kinds, spent, updated = self.run_summary()
+        self.assertTrue(updated)
         self.assertEqual(self.steps, [1, 2, 3])  # draft, review, README: the row shows which
         self.assertEqual(roost.UI.progress({"step": 2, "steps": 3, "started": time.time() - 100}), "2/3 · 1m40s")
         text = path.read_text()
@@ -2006,6 +2166,65 @@ class TranscriptSummary(unittest.TestCase):
         self.assertEqual([b for _, _, b in self.calls], [5.0, 4.0, 3.0])  # each call gets what's left of the cap
         self.assertIn("Old state", self.calls[2][1])  # the rewrite starts from the README body
         self.assertIn("[1] USER: go", self.calls[0][1])
+
+    def test_a_readme_edited_during_the_rewrite_keeps_the_edit(self):
+        readme = self.folder / "README.md"
+        readme.write_text(readme.read_text() + "\n# Printers\n\nOld state.\n")
+
+        def edit(n):
+            if n == 3:  # the person edits the body while the rewrite is out
+                readme.write_text(readme.read_text().replace("Old state.", "Ordered toner."))
+        path, _, spent, updated = self.run_summary(during=edit)
+        self.assertFalse(updated)
+        self.assertTrue(path.exists())  # the Handoff is still written
+        self.assertIn("Ordered toner.", readme.read_text())
+        self.assertNotIn("## Current state", readme.read_text())
+        self.assertEqual(spent, 3.0)
+
+    def test_frontmatter_written_during_the_rewrite_doesnt_stop_it(self):
+        readme = self.folder / "README.md"
+
+        def record(n):
+            if n == 3:  # roost records another Session meanwhile
+                readme.write_text(readme.read_text().replace("sessions:\n", "sessions:\n  - name: Other\n    id: other\n", 1))
+        _, _, _, updated = self.run_summary(during=record)
+        self.assertTrue(updated)
+        self.assertIn("id: other", readme.read_text())
+        self.assertIn("## Current state", readme.read_text())
+
+    def test_two_summaries_in_one_project_take_turns_on_the_readme(self):
+        import threading
+        other = "99999999-2222-3333-4444-555555555555"
+        readme = self.folder / "README.md"
+        readme.write_text(f"---\nsummary: Printers\nsessions:\n  - name: Printer fix\n    id: {SID}\n"
+                          f"  - name: Toner\n    id: {other}\n---\n\n# Printers\n\nOld state.\n")
+        self.transcript(TRANSCRIPT, sid=other)
+        in_rewrite, prompts = threading.Event(), {}
+
+        def model(name):
+            def call(model, system, prompt, budget):
+                if "Old state" in prompt or "## Current state" in prompt:  # the README rewrite
+                    prompts[name] = prompt
+                    if name == "first":
+                        in_rewrite.set()
+                        time.sleep(0.3)  # the second would read the README now, without a turn
+                    return f"# Printers\n\n## Current state\n\n{name} done.\n", 1.0
+                return DRAFT, 1.0
+            return call
+        saved = roost.read_only
+        roost.read_only = lambda cmd: "(stub)"
+        try:
+            a = threading.Thread(target=roost.summarize, args=(SID, "m", 5.0), kwargs={"call": model("first")})
+            a.start()
+            in_rewrite.wait(5)
+            _, _, _, updated = roost.summarize(other, "m", 5.0, call=model("second"))
+            a.join(5)
+        finally:
+            roost.read_only = saved
+        self.assertTrue(updated)
+        self.assertIn("first done.", prompts["second"])  # the second rewrote what the first wrote
+        self.assertIn("second done.", readme.read_text())
+        self.assertEqual(len(list((self.folder / "handoffs").iterdir())), 2)
 
     def test_a_failure_writes_nothing(self):
         readme = (self.folder / "README.md").read_text()
@@ -2033,8 +2252,8 @@ class TranscriptSummary(unittest.TestCase):
         table = roost.parse_prices(PRICE_PAGE)
         self.assertLess(roost.summary_estimate(plan, "claude-opus-5-5", table),
                         roost.summary_estimate(dict(plan, project=True), "claude-opus-5-5", table))
-        path, _, spent = self.run_summary()
-        self.assertEqual((path, spent), (roost.RECAPS / "printer-fix.md", 2.0))  # no README call
+        path, _, spent, updated = self.run_summary()
+        self.assertEqual((path, spent, updated), (roost.NOTES / "printer-fix.md", 2.0, None))  # no README call
         self.assertEqual(len(self.calls), 2)
 
     def test_the_estimate_comes_from_the_input_size_and_list_prices(self):
@@ -2074,6 +2293,37 @@ class TranscriptSummary(unittest.TestCase):
         finally:
             roost.subprocess.run = saved
 
+    def test_up_to_three_summaries_run_at_once(self):
+        ui = object.__new__(roost.UI)
+        ui.msg, ui.confirm, ui.offer, ui.sessions = "", None, None, []
+        ui.projects = [{"id": "printers", "sessions": [SID]}]
+        job = lambda name, state="running": {"state": state, "name": name, "text": "", "step": 1, "steps": 3, "started": 0}
+        mine = dict(session("Printer fix"), id=SID)
+        saved = roost.prices
+        roost.prices = lambda now=None: None
+        try:
+            ui.summaries = {"a": job("A"), "b": job("B"), "c": job("C", "done")}
+            ui.ask_summary(mine)
+            self.assertEqual(ui.confirm, ("summary", mine))  # two running: a third may start
+            ui.confirm, ui.summaries["c"] = None, job("C")
+            ui.ask_summary(mine)
+            self.assertEqual((ui.msg, ui.confirm), ("3 summaries are running: wait for one", None))
+            ui.summaries = {SID: job("Printer fix")}
+            ui.ask_summary(mine)
+            self.assertEqual((ui.msg, ui.confirm), ("Its summary is already running", None))
+            ui.summaries = {"adopt:/p": job("Printers")}  # an adopt or a question still runs on its own
+            ui.ask_summary(mine)
+            self.assertEqual((ui.msg, ui.confirm), ("Wait for Printers's run to finish first", None))
+            ui.summaries, ui.quit_anyway, ui.tab = {"a": job("A"), "b": job("B")}, False, 0
+            ui.helping = ui.choosing = ui.asking = ui.searching = ui.confirm = None
+            ui.TABS = [ui.TABS[0]._replace(typing=lambda ui: False)]
+            ui.dispatch("ctrl+q", None)
+            self.assertEqual(ui.msg, "2 summaries are running and would be lost: ctrl+q again to quit anyway")
+            for m in ("3 summaries are running: wait for one", "Its summary is already running"):
+                self.assertTrue(roost.REFUSED.match(m), m)
+        finally:
+            roost.prices = saved
+
     def test_the_key_refuses_working_and_window_sessions_and_stops_background_ones(self):
         ui = object.__new__(roost.UI)
         ui.summaries, ui.msg, ui.confirm, ui.offer, ui.sessions = {}, "", None, None, []
@@ -2087,7 +2337,7 @@ class TranscriptSummary(unittest.TestCase):
         stopped, ran = [], []
         saved = roost.stop_session, roost.summarize, roost.prices
         roost.stop_session, roost.prices = stopped.append, lambda now=None: None
-        roost.summarize = lambda sid, model, cap, progress: progress(2) or ran.append((sid, model, cap)) or (self.folder / "handoffs" / "h.md", [], 0.4)
+        roost.summarize = lambda sid, model, cap, progress: progress(2) or ran.append((sid, model, cap)) or (self.folder / "handoffs" / "h.md", [], 0.4, False)
         ui.refresh = lambda: None
         try:
             s = dict(mine(), attach="job1")
@@ -2102,6 +2352,7 @@ class TranscriptSummary(unittest.TestCase):
             self.assertEqual(stopped, ["job1"])  # stopped before the summary ran
             self.assertEqual(ran, [(SID, "claude-sonnet-5-5", 5.0)])
             self.assertEqual(ui.summaries[SID]["state"], "done")
+            self.assertIn("left the README alone: it was edited while the summary ran", ui.summaries[SID]["text"])
         finally:
             roost.stop_session, roost.summarize, roost.prices = saved
 
@@ -2197,9 +2448,12 @@ class SessionRecaps(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--recap"):
             roost.write_handoff(SID, DRAFT)
         path, kinds = self.note()
-        self.assertEqual(path, roost.RECAPS / "printer-fix.md")
+        self.assertEqual(path, roost.NOTES / "printer-fix.md")
         text = path.read_text()
         meta = roost.frontmatter(text)
+        self.assertEqual((meta["title"], roost.tag_list(meta["tags"]), meta["created"]), ("Printer fix", ["recap"], "2026-10-09"))
+        [n] = roost.read_notes()  # on the Notes tab, with every note action
+        self.assertEqual((n["name"], n["tags"], n["sessions"]), ("Printer fix", ["recap"], [SID]))
         self.assertEqual(meta["summary"], "Fixed the printers [3]")  # its first point, when none is given
         self.assertEqual(meta["sessions"], [{"name": "Printer fix", "id": SID}])
         self.assertEqual(meta["folder"], "/w")
@@ -2224,13 +2478,71 @@ class SessionRecaps(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "never overwrites"):
             roost.write_handoff(SID, "again", now=self.at(17))
 
-    def test_notes_never_replace_each_other(self):
+    def test_old_recaps_move_into_notes_once(self):
         self.unlist()
         roost.RECAPS.mkdir(parents=True)
-        (roost.RECAPS / "printer-fix.md").write_text("someone else's note\n")
+        old = roost.RECAPS / "printer-fix.md"
+        original = (f"---\nsummary: Fixed it\nfolder: /w\nsessions:\n  - name: Printer fix\n    id: {SID}\n---\n\n"
+                    f"# Session recap printer-fix\n\n<!-- roost handoff 2026-10-09-1600-11111111 session: {SID} from:  "
+                    f"to: 2026-10-09T11:00:00.000Z -->\n\nDone.\n")
+        old.write_text(original)
+        (roost.RECAPS / "loose.md").write_text("Restarted two Macs.\n")  # written by hand, no frontmatter
+        roost.NOTES.mkdir()
+        (roost.NOTES / "printer-fix.md").write_text("my own note\n")
+        self.assertEqual(roost.move_recaps(), 2)
+        self.assertFalse(roost.RECAPS.exists())
+        self.assertEqual((roost.NOTES / "printer-fix.md").read_text(), "my own note\n")  # never replaced
+        moved = roost.NOTES / "printer-fix-2.md"
+        text = moved.read_text()
+        meta = roost.frontmatter(text)
+        self.assertEqual((meta["title"], meta["summary"], meta["folder"], roost.tag_list(meta["tags"])),
+                         ("Printer fix", "Fixed it", "/w", ["recap"]))
+        self.assertIn("Done.", text)
+        self.assertEqual(roost.owner([SID]), moved)  # the next wrap-up adds to it
+        self.assertEqual(roost.last_covered(moved, [SID]), "2026-10-09T11:00:00.000Z")
+        self.assertEqual(sorted(r["id"] for r in roost.read_recaps()), ["loose", "printer-fix-2"])
+        self.assertIn("Restarted two Macs.", (roost.NOTES / "loose.md").read_text())
+        self.assertEqual(roost.move_recaps(), 0)  # a second run changes nothing
+        roost.RECAPS.mkdir()
+        old.write_text(original)  # as if the last run stopped after writing the note, before removing this
+        self.assertEqual(roost.move_recaps(), 1)
+        self.assertFalse(old.exists())
+        self.assertFalse((roost.NOTES / "printer-fix-3.md").exists())  # its note was already there
+
+    def test_a_recap_on_the_notes_tab_becomes_a_project_with_its_handoffs(self):
+        self.unlist()
+        path, _ = self.note()
+        path.write_text(path.read_text().replace('folder: "/w"', f'folder: "{self.root}"'))  # a folder that exists
+        ui = object.__new__(roost.UI)
+        ui.sessions, ui.msg, ui.page, ui.last_click = [], "", 10, (0, -1)
+        ui.psel, ui.ptop, ui.prow_y, ui.asking = 0, 0, {}, None
+        ui.pquery, ui.searching, ui.term, ui.plugin_ok = "", False, None, True
+        ui.folded, ui.expanded, ui.unwrapped = set(), set(), set()
+        ui.choosing = ui.confirm = None
+        ui.summaries = {}
+        ui.load_projects()
+        [n] = ui.notes
+        started = []
+        ui.start = lambda pid, cwd, name=None: started.append(cwd)
+        dict(ui.note_actions(n))["Start a Session from it"]()
+        self.assertEqual(started, [str(self.root)])  # where its Session worked, not home
+        del ui.start
+        dict(ui.note_actions(n))["Make it a project…"]()
+        typed(ui, "\n")
+        typed(ui, "\n")
+        self.assertEqual(ui.asking["text"], "Fixed the printers [3]")  # the recap's summary to start from
+        typed(ui, "\n")
+        self.assertIn("Created", ui.msg)
+        self.assertEqual(len(list((self.root / "printer-fix" / "handoffs").iterdir())), 1)
+        self.assertEqual(roost.read_recaps(), [])
+
+    def test_notes_never_replace_each_other(self):
+        self.unlist()
+        roost.NOTES.mkdir(parents=True)
+        (roost.NOTES / "printer-fix.md").write_text("someone else's note\n")
         path, _ = self.note()
         self.assertEqual(path.name, "printer-fix-2.md")
-        self.assertEqual((roost.RECAPS / "printer-fix.md").read_text(), "someone else's note\n")
+        self.assertEqual((roost.NOTES / "printer-fix.md").read_text(), "someone else's note\n")
 
     def test_pickup_and_starting_from_a_note_list_the_new_session_in_it(self):
         self.unlist()
@@ -2273,6 +2585,17 @@ class SessionRecaps(unittest.TestCase):
             roost.promote_recap(roost.RECAPS / "x.md", "printer-rollout", "Again.")
         self.assertTrue((roost.RECAPS / "x.md").exists())  # a failure keeps the note
 
+    def test_a_crafted_marker_writes_nothing_outside_the_project(self):
+        roost.RECAPS.mkdir()
+        mark = "<!-- roost handoff %s session: s1 from:  to:  -->"
+        (roost.RECAPS / "evil.md").write_text("\n".join(["---", "summary: x", "---", "",
+                                                         mark % "2026-10-09-1600-ok", "Fine.", "",
+                                                         mark % "../../../escaped", "Out.", "", mark % "..", "Dots.", ""]))
+        folder = roost.promote_recap(roost.RECAPS / "evil.md", "evil", "Crafted.")
+        self.assertEqual([h.name for h in (folder / "handoffs").iterdir()], ["2026-10-09-1600-ok.md"])
+        self.assertFalse(list(folder.parent.parent.rglob("escaped.md")))
+        self.assertEqual([s[0] for s in roost.recap_sections(mark % "a/b" + "\nx")], [])
+
     def test_a_hand_written_note_becomes_one_handoff(self):
         roost.RECAPS.mkdir()
         (roost.RECAPS / "vpn.md").write_text("---\nsummary: VPN client\n---\n\nInstalled the VPN client on two Macs.\n")
@@ -2295,7 +2618,7 @@ class SessionRecaps(unittest.TestCase):
         ui.summaries = {}
         ui.load_projects()
         self.assertEqual(ui.project_rows()[-1].kind, "new")  # recaps aren't on the Projects tab
-        self.assertEqual(ui.notes, [])  # nor on Notes: a recap is shown with the Session that wrote it
+        self.assertEqual([(n["id"], n["tags"]) for n in ui.notes], [("printer-fix", ["recap"])])  # it's a note, tagged recap
         self.assertEqual(ui.recap_of(s)["id"], "printer-fix")
         acts = dict(ui.session_actions(s))
         self.assertTrue(any(l.startswith("Read its Session recap") for l in acts))
@@ -2367,7 +2690,7 @@ class Adopt(unittest.TestCase):
         roost.ADOPT_PLANS = Path(self.tmp.name) / "adopt"
         self.old = self.root / "2026-09-printer-rollout"
         (self.old / "badge-printers").mkdir(parents=True)
-        (self.old / "README.md").write_text(f"---\ncategory: systems-and-automation\nsummary: Printers\nsessions:\n"
+        (self.old / "README.md").write_text(f"---\ncategory: infrastructure\nsummary: Printers\nsessions:\n"
                                             f"  - name: Printer fix\n    id: {SID}\n---\n\n# Printer rollout\n\nOld notes.\n")
         for name, text in (("notes.md", "Working notes."), ("notes-backup.md", "Older notes."), ("HANDOFF.md", "Start here."),
                            ("export.csv", "a,b\n1,2\n"), ("badge-printers/plan.md", "Badges."), (".DS_Store", "x")):
@@ -2425,6 +2748,13 @@ class Adopt(unittest.TestCase):
             roost.apply_plan(self.old, self.plan(bad))
         self.assertTrue((self.old / "export.csv").exists())  # nothing changed
 
+    def test_two_moves_to_one_path_stop_the_plan(self):
+        bad = self.plan(PLAN_BODY.replace("`out/report.pdf`", "`data/export.csv`"))
+        self.assertIn("more than one Move", " ".join(roost.plan_problems(self.old, bad)))
+        with self.assertRaises(ValueError):
+            roost.apply_plan(self.old, bad)
+        self.assertTrue((self.old / "export.csv").exists() and (self.old / "report.pdf").exists())
+
     def test_applying_moves_archives_and_renames_and_deletes_nothing(self):
         before = len(self.files(self.old))
         new = roost.apply_plan(self.old, self.plan(), today="2026-10-09")
@@ -2440,7 +2770,7 @@ class Adopt(unittest.TestCase):
         self.assertIn("- Packaged the driver", h.read_text())
         text = (new / "README.md").read_text()
         meta = roost.frontmatter(text)
-        self.assertEqual((meta["category"], meta["status"]), ("systems-and-automation", "active"))
+        self.assertEqual((meta["category"], meta["status"]), ("infrastructure", "active"))
         self.assertEqual(meta["summary"], "Roll the new printer driver out to every office Mac.")
         self.assertEqual(meta["sessions"], [{"name": "Printer fix", "id": SID}])  # Sessions stay linked through their ids
         self.assertIn("Driver packaged", text)
@@ -2451,10 +2781,21 @@ class Adopt(unittest.TestCase):
         # every file is still somewhere: moved, archived, or split out (plus the new README copy and Handoff)
         self.assertEqual(len(self.files(new, split)), before + 3)
 
+    def test_a_second_adopt_the_same_day_archives_beside_the_first(self):
+        (self.old / "_archive" / "2026-10-09").mkdir(parents=True)
+        (self.old / "_archive" / "2026-10-09" / "README.md").write_text("The first adopt's README.\n")
+        new = roost.apply_plan(self.old, self.plan(), today="2026-10-09")
+        self.assertEqual((new / "_archive" / "2026-10-09" / "README.md").read_text(), "The first adopt's README.\n")
+        arch = new / "_archive" / "2026-10-09-2"
+        self.assertIn("Old notes.", (arch / "README.md").read_text())
+        self.assertTrue((arch / "HANDOFF.md").exists())
+        [h] = (new / "handoffs").iterdir()
+        self.assertIn("now in `_archive/2026-10-09-2/`", h.read_text())
+
     def test_backfill_writes_handoffs_oldest_first_dated_by_each_session(self):
         ran = []
         saved = roost.summarize
-        roost.summarize = lambda sid, model, cap, readme=True, at=None: ran.append((sid, readme, at)) or (Path("/x/h.md"), [], 0.5)
+        roost.summarize = lambda sid, model, cap, readme=True, at=None: ran.append((sid, readme, at)) or (Path("/x/h.md"), [], 0.5, None)
         try:
             self.transcript(TRANSCRIPT)
             spent = roost.backfill(self.old, "claude-sonnet-5-5", 5.0, say=lambda *a: None)
@@ -2473,9 +2814,9 @@ class Adopt(unittest.TestCase):
     def test_old_archives_are_suggested_for_clearing(self):
         arch = self.old / "_archive"
         now = time.mktime((2026, 10, 15, 12, 0, 0, 0, 0, -1))
-        for d in ("2026-10-09", "2026-10-14", "notes"):
+        for d in ("2026-10-09", "2026-10-09-2", "2026-10-14", "notes"):
             (arch / d).mkdir(parents=True)
-        self.assertEqual(roost.archives_due(self.old, now), [("2026-10-09", 6)])
+        self.assertEqual(roost.archives_due(self.old, now), [("2026-10-09", 6), ("2026-10-09-2", 6)])
         roost.save_config(adopt_archive_days=10)
         self.assertEqual(roost.archives_due(self.old, now), [])
         self.assertNotIn("_archive", roost.adopt_input(self.old))
@@ -2528,7 +2869,7 @@ class Adopt(unittest.TestCase):
         saved = roost.claude_print, roost.threading.Thread, roost.summarize
         roost.claude_print = lambda model, system, prompt, budget: (PLAN_BODY, 0.3)
         roost.threading.Thread = sync
-        roost.summarize = lambda sid, model, cap, readme=True, at=None: ran.append((sid, readme)) or (Path("/x/h.md"), [], 0.5)
+        roost.summarize = lambda sid, model, cap, readme=True, at=None: ran.append((sid, readme)) or (Path("/x/h.md"), [], 0.5, None)
         self.addCleanup(lambda: (setattr(roost, "claude_print", saved[0]), setattr(roost.threading, "Thread", saved[1]),
                                  setattr(roost, "summarize", saved[2])))
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("2026-09-printer-rollout")
@@ -2780,7 +3121,7 @@ class Notes(unittest.TestCase):
         ui.load_projects()
         ui.nsel = 0
         act(ui, keys, None, "Delete to the Trash")
-        ui.keys_notes("y", ui.note_rows())
+        ui.keys_confirm("y")
         self.assertEqual((len(self.trashed), ui.note_rows()[1:]), (1, []))
 
     def test_roost_note_saves_from_the_command_line(self):
@@ -2860,6 +3201,20 @@ class TextualScreens(unittest.TestCase):
     def screen(self, app):
         return app.lines
 
+    def test_a_wrap_up_shows_under_its_own_heading_at_the_bottom(self):
+        done = dict(self.sessions[0], state="closed", kind=None, attach=None)  # stopped for its summary
+        self.sessions = [done, self.sessions[1]]
+
+        async def start(pilot):
+            pilot.app.ui.summaries = {done["id"]: {"state": "running", "text": "writing", "name": done["name"],
+                                                   "step": 1, "steps": 3, "started": time.time()}}
+            await pilot.press("tab")
+        lines = self.screen(self.run_app([start]))
+        heads = [l.strip().split(" (")[0] for l in lines if "(1)" in l]
+        self.assertEqual(heads[-1], "Wrapping up")
+        self.assertLess(next(i for i, l in enumerate(lines) if "Laptop refresh" in l),
+                        next(i for i, l in enumerate(lines) if "Printer fix" in l))
+
     def test_the_sessions_tab_names_each_sessions_project(self):
         import unittest.mock
         pid = "2026-10-printer-fleet"
@@ -2916,6 +3271,16 @@ class TextualScreens(unittest.TestCase):
         self.assertIsNone(app.ui.alerting)
         self.assertIn("Moved it to the Trash", self.screen(app)[-1])
 
+    def test_a_key_handler_that_raises_is_a_box_not_a_crash(self):
+        import unittest.mock
+        def boom(ui, k, rows):
+            raise RuntimeError("boom")
+        tabs = [roost.UI.TABS[0]._replace(keys=boom)] + roost.UI.TABS[1:]  # the Projects tab, the first one shown
+        with unittest.mock.patch.object(roost.UI, "TABS", tabs), unittest.mock.patch.object(roost, "log"):
+            app = self.run_app([self.keys("j")])
+        self.assertTrue(app.ui.alerting)
+        self.assertIn("boom", "\n".join(self.screen(app)))
+
     def test_ctrl_q_quits_and_plain_q_is_a_letter(self):
         app = self.run_app([self.keys("q")])
         self.assertIsNone(app.return_value)
@@ -2938,13 +3303,71 @@ class TextualScreens(unittest.TestCase):
         app = self.run_app([lambda pilot: pilot.click(offset=(24, 0)), scroll])
         self.assertEqual((app.ui.TABS[app.ui.tab].name, app.ui.sel), ("Sessions", 1))
 
+    def test_a_triple_click_acts_once(self):
+        import unittest.mock
+        ran = []
+        with unittest.mock.patch.object(roost.UI, "session_actions", lambda ui, s: [("Open", lambda: ran.append(s["name"]))]):
+            self.run_app([self.keys("tab"), lambda pilot: pilot.click(offset=(10, 6), times=3)])
+        self.assertEqual(len(ran), 1)
+
+    def test_a_double_or_triple_click_selects_no_text(self):
+        """Clicks act on rows; text is selected only by dragging over it, for cmd+c. The pilot's own
+        clicks don't name the widget under the mouse, which Textual's select-all needs, so these do."""
+        import unittest.mock
+        from textual import events
+        seen = []
+
+        async def clicks(pilot):
+            w, _ = pilot.app.get_widget_at(10, 6)
+            for chain in (2, 3):
+                pilot.app.screen.selections = {}
+                w.post_message(events.Click(w, 10, 6, 0, 0, 1, False, False, False, screen_x=10, screen_y=6, chain=chain))
+                await pilot.pause()
+                seen.append(dict(pilot.app.screen.selections))
+        with unittest.mock.patch.object(roost.UI, "session_actions", lambda ui, s: [("Open", lambda: None)]):
+            self.run_app([self.keys("tab"), clicks])
+        self.assertEqual(seen, [{}, {}])
+
+    def test_letting_go_after_a_drag_copies_the_text_and_ctrl_c_copies_it_too(self):
+        """Ghostty keeps cmd+c for its own selection, so roost copies what's dragged over as soon as the
+        mouse is let go; ctrl+c copies a selection too, and quits only when nothing is selected."""
+        import unittest.mock
+        from textual import events
+        copied, running = [], []
+
+        async def drag(pilot):
+            with unittest.mock.patch.object(type(pilot.app.screen), "get_selected_text", lambda screen: "Printer fix"):
+                pilot.app.screen.post_message(events.TextSelected())
+                await pilot.pause()
+                await pilot.press("ctrl+c")
+                running.append(pilot.app.is_running)
+            pilot.app.screen.post_message(events.TextSelected())  # a plain click: nothing selected, nothing copied
+            await pilot.pause()
+        with unittest.mock.patch.object(roost.UI, "clipboard", lambda ui, text: copied.append(text)):
+            app = self.run_app([drag])
+        self.assertEqual((copied, running), (["Printer fix", "Printer fix"], [True]))
+        self.assertEqual(app.ui.msg, "Copied the selected text")
+
+    def test_ctrl_c_with_nothing_selected_copies_nothing(self):
+        import unittest.mock
+        copied = []
+        with unittest.mock.patch.object(roost.UI, "clipboard", lambda ui, text: copied.append(text)):
+            app = self.run_app([self.keys("ctrl+c")])
+        self.assertEqual((copied, app.ui.msg), ([], ""))
+
     def test_a_right_click_opens_a_rows_actions(self):
         app = self.run_app([self.keys("tab"), lambda pilot: pilot.click(offset=(10, 6), button=3)])
         self.assertTrue(app.ui.choosing)
         self.assertIn(app.ui.choosing["title"], [s["name"] for s in self.sessions])
 
     def test_ctrl_n_asks_for_a_title_then_makes_the_note(self):
-        app = self.run_app([self.keys("ctrl+n", "n"), self.keys(*"Q4 ideas"), self.keys("enter")])
+        import unittest.mock
+        with tempfile.TemporaryDirectory() as tmp:  # a stand-in editor, so the test needs none installed
+            stub = Path(tmp) / "stub-editor"
+            stub.write_text("#!/bin/sh\nexit 0\n")
+            stub.chmod(0o755)
+            with unittest.mock.patch.multiple(roost, read_config=lambda: {"editor": str(stub)}):
+                app = self.run_app([self.keys("ctrl+n", "n"), self.keys(*"Q4 ideas"), self.keys("enter")])
         self.assertTrue((roost.NOTES / "q4-ideas.md").exists())
         self.assertIn("Couldn't open the editor", app.ui.alerting)  # a test has no terminal to give it; a failure is a box
 

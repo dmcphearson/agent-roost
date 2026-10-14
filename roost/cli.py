@@ -33,6 +33,7 @@ from roost.app.ui import UI
 from roost.app.screen import App, run_screens, textual_python
 from roost.demo import use_demo
 from roost.core import config
+from roost.core import projectdata
 from roost.core import sessiondata
 from roost.core import install
 from roost.core import terminals
@@ -90,6 +91,11 @@ def main(argv):
         print(usage()); return
     if argv and argv[0] == "--version":
         print(f"roost {config.VERSION}"); return
+    if "--demo" not in argv:
+        try:
+            projectdata.move_recaps()  # once: recaps from before they were notes
+        except Exception as e:
+            config.log(f"move recaps: {e}")
     if argv and argv[0] in COMMANDS:
         sys.exit(run_command(argv[0], argv[1:]))
     as_list = "--list" in argv

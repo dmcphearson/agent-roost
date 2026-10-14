@@ -44,7 +44,7 @@ def start_tab(names):
     last = config.read_config().get("tab")
     return names.index(last) if last in names else 0
 FAILED = re.compile(r"^(Couldn't|Can't|No editor found|Its folder no longer exists|Summary of .+ failed|Handoffs for .+ stopped)")
-REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|A summary is already running|That's .+ work:|"
+REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|\d summaries are running|Its summary is already running|That's .+ work:|"
                      r"It's wrapped up:|No Sessions list this project|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
 
 
@@ -153,6 +153,8 @@ class Shell:
                 return self.mark("expiring", f"expires in {span(left)}", curses.A_BOLD)
         if state == "closed" and self.wrapped(s):
             return f"{self.MARKS['wrapped']} wrapped up", self.DIM
+        if s.get("desktop") and state not in ("busy", "waiting", "blocked"):
+            return f"{self.MARKS['idle']} open in Desktop", self.DIM
         key = {"busy": "working", "waiting": "input", "blocked": "input"}.get(state, state)
         if key in self.status:
             return self.mark(key, self.label(state))
@@ -365,6 +367,10 @@ class Shell:
             return self.keys_ask(k)
         if self.searching:
             return self.keys_search(k)
+        if self.confirm:  # on any tab: one can come up from a background run, wherever the person is
+            self.keys_confirm(k)
+            self.load_projects()
+            return None
         tab = self.TABS[self.tab]
         if not tab.typing(self):  # a confirmation or the category picker takes every key
             if k in ("tab", "shift+tab"):
@@ -377,7 +383,8 @@ class Shell:
                 running = [j for j in self.summaries.values() if j["state"] == "running"]
                 if running and not self.quit_anyway:
                     self.quit_anyway = True
-                    self.msg = f"A summary of {running[0]['name']} is running and would be lost: ctrl+q again to quit anyway"
+                    what = f"A summary of {running[0]['name']} is" if len(running) == 1 else f"{len(running)} summaries are"
+                    self.msg = f"{what} running and would be lost: ctrl+q again to quit anyway"
                     return None
                 return QUIT
             self.quit_anyway = False
@@ -605,13 +612,21 @@ class Shell:
             pass
 
     def copy_id(self, s):
-        try:
-            subprocess.run(["pbcopy"], input=s["id"], text=True, timeout=5, check=True)
-            self.msg = f"Copied {s['id'][:8]}… to the clipboard"
-        except Exception as e:
-            config.log(f"copy id: {e}")
-            self.msg = f"Couldn't copy: {e}"
+        self.copy_text(s["id"], f"Copied {s['id'][:8]}… to the clipboard")
         return None
+
+    def copy_text(self, text, done):
+        """Put text on the clipboard and say done, or why it couldn't."""
+        try:
+            self.clipboard(text)
+            self.msg = done
+        except Exception as e:
+            config.log(f"copy: {e}")
+            self.msg = f"Couldn't copy: {e}"
+
+    @staticmethod
+    def clipboard(text):
+        subprocess.run(["pbcopy"], input=text, text=True, timeout=5, check=True)
 
     def show_in_finder(self, path, reveal=False):
         if path and os.path.exists(path):

@@ -85,7 +85,8 @@ class SessionsTab:
         for x in self.sessions:  # the project that lists it, for the PROJECT column and its sort
             p = self.project_of(x)
             x["proj"] = projectdata.label_of(p) if p else ""
-        rows = self.srows = visible(self.sessions, self.view, self.query, self.sort, self.summarizing())
+        self.wrapping = self.summarizing()  # the Wrapping up section, fixed for this draw
+        rows = self.srows = visible(self.sessions, self.view, self.query, self.sort, self.wrapping)
         self.sel = max(0, min(self.sel, len(rows) - 1))
         live = sum(s["state"] != "closed" for s in self.sessions)
         waiting = sum(s["state"] in ("waiting", "blocked") for s in self.sessions)
@@ -100,10 +101,11 @@ class SessionsTab:
         section, ("h", section) at the start of each and ("s", None) between them. Scrolls self.top
         so the selected row (and its section's header, at the start of a section) is in the page."""
         lines, sec_line = [], None
-        multi = len({group(s) for s in rows}) > 1
+        sec = lambda s: group(s, self.wrapping)
+        multi = len({sec(s) for s in rows}) > 1
         for idx, s in enumerate(rows):
-            g = group(s)
-            if multi and (idx == 0 or group(rows[idx - 1]) != g):
+            g = sec(s)
+            if multi and (idx == 0 or sec(rows[idx - 1]) != g):
                 if idx:
                     lines.append(("s", None))  # a blank line between sections
                 lines.append(("h", g))
@@ -147,12 +149,19 @@ class SessionsTab:
             warns.append((cost[0].split(" · ", 1)[-1], cost[1]))  # Context already says what it costs
         return warns, cleanup
 
+    MAX_SUMMARIES = 3  # Handoffs and recaps written at once; two in one project take turns on its README
+
     def ask_summary(self, s):
         """w on a Session: offer to write its Handoff and README update from its transcript, with the
-        estimated cost. Never on a working Session or one open in a window."""
-        running = next((j for j in self.summaries.values() if j["state"] == "running"), None)
-        if running:
-            self.msg = f"A summary is already running for {running['name']}: wait for it"
+        estimated cost. Never on a working Session or one open in a window. Up to MAX_SUMMARIES run at
+        once; an adopt or a question runs alone."""
+        other = next((j for k, j in self.summaries.items() if j["state"] == "running" and ":" in k), None)
+        if s["id"] in self.summarizing():
+            self.msg = "Its summary is already running"
+        elif other:
+            self.msg = f"Wait for {other['name']}'s run to finish first"
+        elif len(self.summarizing()) >= self.MAX_SUMMARIES:
+            self.msg = f"{self.MAX_SUMMARIES} summaries are running: wait for one"
         elif s["state"] in ("busy", "opening"):
             self.msg = "It's working: wait until it's idle"
         elif s["kind"] == "interactive" or s.get("attached"):
@@ -252,8 +261,9 @@ class SessionsTab:
 
         def work():
             try:
-                path, kinds, cost = summaries.summarize(s["id"], model, cap, progress=lambda n: job.update(step=n))
-                job.update(state="done", text=f"Wrote {short(str(path))}{'' if path.parent == config.RECAPS else ' and updated the README'} (${cost:.2f})" + (
+                path, kinds, cost, updated = summaries.summarize(s["id"], model, cap, progress=lambda n: job.update(step=n))
+                readme = {True: " and updated the README", False: "; left the README alone: it was edited while the summary ran"}.get(updated, "")
+                job.update(state="done", text=f"Wrote {short(str(path))}{readme} (${cost:.2f})" + (
                     f"; redacted {len(kinds)} secret{'s' if len(kinds) != 1 else ''}: check it and rotate anything real" if kinds else ""))
             except Exception as e:
                 config.log(f"summary {s['id'][:8]}: {e}")
@@ -317,7 +327,7 @@ class SessionsTab:
         elif done:
             acts.append(("Start a fresh Session from its recap", lambda: self.start_from_recap(recap, s)))
         else:
-            label = "Go to its window" if in_window else "Open in a new window" if self.term else "Open here"
+            label = "Go to Claude Desktop" if s.get("desktop") else "Go to its window" if in_window else "Open in a new window" if self.term else "Open here"
             acts.append((label, lambda: self.open_one(s)))
         if recap:
             acts.append((f"Read its Session recap in {self.editor_name().split()[0]}", lambda: self.edit(recap["path"])))
@@ -352,6 +362,9 @@ class SessionsTab:
     def open_one(self, s):
         """Open a Session: in a new window (or jump to its window), or here when there's no terminal."""
         if self.resume_refused(s):
+            return None
+        if s.get("desktop"):  # never resumed here or in a window too, where Desktop already has it
+            self.msg = terminals.go_to_desktop(s)
             return None
         if not self.term:
             return s
@@ -430,8 +443,6 @@ class SessionsTab:
         return self.ask_project(s["name"], s["name"], made)
 
     def keys_sessions(self, k, rows):
-        if self.confirm:
-            return self.keys_confirm(k)
         if isinstance(k, tuple):
             _, mx, my, bstate = k
             if my == 2 and bstate & CLICK:
@@ -513,7 +524,7 @@ if Region:
                     continue
                 if kind_ == "h":
                     row = self.line()
-                    n = sum(group(s) == val for s in rows)
+                    n = sum(group(s, ui.wrapping) == val for s in rows)
                     label = f"{SECTIONS[val]} ({n}) "
                     row.put(2, label, curses.A_BOLD | (ui.ACCENT if val == 0 else 0))
                     row.rule(2 + len(label), w - len(label) - 4, ui.DIM)
@@ -558,7 +569,7 @@ if Region:
             if not rows or len(out) < 8:
                 return out
             s = rows[ui.sel]
-            kind = "open in a window" if s.get("attached") else {"interactive": "open in a window", "background": "background"}.get(s["kind"], "closed")
+            kind = "open in Claude Desktop" if s.get("desktop") else "open in a window" if s.get("attached") else {"interactive": "open in a window", "background": "background"}.get(s["kind"], "closed")
             started = f"{span(time.time() - s['started'])} ago · {kind}" if s.get("started") else kind
             warns, cleanup = ui.session_warnings(s)
             x = 3  # a warning sits in the panel's top edge, where it's seen first and covers nothing

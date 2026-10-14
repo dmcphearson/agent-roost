@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-VERSION = "2026.10.19"
+VERSION = "2026.10.20"
 TESTED_CLAUDE = "2.1.291"  # newest Claude Code release roost has been checked against
 AGENT_KEYS = {"id", "kind", "name", "pid", "sessionId", "state", "status"}  # fields roost reads
 LOG = Path.home() / ".cache" / "roost.log"
@@ -34,7 +34,7 @@ def log(message):
 def version_tuple(v):
     return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
 ROOST_HOME = Path.home() / ".roost"
-RECAPS = ROOST_HOME / "sessions"  # Session recaps: what a Session with no project leaves
+RECAPS = ROOST_HOME / "sessions"  # where Session recaps were before they were notes; move_recaps empties it
 NOTES = ROOST_HOME / "notes"     # the person's own notes, until one is moved into a project's notes/
 DONE = ROOST_HOME / "_done"      # close-out files of closed projects
 PLUGIN = ROOST_HOME / "plugin"   # roost's Claude Code plugin (dev-link.sh links it to a checkout)

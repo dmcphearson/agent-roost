@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026.10.20
+
+- **Session recaps are notes:** a recap is now a note tagged `recap` in `~/.roost/notes/`, shown on the Notes tab. Recaps in the old `~/.roost/sessions/` folder move there the first time roost runs. Starting a Session from a recap opens it in the recap's folder
+- **Wrapping up:** a Session whose Handoff or recap is being written shows in its own section at the bottom of the Sessions tab. Up to three summaries run at once
+- **Claude Desktop:** a Session open in Claude Desktop shows as "open in Desktop", and Enter switches to Desktop instead of saying its window wasn't found
+- **Copying text:** drag over text and it's copied when you let go of the mouse; ctrl+c copies a selection too. A double or triple click acts on a row and no longer selects a whole panel's text
+- **Clicks and boxes:** a triple-click acts once, a confirm box can be answered on any tab, and an error in an action shows as a box instead of closing roost
+- **Summaries:** if you edit a project's README while its summary runs, roost keeps your edit and leaves the README alone
+- **roost update** now updates Claude Code's copy of the plugin too, so Sessions get the new skills. Updating from 2026.10.19 runs the old update step, so run `roost update` once more afterward (roost reminds you at startup)
+- **roost adopt** archives a second adopt on the same day beside the first, and refuses a plan that moves two folders to one path
+- **Fixes:** a failed update says what's in place when it stops partway; pricing waits an hour before retrying a failed fetch; a recap marker can't point outside its project's `handoffs/`
+- **README** brought up to date, with screenshots; `roost --demo` has its own made-up categories and numbers
+
 ## 2026.10.19
 
 The first public release.

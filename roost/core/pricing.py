@@ -8,6 +8,7 @@ from roost.core import config
 PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md"
 PRICES = Path.home() / ".cache" / "roost-prices.json"
 PRICES_MAX_AGE = 86400  # fetch Anthropic's pricing page at most once a day
+PRICES_RETRY = 3600     # and after a failed fetch, try again only after an hour
 
 
 def model_ids(cell):
@@ -53,23 +54,29 @@ def parse_prices(md):
 
 def prices(now=None):
     """Anthropic's list prices: fetched from its pricing page at most once a day, else the copy
-    fetched last. {standard, fast, fetched}, or None when roost has never fetched them."""
+    fetched last. {standard, fast, fetched}, or None when roost has never fetched them. A failed
+    fetch is noted in the cache (failed_at), so the next try waits an hour."""
     now = now or time.time()
     try:
         cache = json.loads(PRICES.read_text())
     except (OSError, ValueError):
-        cache = None
-    if cache and now - cache.get("fetched", 0) < PRICES_MAX_AGE:
-        return cache
+        cache = {}
+    have = cache if cache.get("standard") else None
+    if have and now - cache.get("fetched", 0) < PRICES_MAX_AGE or now - cache.get("failed_at", -PRICES_RETRY) < PRICES_RETRY:
+        return have
     try:
         req = urllib.request.Request(PRICING_URL, headers={"User-Agent": f"roost/{config.VERSION}"})
         with urllib.request.urlopen(req, timeout=10) as r:
-            cache = dict(parse_prices(r.read().decode("utf-8", "replace")), fetched=now)
-        PRICES.parent.mkdir(parents=True, exist_ok=True)
-        PRICES.write_text(json.dumps(cache))
+            cache = have = dict(parse_prices(r.read().decode("utf-8", "replace")), fetched=now)
     except (OSError, ValueError) as e:
         config.log(f"prices: couldn't fetch {PRICING_URL}: {e}")
-    return cache
+        cache = dict(cache, failed_at=now)
+    try:
+        PRICES.parent.mkdir(parents=True, exist_ok=True)
+        PRICES.write_text(json.dumps(cache))
+    except OSError as e:
+        config.log(f"prices: couldn't write {PRICES}: {e}")
+    return have
 
 
 def reply_cost(model, u, table):
