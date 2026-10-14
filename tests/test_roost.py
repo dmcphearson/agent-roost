@@ -3285,6 +3285,24 @@ class TextualScreens(unittest.TestCase):
             self.run_app([self.keys("tab"), lambda pilot: pilot.click(offset=(10, 6), times=3)])
         self.assertEqual(len(ran), 1)
 
+    def test_a_double_or_triple_click_selects_no_text(self):
+        """Clicks act on rows; text is selected only by dragging over it, for cmd+c. The pilot's own
+        clicks don't name the widget under the mouse, which Textual's select-all needs, so these do."""
+        import unittest.mock
+        from textual import events
+        seen = []
+
+        async def clicks(pilot):
+            w, _ = pilot.app.get_widget_at(10, 6)
+            for chain in (2, 3):
+                pilot.app.screen.selections = {}
+                w.post_message(events.Click(w, 10, 6, 0, 0, 1, False, False, False, screen_x=10, screen_y=6, chain=chain))
+                await pilot.pause()
+                seen.append(dict(pilot.app.screen.selections))
+        with unittest.mock.patch.object(roost.UI, "session_actions", lambda ui, s: [("Open", lambda: None)]):
+            self.run_app([self.keys("tab"), clicks])
+        self.assertEqual(seen, [{}, {}])
+
     def test_a_right_click_opens_a_rows_actions(self):
         app = self.run_app([self.keys("tab"), lambda pilot: pilot.click(offset=(10, 6), button=3)])
         self.assertTrue(app.ui.choosing)

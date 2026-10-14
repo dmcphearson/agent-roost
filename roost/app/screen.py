@@ -17,6 +17,7 @@ from roost.core import config
 if Widget:
     from rich.style import Style
     from textual.app import App
+    from textual.screen import Screen
     from textual.containers import Horizontal, Vertical
     from textual.widgets import Input, Label
     from roost.app.widgets import AlertBox, ConfirmBox, HelpBox, KeyBar, Menu, Region, TooSmall, TopBar
@@ -156,6 +157,12 @@ if Widget:
                 if event.key == "escape":
                     self.app.press("escape")
 
+    class RoostScreen(Screen):
+        """The one screen. A double or triple click acts on a row, so it doesn't also select the whole
+        widget's text, as Textual does by default; dragging over text still selects it for cmd+c."""
+        def _select_all_in_widget(self, widget):
+            pass
+
     class RoostApp(App):
         """roost on Textual. Returns a Session to open in this terminal when there's no other, or None."""
         # the app's CSS, so it wins over the Textual widgets' own
@@ -181,6 +188,9 @@ if Widget:
             super().__init__(ansi_color=True)  # the frame is the terminal's own background, translucency and all
             self.ui = TextualUI(self, sessions, query)
             self.drawn, self.last_key, self.last_refresh = None, time.time(), time.time()
+
+        def get_default_screen(self):
+            return RoostScreen(id="_default")
 
         def compose(self):
             yield Keys()
