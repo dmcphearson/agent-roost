@@ -327,7 +327,7 @@ class SessionsTab:
         elif done:
             acts.append(("Start a fresh Session from its recap", lambda: self.start_from_recap(recap, s)))
         else:
-            label = "Go to its window" if in_window else "Open in a new window" if self.term else "Open here"
+            label = "Go to Claude Desktop" if s.get("desktop") else "Go to its window" if in_window else "Open in a new window" if self.term else "Open here"
             acts.append((label, lambda: self.open_one(s)))
         if recap:
             acts.append((f"Read its Session recap in {self.editor_name().split()[0]}", lambda: self.edit(recap["path"])))
@@ -362,6 +362,9 @@ class SessionsTab:
     def open_one(self, s):
         """Open a Session: in a new window (or jump to its window), or here when there's no terminal."""
         if self.resume_refused(s):
+            return None
+        if s.get("desktop"):  # never resumed here or in a window too, where Desktop already has it
+            self.msg = terminals.go_to_desktop(s)
             return None
         if not self.term:
             return s
@@ -566,7 +569,7 @@ if Region:
             if not rows or len(out) < 8:
                 return out
             s = rows[ui.sel]
-            kind = "open in a window" if s.get("attached") else {"interactive": "open in a window", "background": "background"}.get(s["kind"], "closed")
+            kind = "open in Claude Desktop" if s.get("desktop") else "open in a window" if s.get("attached") else {"interactive": "open in a window", "background": "background"}.get(s["kind"], "closed")
             started = f"{span(time.time() - s['started'])} ago · {kind}" if s.get("started") else kind
             warns, cleanup = ui.session_warnings(s)
             x = 3  # a warning sits in the panel's top edge, where it's seen first and covers nothing

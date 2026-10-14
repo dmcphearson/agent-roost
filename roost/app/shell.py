@@ -153,6 +153,8 @@ class Shell:
                 return self.mark("expiring", f"expires in {span(left)}", curses.A_BOLD)
         if state == "closed" and self.wrapped(s):
             return f"{self.MARKS['wrapped']} wrapped up", self.DIM
+        if s.get("desktop") and state not in ("busy", "waiting", "blocked"):
+            return f"{self.MARKS['idle']} open in Desktop", self.DIM
         key = {"busy": "working", "waiting": "input", "blocked": "input"}.get(state, state)
         if key in self.status:
             return self.mark(key, self.label(state))

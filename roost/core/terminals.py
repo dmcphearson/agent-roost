@@ -227,6 +227,8 @@ def window_command(cmd, title):
 
 def open_in_window(s, term):
     """Open the session in a new window of `term` without leaving roost. Returns a status message."""
+    if s.get("desktop"):
+        return go_to_desktop(s)
     t = TERMINALS[term]
     if s["kind"] == "interactive" or s.get("attached"):
         names = [n for n in {s["name"], s.get("ai_title")} if n]
@@ -239,6 +241,13 @@ def open_in_window(s, term):
         return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
     s["opening"] = time.time()
     return f"Opened {s['name']} in a new window"
+
+
+def go_to_desktop(s):
+    """Bring Claude Desktop forward, where s is open. Returns a status message."""
+    if osa('tell application "Claude" to activate') is None:
+        return f"{s['name']} is open in Claude Desktop, but Claude Desktop couldn't be brought forward"
+    return f"Switched to Claude Desktop, where {s['name']} is open"
 
 
 def open_session(s):

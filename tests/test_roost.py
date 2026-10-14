@@ -1393,6 +1393,31 @@ class StartingSessions(unittest.TestCase):
         finally:
             roost.open_in_window = saved
 
+    def test_a_session_open_in_claude_desktop_says_so_and_enter_goes_there(self):
+        """Claude Desktop runs its sessions with its own copy of claude, which `claude agents` lists as
+        interactive like a terminal's: roost tags it Desktop and Enter switches to the Desktop app."""
+        import subprocess, unittest.mock
+        ps = ("47108 /Users/x/Library/Application Support/Claude/claude-code/2.1.295/abc/claude.app/Contents/MacOS/claude --output-format stream-json\n"
+              " 5720 claude\n")
+        with unittest.mock.patch.object(roost.subprocess, "run",
+                                        lambda *a, **kw: subprocess.CompletedProcess(a, 0, ps, "")):
+            self.assertEqual(roost.desktop_pids([47108, 5720]), {47108})
+        live = {"d-id": {"sessionId": "d-id", "kind": "interactive", "status": "idle", "pid": 47108, "desktop": True}}
+        s = dict(session("Budget", state="closed", kind=None), id="d-id", ids=["d-id"])
+        roost.attach_live([s], live)
+        self.assertTrue(s["desktop"])
+        ui = self.ui()
+        ui.DIM, ui.status = 0, {}
+        ui.sessions = [s]
+        self.assertEqual(ui.status_cell(s)[0], "○ open in Desktop")
+        self.assertEqual(ui.session_actions(s)[0][0], "Go to Claude Desktop")
+        scripts = []
+        with unittest.mock.patch.object(roost, "osa", lambda script, *a: scripts.append(script) or ""):
+            self.assertEqual(roost.open_in_window(s, "ghostty"), "Switched to Claude Desktop, where Budget is open")
+            ui.term = None  # no terminal set: still never resumed here, where Desktop already has it
+            self.assertIsNone(ui.open_one(s))
+        self.assertEqual(scripts, ['tell application "Claude" to activate'] * 2)
+
     def test_stop_and_delete_are_actions_that_ask_first(self):
         self.project("p", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
         ui = self.ui()
