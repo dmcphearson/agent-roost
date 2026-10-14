@@ -2324,6 +2324,38 @@ class TranscriptSummary(unittest.TestCase):
         finally:
             roost.prices = saved
 
+    def test_a_summary_estimated_over_the_cap_runs_with_the_cap_raised(self):
+        """A run estimated over the cap would stop partway and lose what it spent, so that run's cap is
+        raised to the estimate plus a quarter, in whole dollars, and the box says so."""
+        ui = object.__new__(roost.UI)
+        ui.summaries, ui.msg, ui.confirm, ui.offer, ui.sessions = {}, "", None, None, []
+        ui.projects = [{"id": "printers", "sessions": [SID]}]
+        ui.YELLOW = 0
+        s = dict(session("Printer fix", kind=None, state="closed"), id=SID)
+        ran = []
+        saved = roost.summary_estimate, roost.summarize, roost.prices
+        roost.prices = lambda now=None: None
+        roost.summarize = lambda sid, model, cap, progress: ran.append(cap) or (self.folder / "handoffs" / "h.md", [], 0.4, False)
+        ui.refresh = lambda: None
+        try:
+            for est, cap in ((6.37, 8), (4.0, 5.0), (None, 5.0)):
+                roost.summary_estimate = lambda plan, model, table, est=est: est
+                ui.ask_summary(s)
+                said = " ".join(ui.confirm_text()[1])
+                if est == 6.37:
+                    self.assertIn("over the $5 cap, so this run is capped at $8", said)
+                else:
+                    self.assertIn("capped at $5.", said)
+                ui.keys_confirm("y")
+                for _ in range(100):
+                    if ui.summaries[SID]["state"] != "running":
+                        break
+                    time.sleep(0.01)
+                ui.summaries = {}
+            self.assertEqual(ran, [8, 5.0, 5.0])
+        finally:
+            roost.summary_estimate, roost.summarize, roost.prices = saved
+
     def test_the_key_refuses_working_and_window_sessions_and_stops_background_ones(self):
         ui = object.__new__(roost.UI)
         ui.summaries, ui.msg, ui.confirm, ui.offer, ui.sessions = {}, "", None, None, []

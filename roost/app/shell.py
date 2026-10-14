@@ -6,6 +6,7 @@ from roost.core.sessiondata import CACHE_WARN, cache_left, span, visible
 from roost.core.projectdata import clean_tags, label_of
 from roost.core.plugin import plugin_version
 from roost.core.formatting import clip, short, slug
+from roost.core.summaries import run_cap
 from roost.core import config
 from roost.core import sessiondata
 from roost.core import install
@@ -307,7 +308,9 @@ class Shell:
             cost = f"about ${est:.2f}" if est is not None else "cost unknown (no price list)"
             what = "Handoff and README update" if project else "Session recap (no project lists it)"
             return (f"Write {clip(c['name'], 40)}'s {what}?",
-                    [f"From its transcript: {cost} with {model}, capped at ${cap:g}."] + (["It's stopped first."] if c.get("attach") else []),
+                    [f"From its transcript: {cost} with {model}, " + (
+                        f"over the ${cap:g} cap, so this run is capped at ${run_cap(est, cap):g}." if run_cap(est, cap) != cap
+                        else f"capped at ${cap:g}.")] + (["It's stopped first."] if c.get("attach") else []),
                     "y to run · any other key cancels", self.YELLOW)
         if action == "stop":
             return (f"Stop {c['name']}?", (["It's working right now."] if c["state"] == "busy" else []) + ["Its history is kept."],

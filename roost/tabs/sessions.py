@@ -254,7 +254,8 @@ class SessionsTab:
                 config.log(f"stop {s['id'][:8]} for summary: {e}")
                 self.msg = f"Couldn't stop it first, so nothing ran: {e}"
                 return
-        model, cap = self.offer[:2]
+        model, cap, est = self.offer[:3]
+        cap = summaries.run_cap(est, cap)
         steps = 3 if self.offer[3] else 2  # draft and review, then the README rewrite for a project
         job = self.summaries[s["id"]] = {"state": "running", "text": "writing its Handoff from the transcript", "name": s["name"],
                                          "step": 0, "steps": steps, "started": time.time()}
