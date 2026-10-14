@@ -3328,6 +3328,33 @@ class TextualScreens(unittest.TestCase):
             self.run_app([self.keys("tab"), clicks])
         self.assertEqual(seen, [{}, {}])
 
+    def test_letting_go_after_a_drag_copies_the_text_and_ctrl_c_copies_it_too(self):
+        """Ghostty keeps cmd+c for its own selection, so roost copies what's dragged over as soon as the
+        mouse is let go; ctrl+c copies a selection too, and quits only when nothing is selected."""
+        import unittest.mock
+        from textual import events
+        copied, running = [], []
+
+        async def drag(pilot):
+            with unittest.mock.patch.object(type(pilot.app.screen), "get_selected_text", lambda screen: "Printer fix"):
+                pilot.app.screen.post_message(events.TextSelected())
+                await pilot.pause()
+                await pilot.press("ctrl+c")
+                running.append(pilot.app.is_running)
+            pilot.app.screen.post_message(events.TextSelected())  # a plain click: nothing selected, nothing copied
+            await pilot.pause()
+        with unittest.mock.patch.object(roost.UI, "clipboard", lambda ui, text: copied.append(text)):
+            app = self.run_app([drag])
+        self.assertEqual((copied, running), (["Printer fix", "Printer fix"], [True]))
+        self.assertEqual(app.ui.msg, "Copied the selected text")
+
+    def test_ctrl_c_with_nothing_selected_copies_nothing(self):
+        import unittest.mock
+        copied = []
+        with unittest.mock.patch.object(roost.UI, "clipboard", lambda ui, text: copied.append(text)):
+            app = self.run_app([self.keys("ctrl+c")])
+        self.assertEqual((copied, app.ui.msg), ([], ""))
+
     def test_a_right_click_opens_a_rows_actions(self):
         app = self.run_app([self.keys("tab"), lambda pilot: pilot.click(offset=(10, 6), button=3)])
         self.assertTrue(app.ui.choosing)

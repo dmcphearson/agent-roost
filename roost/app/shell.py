@@ -612,13 +612,21 @@ class Shell:
             pass
 
     def copy_id(self, s):
-        try:
-            subprocess.run(["pbcopy"], input=s["id"], text=True, timeout=5, check=True)
-            self.msg = f"Copied {s['id'][:8]}… to the clipboard"
-        except Exception as e:
-            config.log(f"copy id: {e}")
-            self.msg = f"Couldn't copy: {e}"
+        self.copy_text(s["id"], f"Copied {s['id'][:8]}… to the clipboard")
         return None
+
+    def copy_text(self, text, done):
+        """Put text on the clipboard and say done, or why it couldn't."""
+        try:
+            self.clipboard(text)
+            self.msg = done
+        except Exception as e:
+            config.log(f"copy: {e}")
+            self.msg = f"Couldn't copy: {e}"
+
+    @staticmethod
+    def clipboard(text):
+        subprocess.run(["pbcopy"], input=text, text=True, timeout=5, check=True)
 
     def show_in_finder(self, path, reveal=False):
         if path and os.path.exists(path):

@@ -97,6 +97,9 @@ if Widget:
         def on_key(self, event):
             event.stop()
             event.prevent_default()
+            if event.key == "ctrl+c" and self.screen.get_selected_text():  # copies a selection; quits without one
+                self.screen.copy_selection()
+                return
             self.app.press(event.character if event.is_printable and event.character else event.key)
 
     class Prompt(Vertical):
@@ -159,9 +162,18 @@ if Widget:
 
     class RoostScreen(Screen):
         """The one screen. A double or triple click acts on a row, so it doesn't also select the whole
-        widget's text, as Textual does by default; dragging over text still selects it for cmd+c."""
+        widget's text, as Textual does by default. Text dragged over is copied when the mouse is let go:
+        the terminal keeps cmd+c for its own selection, so it never reaches roost."""
         def _select_all_in_widget(self, widget):
             pass
+
+        def on_text_selected(self, event):
+            if self.get_selected_text():  # a plain click selects nothing
+                self.copy_selection()
+
+        def copy_selection(self):
+            self.app.ui.copy_text(self.get_selected_text(), "Copied the selected text")
+            self.app.redraw()
 
     class RoostApp(App):
         """roost on Textual. Returns a Session to open in this terminal when there's no other, or None."""
