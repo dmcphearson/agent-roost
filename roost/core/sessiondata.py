@@ -75,10 +75,30 @@ def check_compat():
         warning = compat_warning(ver, json.loads(raw or "[]"))
     except Exception as e:
         warning = f"Couldn't check Claude Code: {e}"
+    # a newer version alone changes nothing roost reads (Claude Code ships almost daily), so it's only logged,
+    # and only the first time roost sees that version
+    if " is newer than roost was tested with " in warning:
+        version = re.search(r"\d+\.\d+\.\d+", warning).group()
+        if version != logged_compat_version():
+            config.log(f"compat: {warning}")
+            try:
+                config.COMPAT_LOGGED.parent.mkdir(parents=True, exist_ok=True)
+                tmp = config.COMPAT_LOGGED.with_suffix(".tmp")
+                tmp.write_text(json.dumps({"version": version}))
+                os.replace(tmp, config.COMPAT_LOGGED)
+            except OSError:
+                pass  # like the log itself, this must never stop roost starting
+        return ""
     if warning:
         config.log(f"compat: {warning}")
-    # a newer version alone changes nothing roost reads (Claude Code ships almost daily), so it's only logged
-    return "" if " is newer than roost was tested with " in warning else warning
+    return warning
+
+
+def logged_compat_version():
+    try:
+        return json.loads(config.COMPAT_LOGGED.read_text()).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def stamp(iso):

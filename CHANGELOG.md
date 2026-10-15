@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Log:** the "Claude Code X is newer than roost was tested with" line is logged once per Claude Code version (kept in `~/.roost/compat-logged.json`), not on every launch
+
 ## 2026.10.21
 
 - **Notes tab:** notes are grouped into Backlog (tagged `backlog`), Recaps (tagged `recap`, folded until opened), and Notes. A note tagged both is under Backlog. Search matches a note's tags, so `/backlog` finds them
