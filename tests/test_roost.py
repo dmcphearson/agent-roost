@@ -2024,6 +2024,34 @@ class Handoffs(unittest.TestCase):
 
     # roost handoff
 
+    def test_a_session_two_places_list_has_no_owner(self):
+        """One project listing a Session owns its Handoffs; two (or a project and a recap) is refused, naming them."""
+        self.assertEqual(roost.owner([SID]), self.folder)
+        other = self.root / "toner"
+        (other / "handoffs").mkdir(parents=True)
+        (other / "README.md").write_text(f"---\nsummary: Toner\nsessions:\n  - name: Printer fix\n    id: {SID}\n---\n")
+        with self.assertRaises(ValueError) as e:
+            roost.owner([SID])
+        self.assertIn("printers", str(e.exception))
+        self.assertIn("toner", str(e.exception))
+        with self.assertRaises(ValueError):
+            self.handoff()
+        self.assertEqual(list((self.folder / "handoffs").iterdir()) + list((other / "handoffs").iterdir()), [])
+        (other / "README.md").write_text("---\nsummary: Toner\nsessions: []\n---\n")
+        roost.NOTES.mkdir(parents=True, exist_ok=True)
+        recap = roost.NOTES / "printer-fix.md"
+        recap.write_text(f"---\ntitle: Printer fix\nproject:\nsummary: Fixed\nsessions:\n  - name: Printer fix\n"
+                         f"    id: {SID}\ntags: [recap]\n---\n\n# Printer fix\n")
+        before = recap.read_text()
+        with self.assertRaises(ValueError) as e:
+            roost.owner([SID])
+        self.assertIn("printers", str(e.exception))
+        self.assertIn("printer-fix", str(e.exception))
+        with self.assertRaises(ValueError):
+            self.handoff()
+        self.assertEqual(list((self.folder / "handoffs").iterdir()), [])
+        self.assertEqual(recap.read_text(), before)
+
     def test_handoff_writes_facts_and_summary_and_never_overwrites(self):
         path, kinds = self.handoff(f"Fixed it. The key was ghp_{'a' * 36}.")
         self.assertEqual(path, self.folder / "handoffs" / "2026-10-09-1605-11111111.md")
@@ -2166,6 +2194,16 @@ class TranscriptSummary(unittest.TestCase):
         self.assertEqual([b for _, _, b in self.calls], [5.0, 4.0, 3.0])  # each call gets what's left of the cap
         self.assertIn("Old state", self.calls[2][1])  # the rewrite starts from the README body
         self.assertIn("[1] USER: go", self.calls[0][1])
+
+    def test_secrets_never_reach_the_readme_rewrite(self):
+        readme = self.folder / "README.md"
+        _, _, _, updated = self.run_summary([DRAFT, DRAFT, "# Printers\n\n## Current state\n\n"
+                                             "Fixed with AKIAABCDEFGHIJKLMNOP and token=s3cr3t-value.\n"])
+        self.assertTrue(updated)
+        text = readme.read_text()
+        self.assertIn("## Current state\n\nFixed with", text)
+        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", text)
+        self.assertNotIn("s3cr3t-value", text)
 
     def test_a_readme_edited_during_the_rewrite_keeps_the_edit(self):
         readme = self.folder / "README.md"
@@ -2495,6 +2533,17 @@ class SessionRecaps(unittest.TestCase):
         self.assertEqual((n["id"], n["sessions"], n["folder"]), ("printer-fix", [SID], "/w"))
         self.assertEqual(roost.owner([SID]), path)
 
+    def test_secrets_never_reach_a_recaps_summary(self):
+        """Given or taken from the first point, a new recap's summary line is redacted too."""
+        self.unlist()
+        path, _ = self.note(recap_summary="Fixed it with token=s3cr3t-value")
+        self.assertIn("Fixed it with", roost.frontmatter(path.read_text())["summary"])
+        self.assertNotIn("s3cr3t-value", path.read_text())
+        path.unlink()
+        path, _ = self.note("### What I did\n- Rotated AKIAABCDEFGHIJKLMNOP\n### Next\n- More")
+        self.assertIn("Rotated", roost.frontmatter(path.read_text())["summary"])
+        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", path.read_text())
+
     def test_a_later_handoff_is_added_at_the_end_and_covers_only_what_came_after(self):
         self.unlist()
         path, _ = self.note("### What I did\n- First part\n### Next\n- More", recap_summary="Printer fix")
@@ -2787,6 +2836,66 @@ class Adopt(unittest.TestCase):
             roost.apply_plan(self.old, bad)
         self.assertTrue((self.old / "export.csv").exists() and (self.old / "report.pdf").exists())
 
+    def test_a_move_onto_a_file_already_there_stops_the_plan(self):
+        bad = self.plan(PLAN_BODY.replace("`out/report.pdf`", "`notes.md`"))
+        self.assertIn("`notes.md` already exists", " ".join(roost.plan_problems(self.old, bad)))
+        with self.assertRaises(ValueError):
+            roost.apply_plan(self.old, bad)
+        self.assertEqual((self.old / "notes.md").read_text(), "Working notes.")  # never replaced
+        self.assertTrue((self.old / "report.pdf").exists())
+
+    def test_one_file_in_two_steps_stops_the_plan(self):
+        bad = self.plan(PLAN_BODY.replace("- `notes-backup.md`: an older copy", "- `export.csv`: an older copy"))
+        self.assertIn("`export.csv` is in more than one step", " ".join(roost.plan_problems(self.old, bad)))
+        with self.assertRaises(ValueError):
+            roost.apply_plan(self.old, bad)
+        self.assertTrue((self.old / "export.csv").exists())
+
+    def test_handoffs_and_the_archive_are_never_archived(self):
+        (self.old / "handoffs").mkdir()
+        (self.old / "handoffs" / "old.md").write_text("A Handoff.")
+        (self.old / "_archive" / "2026-01-01").mkdir(parents=True)
+        (self.old / "_archive" / "2026-01-01" / "notes.md").write_text("Archived.")
+        for rel in ("handoffs", "handoffs/old.md", "_archive", "_archive/2026-01-01/notes.md"):
+            bad = self.plan(PLAN_BODY.replace("`notes-backup.md`", f"`{rel}`"))
+            self.assertIn("never archived", " ".join(roost.plan_problems(self.old, bad)), rel)
+            with self.assertRaises(ValueError):
+                roost.apply_plan(self.old, bad)
+        self.assertEqual((self.old / "handoffs" / "old.md").read_text(), "A Handoff.")
+        self.assertEqual((self.old / "_archive" / "2026-01-01" / "notes.md").read_text(), "Archived.")
+
+    def test_a_name_another_plan_takes_is_not_free(self):
+        """In one roost adopt run, a name an earlier plan took can't be the rename or a split's name."""
+        plan = self.plan()
+        self.assertEqual(roost.plan_problems(self.old, plan, taken={"other-project"}), [])
+        self.assertIn("Rename: printer-rollout already exists",
+                      " ".join(roost.plan_problems(self.old, plan, taken={"printer-rollout"})))
+        self.assertIn("Split: badge-printers isn't a free project name",
+                      " ".join(roost.plan_problems(self.old, plan, taken={"badge-printers"})))
+
+    def test_a_bad_status_or_a_first_handoff_without_next_stops_the_plan(self):
+        bad = self.plan(PLAN_BODY.replace("## Status\nactive", "## Status\n**active** ✅"))
+        self.assertTrue([p for p in roost.plan_problems(self.old, bad) if p.startswith("Status")])
+        with self.assertRaises(ValueError):
+            roost.apply_plan(self.old, bad)
+        no_next = self.plan(PLAN_BODY.replace("### Next\n- Deploy to the second office\n", ""))
+        self.assertIn("First Handoff has no ### Next", " ".join(roost.plan_problems(self.old, no_next)))
+        with self.assertRaises(ValueError):
+            roost.apply_plan(self.old, no_next)
+        self.assertTrue((self.old / "HANDOFF.md").exists())  # nothing changed
+
+    def test_secrets_never_reach_the_new_readme_or_the_first_handoff(self):
+        key, value = "AKIAABCDEFGHIJKLMNOP", "s3cr3t-value"
+        body = (PLAN_BODY.replace("- Packaged the driver", f"- Packaged the driver with {key} and token={value}")
+                         .replace("Driver packaged;", f"Driver packaged with {key} and token={value};"))
+        new = roost.apply_plan(self.old, self.plan(body), today="2026-10-09")
+        [h] = (new / "handoffs").iterdir()
+        self.assertIn("Packaged the driver with", h.read_text())
+        self.assertIn("Driver packaged with", (new / "README.md").read_text())
+        for p in [p for p in new.rglob("*") if p.is_file()]:
+            self.assertNotIn(key, p.read_text(errors="replace"), p)
+            self.assertNotIn(value, p.read_text(errors="replace"), p)
+
     def test_applying_moves_archives_and_renames_and_deletes_nothing(self):
         before = len(self.files(self.old))
         new = roost.apply_plan(self.old, self.plan(), today="2026-10-09")
@@ -2980,6 +3089,15 @@ class Notes(unittest.TestCase):
         self.assertEqual(dest.read_text().count("project:"), 1)
         with self.assertRaises(ValueError):
             roost.file_note(roost.create_note("Idea"), folder)  # never replaces a note
+
+    def test_moving_a_note_with_no_project_line_adds_one(self):
+        roost.NOTES.mkdir(parents=True, exist_ok=True)
+        path = roost.NOTES / "plain.md"
+        path.write_text("---\ntitle: Plain\ntags: []\n---\n\n# Plain\n")
+        dest = roost.file_note(path, self.project("p"))
+        meta = roost.frontmatter(dest.read_text())
+        self.assertEqual((meta["project"], meta["title"]), ("p", "Plain"))
+        self.assertIn("# Plain", dest.read_text())
 
     def test_pickup_and_brief_take_a_notes_path(self):
         path = roost.create_note("Idea")
