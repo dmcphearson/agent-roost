@@ -24,6 +24,9 @@ LAST_MESSAGE_LINES = 4  # a Session's last message in the Projects panel
 SECTION_RULES = {"Recent": f"active in the last {RECENT_PROJECT_DAYS} days",
                  "Inactive": f"{RECENT_PROJECT_DAYS} days since last activity",
                  "Closed": "status closed, or closed out"}
+NOTE_SECTIONS = {"Backlog": "tagged backlog: ideas and maybe-projects",  # the Notes tab's, top to bottom
+                 "Recaps": "tagged recap: what a Session did, for a fresh one to pick up",
+                 "Notes": "everything else"}
 QUIT = object()  # what a key handler returns to close roost
 SAVE = object()  # the picker's Save row, when it ticks several
 
@@ -73,6 +76,7 @@ class Shell:
         self.folded, self.expanded = {"Inactive", "Closed"}, set()  # closed sections; projects showing their Sessions
         self.unwrapped = set()  # projects whose wrapped-up Sessions are showing
         self.nsel, self.ntop, self.nrow_y, self.nquery = 0, 0, {}, ""  # Notes: selection, scroll, rows, search
+        self.nfolded = {"Recaps"}  # the Notes tab's closed sections
         self.nreading, self.nscroll = False, 0  # Notes: reading the selected note's text, and how far down
         self.srange, self.sscroll, self.squery = 2, 0, ""  # Stats: the range (Month to date), scroll, project search
         self.corner, self.bar = None, None  # the tab's note at the top right, and its key bar (see key_bar)
@@ -429,7 +433,7 @@ class Shell:
             setattr(self, attr, text + k)
             self.sel = self.top = self.psel = self.ptop = 0
             if attr == "nquery":
-                self.nsel, self.ntop = 0, 0  # the first match
+                self.nsel, self.ntop = self.first_note(self.note_rows()), 0  # the first match
         return None
 
     def ask(self, prompt, text, done, verb="save", title=None):

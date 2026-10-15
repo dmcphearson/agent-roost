@@ -2956,7 +2956,7 @@ class Notes(unittest.TestCase):
     def ui(self):
         ui = Projects.ui(self)
         ui.term, ui.tab, ui.helping, ui.sel, ui.query, ui.warning = "ghostty", 2, False, 0, "", ""
-        ui.nsel, ui.ntop, ui.nrow_y, ui.nquery, ui.quit_anyway = 0, 0, {}, "", False
+        ui.nsel, ui.ntop, ui.nrow_y, ui.nquery, ui.quit_anyway, ui.nfolded = 0, 0, {}, "", False, {"Recaps"}
         ui.nreading, ui.nscroll, ui.npane, ui.nlist_w, ui.TABS = False, 0, (4, 40, 10, 40), 200, roost.UI.TABS
         ui.edited = []
         ui.edit = lambda path: ui.edited.append(path)  # no editor in tests
@@ -3065,17 +3065,47 @@ class Notes(unittest.TestCase):
         ui = self.ui()
         self.assertEqual([r["id"] for r in ui.note_rows()][-1], "+ New note")  # last, under the notes
         ui.nquery = "lapt"
-        self.assertEqual([r["name"] for r in ui.note_rows()[:-1]], ["Laptop budget"])
+        self.assertEqual([r["name"] for r in ui.note_rows() if r.get("path")], ["Laptop budget"])
         ui.nquery = ""
         ui.nsel = len(ui.note_rows()) - 1
         ui.keys_notes("enter", ui.note_rows())  # enter on + New note
         self.assertEqual(ui.asking["title"], "New note: its title")
 
+    def test_the_notes_search_matches_tags(self):
+        roost.set_tags(roost.create_note("Laptop budget"), ["backlog"])
+        roost.create_note("Printer idea")
+        ui = self.ui()
+        ui.nquery = "backlog"
+        self.assertEqual([r["name"] for r in ui.note_rows() if r.get("path")], ["Laptop budget"])
+
+    def test_notes_are_listed_as_backlog_recaps_then_notes_with_recaps_folded(self):
+        roost.create_note("Plain idea")
+        roost.set_tags(roost.create_note("Maybe a project"), ["backlog"])
+        roost.set_tags(roost.create_note("Both"), ["recap", "backlog"])  # backlog wins
+        roost.set_tags(roost.create_note("A recap"), ["recap"])
+        ui = self.ui()
+        shape = lambda: [r.get("head") and f"{r['head']} ({r['count']})" or r.get("name") or r["id"] for r in ui.note_rows()]
+        self.assertEqual(shape(), ["Backlog (2)", "Both", "Maybe a project", "Recaps (1)", "Notes (1)", "Plain idea", "+ New note"])
+        ui.nsel = 3
+        ui.keys_notes("enter", ui.note_rows())  # enter on a header opens it
+        self.assertIn("A recap", shape())
+        ui.keys_notes("left", ui.note_rows())  # ← closes it
+        self.assertNotIn("A recap", shape())
+        ui.keys_notes("right", ui.note_rows())  # → opens it
+        self.assertIn("A recap", shape())
+        ui.nsel = 0
+        ui.keys_notes("enter", ui.note_rows())
+        self.assertEqual(shape()[:2], ["Backlog (2)", "Recaps (1)"])
+        ui.nquery = "recap"  # a search opens every section
+        self.assertEqual(shape(), ["Backlog (1)", "Both", "Recaps (1)", "A recap", "+ New note"])
+        ui.nquery, ui.nsel = "", 0
+        self.assertEqual(ui.note_facts(ui.note_rows()[0])[0][0][0], "Section")
+
     def test_making_a_project_from_a_note(self):
         ui = self.ui()
         roost.create_note("Printer rollout")
         ui.load_projects()
-        ui.nsel = 0
+        ui.nsel = 1  # the first note, under its header
         act(ui, lambda k, rows: ui.keys_notes(k, ui.note_rows()), None, "Make it a project")
         self.assertEqual(ui.asking["text"], "Printer rollout")  # its name, then its folder, then its summary
         typed(ui, "\n")
@@ -3089,12 +3119,12 @@ class Notes(unittest.TestCase):
         path.write_text(path.read_text() + "- a list item long enough to wrap onto a second line here\n")
         ui = self.ui()
         ui.load_projects()
-        ui.nsel = 0
+        ui.nsel = 1
         rows = ui.note_rows()
         ui.keys_notes("right", rows)
         self.assertTrue(ui.nreading)
         ui.keys_notes("down", rows)
-        self.assertEqual((ui.nsel, ui.nscroll), (0, 1))  # ↓ scrolls the text, not the list
+        self.assertEqual((ui.nsel, ui.nscroll), (1, 1))  # ↓ scrolls the text, not the list
         ui.keys_notes("left", rows)
         self.assertFalse(ui.nreading)
         ui.nreading = True
@@ -3139,7 +3169,7 @@ class Notes(unittest.TestCase):
         ui = self.ui()
         roost.create_note("Idea")
         ui.load_projects()
-        ui.nsel = 0
+        ui.nsel = 1
         keys = lambda k, rows: ui.keys_notes(k, ui.note_rows())
         self.assertEqual(labels(ui, keys, None)[1:], ["Start a Session from it", "Make it a project…", "Edit its tags…",
                                                       "Show it in Finder", "Delete to the Trash…"])
@@ -3151,7 +3181,7 @@ class Notes(unittest.TestCase):
         self.assertTrue((self.root / "p" / "notes" / "idea.md").exists())
         roost.create_note("Another")
         ui.load_projects()
-        ui.nsel = 0
+        ui.nsel = 1
         act(ui, keys, None, "Delete to the Trash")
         ui.keys_confirm("y")
         self.assertEqual((len(self.trashed), ui.note_rows()[1:]), (1, []))

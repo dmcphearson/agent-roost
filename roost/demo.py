@@ -166,7 +166,7 @@ DEMO_NOTES = [  # title, project or None, tags, body, hours since the last edit
     ("Firewall clean-up order", "2026-10-network-hardening", ["network"],
      "1. Rules that allow any source\n2. Rules with no traffic in 90 days\n3. Duplicates\n\n"
      "Export before each batch:\n\n```\nfw export --format csv > rules-$(date +%F).csv\n```", 30),
-    ("Ideas for next quarter", None, [],
+    ("Ideas for next quarter", None, ["backlog"],
      "- A self-serve page for software requests\n- Retire the old VPN once everyone is on the new one\n"
      "- Quarterly *lunch and learn* on phishing", 24 * 4),
     ("Backup drill notes", "2026-09-backup-restore-drill", ["backups", "dr"],
