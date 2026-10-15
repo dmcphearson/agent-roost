@@ -515,18 +515,58 @@ def in_view(s, view, keep=()):
 
 
 def matches(s, query):
+    """Every word of the search is in the Session's name, summary, folder, or files; a word
+    project:<id> instead matches exactly the Sessions that project lists (its Show its Sessions)."""
     if not query:
         return True
     hay = " ".join([s["name"], s["summary"], short(s["cwd"]), *s["files"]]).lower()
-    return all(q in hay for q in query.lower().split())
+    words = query.lower().split()
+    projects = [w[len("project:"):] for w in words if w.startswith("project:")]
+    return all(p in [x.lower() for x in s.get("projids") or []] for p in projects) \
+        and all(q in hay for q in words if not q.startswith("project:"))
 
 
-SECTIONS = ["Open", "Pinned", "Background", "Closed", "Wrapping up"]
+_dismissed = (None, None, frozenset())  # path, mtime, ids: read again only when the file changes
+
+
+def read_dismissed():
+    """The ids of the Sessions the person dismissed (config.DISMISSED); none when it's missing or unreadable."""
+    global _dismissed
+    path = config.DISMISSED
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return frozenset()
+    if _dismissed[:2] != (path, mtime):
+        try:
+            ids = json.loads(path.read_text())
+        except (OSError, ValueError):
+            ids = []
+        _dismissed = (path, mtime, frozenset(i for i in ids if isinstance(i, str)) if isinstance(ids, list) else frozenset())
+    return _dismissed[2]
+
+
+def set_dismissed(sid, on=True):
+    """Dismiss the Session sid, or with on False take that back. Only roost's own list changes:
+    never the transcript, and never a project's README."""
+    ids = set(read_dismissed())
+    (ids.add if on else ids.discard)(sid)
+    config.DISMISSED.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config.DISMISSED.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(ids)))
+    os.replace(tmp, config.DISMISSED)
+    global _dismissed
+    _dismissed = (config.DISMISSED, config.DISMISSED.stat().st_mtime, frozenset(ids))
+
+
+SECTIONS = ["Open", "Pinned", "Background", "Closed", "Wrapping up", "Dismissed"]
 
 
 def group(s, keep=()):
     """Section index: open in a window, then pinned, then other background, then closed, then the
-    Sessions in keep, whose Handoff or recap roost is writing now."""
+    Sessions in keep, whose Handoff or recap roost is writing now, then the dismissed ones."""
+    if s.get("dismissed"):
+        return 5
     if s.get("id") in keep:
         return 4
     if s["kind"] == "interactive" or s["state"] == "opening" or s.get("attached"):

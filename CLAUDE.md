@@ -27,6 +27,13 @@ A Python 3 package, `roost/`, started by `bin/roost` (a small launcher). Its com
 
 `~/.roost/venv/bin/python -m unittest discover -s tests < /dev/null` uses demo data and temp paths (plain `python3` skips the Textual tests; `< /dev/null` because `roost note` reads stdin). For UI changes, `roost --demo` gives a safe live view. Never test against real sessions by piping input into roost.
 
+### Red, then green
+
+- New behavior and bug fixes get their tests from the `test-writer` agent (`.claude/agents/test-writer.md`) first, and those tests are shown failing before the change is made.
+- The agent implementing a change doesn't write or edit tests. A test written or loosened so one's own work passes is a failure, whatever else it does: it ships a product that doesn't work.
+- Changing or removing an existing assertion needs a reason tied to an intended behavior change, stated in the commit message.
+- A test that can't fail (no assertion, or one that checks only its own mocks) doesn't count as a test.
+
 ## Versioning and release
 
 Calendar versions, `YYYY.MM.XX`, in `VERSION` in `roost/core/config.py` and `version` in `plugin/.claude-plugin/plugin.json` (a test fails if they differ). Note changes in `CHANGELOG.md`. A release is a GitHub release (not just a tag) on main: `install.sh` and `roost update` read the latest one with curl, put its `roost/` and `bin/roost` in `~/.roost/app/<version>`, and copy the launcher to `~/.local/bin/roost`. The Homebrew formula lives in `dmcphearson/homebrew-tap` (`Formula/roost.rb`); after a release, update its `url` and `sha256`, and its Textual resources if `TEXTUAL` changed. roost must keep running on the macOS system Python 3.9.

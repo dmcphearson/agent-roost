@@ -6,6 +6,7 @@ from roost.core.sessiondata import CACHE_WARN, cache_left, span, visible
 from roost.core.projectdata import clean_tags, label_of
 from roost.core.plugin import plugin_version
 from roost.core.formatting import clip, short, slug
+from roost.core.summaries import run_cap
 from roost.core import config
 from roost.core import sessiondata
 from roost.core import install
@@ -23,6 +24,9 @@ LAST_MESSAGE_LINES = 4  # a Session's last message in the Projects panel
 SECTION_RULES = {"Recent": f"active in the last {RECENT_PROJECT_DAYS} days",
                  "Inactive": f"{RECENT_PROJECT_DAYS} days since last activity",
                  "Closed": "status closed, or closed out"}
+NOTE_SECTIONS = {"Backlog": "tagged backlog: ideas and maybe-projects",  # the Notes tab's, top to bottom
+                 "Recaps": "tagged recap: what a Session did, for a fresh one to pick up",
+                 "Notes": "everything else"}
 QUIT = object()  # what a key handler returns to close roost
 SAVE = object()  # the picker's Save row, when it ticks several
 
@@ -45,7 +49,7 @@ def start_tab(names):
     return names.index(last) if last in names else 0
 FAILED = re.compile(r"^(Couldn't|Can't|No editor found|Its folder no longer exists|Summary of .+ failed|Handoffs for .+ stopped)")
 REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|\d summaries are running|Its summary is already running|That's .+ work:|"
-                     r"It's wrapped up:|No Sessions list this project|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
+                     r"It's wrapped up:|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
 
 
 class Shell:
@@ -69,9 +73,9 @@ class Shell:
         self.tab = names.index("Sessions") if query else start_tab(names)  # a search is for Sessions
         self.psel, self.ptop, self.prow_y = 0, 0, {}
         self.pquery = ""  # the Projects tab's search
-        self.folded, self.expanded = {"Inactive", "Closed"}, set()  # closed sections; projects showing their Sessions
-        self.unwrapped = set()  # projects whose wrapped-up Sessions are showing
+        self.folded = {"Inactive", "Closed"}  # closed sections
         self.nsel, self.ntop, self.nrow_y, self.nquery = 0, 0, {}, ""  # Notes: selection, scroll, rows, search
+        self.nfolded = {"Recaps"}  # the Notes tab's closed sections
         self.nreading, self.nscroll = False, 0  # Notes: reading the selected note's text, and how far down
         self.srange, self.sscroll, self.squery = 2, 0, ""  # Stats: the range (Month to date), scroll, project search
         self.corner, self.bar = None, None  # the tab's note at the top right, and its key bar (see key_bar)
@@ -151,6 +155,8 @@ class Shell:
                 return self.mark("expired", "cache expired")
             if left <= CACHE_WARN:
                 return self.mark("expiring", f"expires in {span(left)}", curses.A_BOLD)
+        if state == "closed" and s["id"] in sessiondata.read_dismissed():
+            return f"{self.MARKS['closed']} dismissed", self.DIM
         if state == "closed" and self.wrapped(s):
             return f"{self.MARKS['wrapped']} wrapped up", self.DIM
         if s.get("desktop") and state not in ("busy", "waiting", "blocked"):
@@ -307,7 +313,9 @@ class Shell:
             cost = f"about ${est:.2f}" if est is not None else "cost unknown (no price list)"
             what = "Handoff and README update" if project else "Session recap (no project lists it)"
             return (f"Write {clip(c['name'], 40)}'s {what}?",
-                    [f"From its transcript: {cost} with {model}, capped at ${cap:g}."] + (["It's stopped first."] if c.get("attach") else []),
+                    [f"From its transcript: {cost} with {model}, " + (
+                        f"over the ${cap:g} cap, so this run is capped at ${run_cap(est, cap):g}." if run_cap(est, cap) != cap
+                        else f"capped at ${cap:g}.")] + (["It's stopped first."] if c.get("attach") else []),
                     "y to run · any other key cancels", self.YELLOW)
         if action == "stop":
             return (f"Stop {c['name']}?", (["It's working right now."] if c["state"] == "busy" else []) + ["Its history is kept."],
@@ -426,7 +434,7 @@ class Shell:
             setattr(self, attr, text + k)
             self.sel = self.top = self.psel = self.ptop = 0
             if attr == "nquery":
-                self.nsel, self.ntop = 0, 0  # the first match
+                self.nsel, self.ntop = self.first_note(self.note_rows()), 0  # the first match
         return None
 
     def ask(self, prompt, text, done, verb="save", title=None):

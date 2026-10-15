@@ -4,7 +4,7 @@ A terminal session manager for Claude Code. When you have a dozen or more Claude
 
 Roost is a session manager, not an orchestrator. It never sends work to a session on its own.
 
-![The Projects tab: projects by section, each with its Sessions, status, category, and tags](assets/projects.png)
+![The Projects tab: projects by section, each with its status, running Sessions, category, and tags](assets/projects.png)
 
 <p>
   <img src="assets/sessions.png" width="32%" alt="The Sessions tab: running Sessions grouped into Open, Pinned, and Background">
@@ -67,6 +67,8 @@ Tabs: **Running**, **Recently closed** (last 3 hours), **Closed**, **Stale**, an
 - **Pinned**: running in the background and never closed for being idle
 - **Background**: running in the background; Claude Code closes these after about an hour idle
 
+Closed sessions come after them, and **Dismissed** ones last: a closed session you don't plan to wrap up can be dismissed from its actions, and Undismiss brings it back. Dismissing changes nothing but roost's list (`~/.roost/dismissed.json`): the transcript and the project's README stay as they are.
+
 ### Keys
 
 The keys are the same on every tab. Everything you can do to a row is in its actions.
@@ -76,7 +78,7 @@ The keys are the same on every tab. Everything you can do to a row is in its act
 | ↑ ↓ | Move |
 | Page Up, Page Down / Option+↑ ↓ | Move a screen |
 | Home / End | Top / bottom |
-| ← → | Sessions: switch views (Running, Recently closed, Closed, Stale, All) · Projects: open or close a section or a project's Sessions · Notes: read the note |
+| ← → | Sessions: switch views (Running, Recently closed, Closed, Stale, All) · Projects: open or close a section · Notes: read the note |
 | Enter / right-click | Open the selected row's actions |
 | Double-click | Run the row's first action: open a Session, start one for a project, or edit a note |
 | / | Search the current tab |
@@ -86,11 +88,11 @@ The keys are the same on every tab. Everything you can do to a row is in its act
 | ? | Show the keys |
 | Ctrl+q | Quit (a plain q does nothing) |
 
-**A Session's actions:** Open (or go to its window), New project from this Session, Add to a project (or move to another), Write its Handoff or Session recap from the transcript (shows the cost first), Pin or Unpin (on a closed one, restart it in the background, pinned), Rename, Stop or Delete to the Trash (both ask first), Copy its id, and Show its folder in Finder. A closed Session a project lists isn't reopened; its first action starts a fresh Session for the project.
+**A Session's actions:** Open (or go to its window), New project from this Session, Add to a project (or move to another), Write its Handoff or Session recap from the transcript (shows the cost first), Pin or Unpin (on a closed one, restart it in the background, pinned), Rename, Dismiss or Undismiss (a closed one), Stop or Delete to the Trash (both ask first), Copy its id, and Show its folder in Finder. A closed Session a project lists isn't reopened; its first action starts a fresh Session for the project.
 
-**A project's actions:** Start a Session, Show or hide its Sessions, Set its category, Edit its tags, Show its folder in Finder, clear an old `_archive/` from roost adopt, and New project. **+ New project**, at the bottom of the list, makes one too.
+**A project's actions:** Start a Session, Show its Sessions (the Sessions tab, on All, searching `project:<its id>`; esc clears it), Set its category, Edit its tags, Show its folder in Finder, clear an old `_archive/` from roost adopt, and New project. **+ New project**, at the bottom of the list, makes one too.
 
-A project has one category (what kind of work it is), its README's `category:` line, and any number of tags (what it's about), its `tags: [a, b]` list. Set its category lists the categories in `CATEGORIES.md` in your Projects folder, one `- name: what it covers` line each, plus any other a project uses; a new one you type joins the list. Edit its tags ticks tags from every tag already in use, or adds a new one. Sessions no project lists are on the Sessions tab. A Session recap (what `/wrap-up` writes for a Session no project lists) shows in its Session's panel, and the Session's actions can read it or make it a project.
+A project has one category (what kind of work it is), its README's `category:` line, and any number of tags (what it's about), its `tags: [a, b]` list. Set its category lists the categories in `CATEGORIES.md` in your Projects folder, one `- name: what it covers` line each, plus any other a project uses; a new one you type joins the list. Edit its tags ticks tags from every tag already in use, or adds a new one. Sessions are listed only on the Sessions tab. A project's SESSIONS column counts its running ones (◆ need input · ● working · ○ idle), then its unwrapped ones: closed, with no Handoff covering their last message, and not dismissed. A Session recap (what `/wrap-up` writes for a Session no project lists) shows in its Session's panel, and the Session's actions can read it or make it a project.
 
 ### Notes
 

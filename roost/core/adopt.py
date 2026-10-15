@@ -175,8 +175,8 @@ def plan_problems(folder, plan, taken=()):
         out.append(f"Rename: {name} already exists (or another plan takes it): give it another name")
     if not plan["summary"]:
         out.append("Summary is empty")
-    if plan["status"] and not re.fullmatch(r"[a-z][a-z0-9 -]{0,39}", plan["status"]):
-        out.append(f"Status {plan['status']!r} isn't a few lowercase words")
+    if plan["status"] and not re.fullmatch(r"[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)?", plan["status"]):
+        out.append(f"Status {plan['status']!r} isn't one or two lowercase words")
     if not plan["readme"] or "## Current state" not in plan["readme"]:
         out.append("README has no ## Current state section")
     dests = set()
@@ -186,6 +186,8 @@ def plan_problems(folder, plan, taken=()):
             out.append(f"Move: `{a}` isn't a file in the folder")
         if dst is None or (dst.exists() and dst != src):
             out.append(f"Move: `{b}` already exists or is outside the folder")
+        elif Path(b).parts and Path(b).parts[0] in ("handoffs", "_archive"):  # the apply writes there first
+            out.append(f"Move: `{b}` is in {Path(b).parts[0]}/, which only roost writes to")
         elif dst in dests:  # the second rename would replace the first file
             out.append(f"Move: `{b}` is the destination of more than one Move")
         dests.add(dst)
@@ -364,7 +366,7 @@ def adopt_command(args):
     if ask(f"Plan {len(folders)} project{'s' if len(folders) != 1 else ''}? [y/N] ") != "y":
         print("Nothing ran.")
         return 0
-    taken = set()
+    claimed = {}  # folder -> the names its plan takes, once shown: a skipped plan keeps them for the run
     for i, (f, text, _, _) in enumerate(rows, 1):
         saved = config.ADOPT_PLANS / f"{f.name}.md"
         if text is not None:
@@ -380,7 +382,8 @@ def adopt_command(args):
         while True:
             plan = parse_plan(saved.read_text(errors="replace"))
             print("\n" + saved.read_text(errors="replace").rstrip())
-            problems = plan_problems(f, plan, taken)
+            claimed[f.name] = {n for n in [plan["rename"], *(new for _, new, _ in plan["split"])] if n and n != f.name}
+            problems = plan_problems(f, plan, set().union(*(v for k, v in claimed.items() if k != f.name)))
             for p in problems:
                 print(f"  ⚠ {p}")
             choice = ask(f"\n{f.name}: a apply · e edit · s skip · q stop here: ")
@@ -399,7 +402,6 @@ def adopt_command(args):
                     print(f"  Couldn't apply it: {e}. Check {short(str(f))}: steps before the failure are done, "
                           "and anything they replaced is in its _archive/.")
                     break
-                taken.add(plan["rename"])
                 saved.unlink()
                 print(f"  Applied: {short(str(new))}" + (f" (renamed from {f.name})" if new != f else "")
                       + f". Replaced files are in {short(str(new / '_archive'))}.")

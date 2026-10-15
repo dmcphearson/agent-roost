@@ -1,5 +1,5 @@
 """The summary from a transcript: the model calls that write a Handoff."""
-import json, os, re, subprocess, threading
+import json, math, os, re, subprocess, threading
 from pathlib import Path
 
 from roost.core.sessiondata import parse
@@ -127,6 +127,12 @@ often wrote it last. Edit it in place; don't rewrite it.
 === HANDOFF SUMMARY ===
 %s
 """
+
+
+def run_cap(est, cap):
+    """The cap for one run: the configured one, or, when the estimate is over it, the estimate plus a
+    quarter in whole dollars, since a run that hits its cap stops partway and loses what it spent."""
+    return cap if est is None or est <= cap else math.ceil(est * 1.25)
 
 
 def summary_settings():

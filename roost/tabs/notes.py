@@ -6,7 +6,7 @@ from roost.core.config import HOME
 from roost.core.projectdata import plural, worked
 from roost.core.notedata import at_end, create_note, editor
 from roost.core.formatting import clip, short, worked_short
-from roost.app.shell import BAR_KEYS, CLICK, NOTE_READ_KEYS
+from roost.app.shell import BAR_KEYS, CLICK, NOTE_READ_KEYS, NOTE_SECTIONS
 from roost.app.widgets import Widget
 from roost.core import config
 from roost.core import projectdata
@@ -26,11 +26,36 @@ class NotesTab:
 
     # ---------- the Notes tab ----------
 
+    @staticmethod
+    def note_section(n):
+        """Backlog for a note tagged backlog (even if it's also a recap), Recaps for a recap, else Notes."""
+        tags = {t.lower() for t in n.get("tags") or []}
+        return "Backlog" if "backlog" in tags else "Recaps" if projectdata.RECAP_TAG in tags else "Notes"
+
     def note_rows(self):
-        """What the Notes tab lists: the notes the search (/) matches, newest edit first, then + New note."""
+        """What the Notes tab lists: a header for each section with anything in it (Backlog, Recaps, then
+        Notes), then unless it's folded its notes, newest edit first; then + New note. Recaps start folded.
+        A search (/) keeps the notes whose name, summary, project, or tags hold it, unfolded."""
         q = self.nquery.lower()
-        hit = lambda n: not q or any(q in (n.get(f) or "").lower() for f in ("name", "id", "summary", "project"))
-        return [n for n in self.notes or [] if hit(n)] + [{"id": "+ New note", "new": True}]
+        hit = lambda n: not q or any(q in (n.get(f) or "").lower() for f in ("name", "id", "summary", "project")) \
+            or any(q in t.lower() for t in n.get("tags") or [])
+        notes, rows = [n for n in self.notes or [] if hit(n)], []
+        for sec in NOTE_SECTIONS:
+            items = [n for n in notes if self.note_section(n) == sec]
+            if items:
+                rows.append({"id": sec, "head": sec, "count": len(items)})
+                rows += [] if sec in self.nfolded and not q else items
+        return rows + [{"id": "+ New note", "new": True}]
+
+    @staticmethod
+    def first_note(rows):
+        """Where the Notes tab's selection starts: the first note, under its section's header."""
+        return next((i for i, r in enumerate(rows) if r.get("path")), 0)
+
+    def fold_notes(self, sec, open_=None):
+        """Open or close a Notes section; open_ None flips it."""
+        shut = sec in self.nfolded if open_ is None else open_
+        (self.nfolded.discard if shut else self.nfolded.add)(sec)
 
     def select_note(self, path):
         paths = [n.get("path") for n in self.note_rows()]
@@ -47,11 +72,13 @@ class NotesTab:
         (Notes / its title), its Markdown, then its facts in two columns under a rule. In a window under
         120 columns, the card goes under the list. → moves into the card to scroll it; ← or esc moves back."""
         rows = self.nrows = self.note_rows()
+        if not getattr(self, "nstarted", False):  # the tab opens on its first note, not a header
+            self.nstarted, self.nsel = True, self.first_note(rows)
         self.nsel = max(0, min(self.nsel, len(rows) - 1))
         if getattr(self, "nlast", None) != self.nsel:
             self.nlast, self.nscroll = self.nsel, 0  # a newly selected note opens at its top
         r = rows[self.nsel]
-        reading = self.nreading and not r.get("new")
+        reading = self.nreading and not r.get("new") and not r.get("head")
         self.corner = (plural(len(self.notes or []), "note"), self.DIM)
         self.subhead = (f"folder {short(str(config.NOTES))}", self.DIM)
         self.key_bar(NOTE_READ_KEYS if reading else BAR_KEYS.replace("←→ views", "→ read"), self.msg or self.warning,
@@ -62,6 +89,8 @@ class NotesTab:
         """The card's footer: two columns of labeled facts."""
         if r.get("new"):
             return [("Folder", short(str(config.NOTES)))], [("Opens in", self.editor_name())]
+        if r.get("head"):
+            return [("Section", f"{r['head']}: {NOTE_SECTIONS[r['head']]}")], [("", "enter or a click opens or closes it")]
         left = [("Tags", ", ".join(r["tags"]) or "none"), ("File", short(r["path"]))]
         right = [("Created", r["created"]), ("Edited", worked(r["last"]))]
         if r["sessions"]:
@@ -70,6 +99,8 @@ class NotesTab:
 
     NOTES_HELP = [
         ("Where", "your scratchpad: Markdown files in ~/.roost/notes; moving one into a project takes it off this tab"),
+        ("Sections", "Backlog (tagged backlog), Recaps (tagged recap, folded until opened), then Notes · enter, a click, or →← opens and closes one"),
+        ("Search", "/ matches a note's title, summary, project, or tags, so /backlog finds the backlog"),
         ("Reading", "→ or a click on the text moves into it to scroll · ← or esc moves back to the list"),
         ("Editor", "the editor setting, else $VISUAL, else $EDITOR, else micro; editor_wait says whether roost waits"),
     ]
@@ -196,12 +227,16 @@ class NotesTab:
                     self.nsel, self.nreading = idx, False
                 if how and rows[idx].get("new"):  # + New note works like a button
                     return self.new_note()
+                if rows[idx].get("head"):
+                    if how in ("click", "double"):  # a header opens or closes with one click
+                        self.fold_notes(rows[idx]["head"])
+                    return None
                 if how == "menu":
                     return self.menu(rows[idx]["name"], self.note_actions(rows[idx]))
                 if how == "double":
                     return self.note_actions(rows[idx])[0][1]()
             elif k[3] & CLICK and self.npane[0] <= k[2] < self.npane[0] + self.npane[2] \
-                    and self.npane[1] <= k[1] and r and not r.get("new"):
+                    and self.npane[1] <= k[1] and r and not r.get("new") and not r.get("head"):
                 self.nreading = True  # a click on the text moves into it
             return None
         if self.nreading:
@@ -218,6 +253,9 @@ class NotesTab:
         to = self.move(k, self.nsel, len(rows))
         if to is not None:
             self.nsel = to
+        elif r and r.get("head"):
+            if k in ("enter", "left", "right"):
+                self.fold_notes(r["head"], None if k == "enter" else k == "right")
         elif k == "right" and r and not r.get("new"):
             self.nreading = True
         elif k == "enter":
@@ -228,6 +266,8 @@ class NotesTab:
 if Region:
     def note_markdown(r):
         """What the reading card shows for a row: the note's Markdown, a line break where the file has one."""
+        if r.get("head"):
+            return f"*{r['head']}: {NOTE_SECTIONS[r['head']]}. Enter, a click, or → and ← open and close it.*"
         if r.get("new"):
             return "*Give a new note a title, and roost opens it in your editor. Ctrl+n does the same from any tab, " \
                    "and in a Session, /roost:note saves an idea here.*"
@@ -252,13 +292,13 @@ if Region:
         return md
 
     class NoteList(Region):
-        """The notes, newest edit first, then + New note."""
+        """The sections and their notes, newest edit first, then + New note."""
         def lines(self):
             ui, w, y0 = self.ui, self.size.width, self.region.y
             rows = getattr(ui, "nrows", [])
             if not rows:
                 return []
-            reading = ui.nreading and not rows[ui.nsel].get("new")
+            reading = ui.nreading and not rows[ui.nsel].get("new") and not rows[ui.nsel].get("head")
             list_w = w - 1 if self.has_class("side") else w - 2
             page = ui.page = max(self.size.height - (1 if self.has_class("side") else 0), 1)
             if ui.nsel < ui.ntop:
@@ -278,6 +318,12 @@ if Region:
                 if n.get("new"):
                     row.put(3, "+ New note", look(ui.ACCENT | (curses.A_BOLD if hl else 0)))
                     row.put(list_w - len("ctrl+n"), "ctrl+n", look(ui.pair(7)))  # as the key bar names it
+                    continue
+                if n.get("head"):  # as the Projects tab draws its section headers
+                    label = f"{'▸' if n['head'] in ui.nfolded else '▾'} {n['head']} ({n['count']}) "
+                    row.put(3, label, look(curses.A_BOLD | (ui.ACCENT if n["head"] == "Backlog" else 0)))
+                    if not hl:
+                        row.rule(3 + len(label), list_w - 3 - len(label), ui.DIM)
                     continue
                 when = worked_short(n["last"])
                 row.put(3, clip(n["name"], list_w - len(when) - 5),
@@ -305,10 +351,10 @@ if Region:
             if not rows:
                 return []
             r, row = rows[ui.nsel], self.line()
-            reading = ui.nreading and not r.get("new")
+            reading = ui.nreading and not r.get("new") and not r.get("head")
             crumb = "Notes  /  "
             row.put(0, crumb, ui.DIM)
-            row.put(len(crumb), clip("New note" if r.get("new") else r["name"], w - len(crumb) - 9),
+            row.put(len(crumb), clip("New note" if r.get("new") else r.get("head") or r["name"], w - len(crumb) - 9),
                     ui.ACCENT | curses.A_BOLD if reading else 0)
             if reading:
                 row.put(w - 7, "reading", ui.ACCENT)
@@ -344,7 +390,7 @@ if Region:
 
         def show(self, r):
             """Show the note r, re-reading its Markdown only when it changed."""
-            key = (r.get("path"), r.get("last"), r.get("new"))
+            key = (r.get("path"), r.get("last"), r.get("new"), r.get("head"))
             if key != self.shown:
                 self.shown = key
                 self.app.call_later(self.query_one(Markdown).update, note_markdown(r))
