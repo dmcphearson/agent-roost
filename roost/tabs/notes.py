@@ -3,9 +3,9 @@ import curses, os, re, subprocess
 from pathlib import Path
 
 from roost.core.config import HOME
-from roost.core.projectdata import plural, worked
+from roost.core.projectdata import plural
 from roost.core.notedata import at_end, create_note, editor
-from roost.core.formatting import clip, short, worked_short
+from roost.core.formatting import clip, short, short_when
 from roost.app.shell import BAR_KEYS, CLICK, NOTE_READ_KEYS, NOTE_SECTIONS
 from roost.app.widgets import Widget
 from roost.core import config
@@ -92,7 +92,7 @@ class NotesTab:
         if r.get("head"):
             return [("Section", f"{r['head']}: {NOTE_SECTIONS[r['head']]}")], [("", "enter or a click opens or closes it")]
         left = [("Tags", ", ".join(r["tags"]) or "none"), ("File", short(r["path"]))]
-        right = [("Created", r["created"]), ("Edited", worked(r["last"]))]
+        right = [("Created", r["created"]), ("Edited", short_when(r["last"]))]
         if r["sessions"]:
             right.append(("Sessions", str(len(r["sessions"]))))
         return left + [(k.capitalize(), v) for k, v in r["extra"].items()], right
@@ -325,7 +325,7 @@ if Region:
                     if not hl:
                         row.rule(3 + len(label), list_w - 3 - len(label), ui.DIM)
                     continue
-                when = worked_short(n["last"])
+                when = short_when(n["last"])
                 row.put(3, clip(n["name"], list_w - len(when) - 5),
                         look(ui.ACCENT | curses.A_BOLD if hl and not reading else curses.A_BOLD if hl else 0))
                 row.put(list_w - len(when), when, look(ui.DIM))
