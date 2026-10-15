@@ -82,9 +82,13 @@ class SessionsTab:
     def draw_sessions(self):
         """What the Sessions tab shows: its rows (in the view, matching the search, sorted), its corner
         note, and its key bar. SessionsView draws them."""
+        dismissed = sessiondata.read_dismissed()
         for x in self.sessions:  # the project that lists it, for the PROJECT column and its sort
             p = self.project_of(x)
             x["proj"] = projectdata.label_of(p) if p else ""
+            ids = set(x.get("ids") or [x["id"]])
+            x["projids"] = [q["id"] for q in self.projects or [] if ids & set(q["sessions"])]  # what project:<id> matches
+            x["dismissed"] = x["id"] in dismissed and x["state"] == "closed"
         self.wrapping = self.summarizing()  # the Wrapping up section, fixed for this draw
         rows = self.srows = visible(self.sessions, self.view, self.query, self.sort, self.wrapping)
         self.sel = max(0, min(self.sel, len(rows) - 1))
@@ -351,11 +355,27 @@ class SessionsTab:
         if s.get("attach"):
             acts.append(("Stop…", lambda: self.ask_confirm("stop", s)))
         elif closed:
+            if s["id"] in sessiondata.read_dismissed():
+                acts.append(("Undismiss", lambda: self.dismiss(s, False)))
+            else:
+                acts.append(("Dismiss", lambda: self.dismiss(s)))
             acts.append(("Delete to the Trash…", lambda: self.ask_confirm("delete", s)))
         acts.append(("Copy its id", lambda: self.copy_id(s)))
         if s.get("cwd") and os.path.isdir(s["cwd"]):
             acts.append(("Show its folder in Finder", lambda: self.show_in_finder(s["cwd"])))
         return acts
+
+    def dismiss(self, s, on=True):
+        """Dismiss a closed Session (it's listed last, and its project stops counting it as unwrapped),
+        or take that back. Its transcript and its project's README stay as they are."""
+        try:
+            sessiondata.set_dismissed(s["id"], on)
+        except OSError as e:
+            self.msg = f"Couldn't save it: {e}"
+            return None
+        s["dismissed"] = on
+        self.msg = f"Dismissed {s['name']}: Undismiss, in its actions, brings it back" if on else f"{s['name']} is back"
+        return None
 
     def ask_confirm(self, action, s):
         self.confirm = (action, s)

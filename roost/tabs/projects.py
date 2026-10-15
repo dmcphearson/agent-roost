@@ -19,6 +19,7 @@ from roost.core.adopt import (
 )
 from roost.core.formatting import clip, plain_text, short
 from roost.app.shell import BAR_KEYS, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES
+from roost.core.config import VIEWS
 from roost.app.widgets import Widget
 from roost.core import config
 from roost.core import sessiondata
@@ -34,6 +35,8 @@ if Widget:
 else:
     Region = None
 
+
+SESSIONS_W = 20  # the SESSIONS column: running counts, then "· N unwrapped"
 
 class ProjectsTab:
     """The Projects tab."""
@@ -217,7 +220,6 @@ class ProjectsTab:
             except (ValueError, OSError) as e:
                 self.msg = f"Couldn't rename it: {e}"
                 return None
-            self.expanded.discard(p["id"])
             self.load_projects()
             row = next((r for r in self.project_rows() if r.kind == "project" and r.item["path"] == str(new)), None)
             if row:
@@ -254,15 +256,32 @@ class ProjectsTab:
         return sorted((s for s in self.sessions if set(s.get("ids") or [s["id"]]) & set(p["sessions"])),
                       key=lambda s: -s["last"])
 
-    def showable(self, p):
-        """The Sessions shown under an open project: the ones it lists, less the wrapped-up ones."""
-        return [s for s in self.linked(p) if not self.wrapped_up(p, s)]
+    def unwrapped(self, p):
+        """A project's closed Sessions that no Handoff covers and the person hasn't dismissed:
+        work its files may not have yet. The SESSIONS column counts them after the running ones."""
+        gone = sessiondata.read_dismissed()
+        return [s for s in self.linked(p) if s["state"] == "closed" and not s.get("attach")
+                and not self.wrapped_up(p, s) and s["id"] not in gone]
+
+    def sessions_cell(self, p):
+        """The SESSIONS cell's parts, (text, color key or None): the running counts, then "N unwrapped"."""
+        parts = [(f"{self.MARKS[key]}{n}", key) for key, n in self.live_counts(p)]
+        n = len(self.unwrapped(p))
+        if n:
+            parts += ([("·", None)] if parts else []) + [(f"{n} unwrapped", None)]
+        return parts
+
+    def show_sessions(self, p):
+        """The Sessions tab, on All, searching for project:<id>: exactly the Sessions p lists. Esc clears it."""
+        self.view, self.query, self.sel, self.top, self.searching = VIEWS.index("All"), f"project:{p['id']}", 0, 0, False
+        self.switch_tab([t.name for t in self.TABS].index("Sessions"))
+        return None
 
     def project_rows(self):
         """What the Projects tab lists, top to bottom: a header for each section that has anything in
-        it, then (unless the section is folded) its rows; an expanded project's Sessions follow it,
-        indented. Closed comes last, folded until opened, then + New project. Sessions no project
-        lists are on the Sessions tab, and Session recaps on the Notes tab.
+        it, then (unless the section is folded) its projects. Closed comes last, folded until opened,
+        then + New project. Sessions are on the Sessions tab (a project's Show its Sessions filters it),
+        and Session recaps on the Notes tab.
         A search (/) keeps the rows whose name, summary, tags, or folder holds it, unfolded."""
         ps, cutoff = self.projects or [], time.time() - RECENT_PROJECT_DAYS * 86400
         q = self.pquery.lower()
@@ -288,15 +307,13 @@ class ProjectsTab:
                 continue
             for kind, item in items:
                 rows.append(Row(sec, kind, item, 0))
-                if kind == "project" and item["id"] in self.expanded:
-                    rows += [Row(sec, "linked", s, 1) for s in self.showable(item)]
         if not q:
             rows.append(Row("New", "new", {"id": "+ New project"}, 0))
         return rows
 
     def row_status(self, r, dim):
         """STATUS for a Projects row: a Session's live status, a project's status field, or recap."""
-        if r.kind in ("session", "linked"):
+        if r.kind == "session":
             text, attr = self.status_cell(r.item)
             return text, self.DIM if r.item["state"] == "closed" else attr
         if r.kind == "project":
@@ -350,7 +367,7 @@ class ProjectsTab:
             return "+ New project", [("", "enter or a click: give it an id (its folder's name) and a one-sentence summary")]
         if r.kind == "head":
             return r.sec, [("Section", f"{r.sec}: {SECTION_RULES[r.sec]}"), ("", "enter or a click opens or closes it")]
-        name = item["name"] if r.kind in ("session", "linked") else label_of(item) if r.kind == "project" else item["id"]
+        name = item["name"] if r.kind == "session" else label_of(item) if r.kind == "project" else item["id"]
         if r.kind == "project":
             n = len(item["sessions"])
             last = worked(item["last"]) if item["last"] else "never (no Sessions or Handoffs yet)"
@@ -363,7 +380,7 @@ class ProjectsTab:
                 fields.append(("Shape", "not adopted yet (no handoffs/): Adopt it, in its actions (enter), plans its README and files, then its Handoffs"))
             for folder, days in item.get("archives") or []:
                 fields.append(("Archive", f"_archive/{folder} is {days} days old, from roost adopt: its actions (enter) can move it to the Trash"))
-        elif r.kind in ("session", "linked"):
+        elif r.kind == "session":
             text, _ = self.status_cell(item)
             fields = [("Status", f"{text}   Last active  {worked(item['last'])}   Session  {item['id'][:8]}"
                        + "   in this project"),
@@ -377,7 +394,7 @@ class ProjectsTab:
                       ("", "enter: start a Session from it, or make it a project (its Handoffs move in)")]
         summary = textwrap.wrap(plain_text(item["summary"]), max(w - 18, 10)) or ["(none)"]
         # a Session's "summary" is only its last message, so it's labeled that and kept short
-        last = r.kind in ("session", "linked")
+        last = r.kind == "session"
         room = LAST_MESSAGE_LINES if last else max(2, h // 4)  # the list keeps most of the screen
         if len(summary) > room:
             summary = summary[:room - 1] + [clip(summary[room - 1], w - 20) + " …"]
@@ -403,8 +420,9 @@ class ProjectsTab:
 
     PROJECTS_HELP = [
         ("Sections", f"Recent (active in {RECENT_PROJECT_DAYS} days), Inactive, then Closed, folded until opened"),
-        ("Open", "→ opens a section or a project's Sessions, ← closes it · enter or a click on a header does too"),
-        ("Columns", "SESSIONS counts the project's running Sessions: ◆ need input · ● working · ○ idle"),
+        ("Open", "→ opens a section, ← closes it · enter or a click on a header does too"),
+        ("Columns", "SESSIONS counts the project's running Sessions (◆ need input · ● working · ○ idle), then its unwrapped ones: closed, no Handoff covers them, not dismissed"),
+        ("Sessions", "listed on the Sessions tab only: a project's Show its Sessions opens it on just that project's, searching project:<its id>"),
         ("Lists", "your projects (roost setup picks the folder); Sessions no project lists are on the Sessions tab, recaps on Notes"),
         ("Kinds", "each project has one category (what kind of work) and any tags (what it's about), both from its actions"),
     ]
@@ -413,35 +431,14 @@ class ProjectsTab:
         return bool(self.confirm)
 
     def toggle(self, r, open_=None):
-        """Open or close a section header or a project's Sessions; open_ None flips it."""
+        """Open or close a section header; open_ None flips it."""
         if r.kind == "head":
             shut = r.sec in self.folded if open_ is None else bool(open_)
             (self.folded.discard if shut else self.folded.add)(r.sec)
-        elif r.kind == "project":
-            on = r.item["id"] not in self.expanded if open_ is None else open_
-            if on and not self.showable(r.item):
-                self.msg = ("No Sessions to show: they're wrapped up, and its Handoffs have what they did"
-                            if self.linked(r.item) else "No Sessions list this project yet")
-                return
-            (self.expanded.add if on else self.expanded.discard)(r.item["id"])
 
     def open_or_close(self, rows, open_):
-        """→ opens the selected section or project (its Sessions); ← closes it. ← on a
-        Session under a project closes the project and selects it."""
-        r = rows[self.psel]
-        if r.kind == "linked":
-            if not open_:
-                p = self.parent(rows, self.psel)
-                self.toggle(p, False)
-                self.select_key(self.row_key(p))
-            return
-        if r.kind == "head" or (r.kind == "project" and (self.showable(r.item) or not open_)):
-            self.toggle(r, open_)
-
-    @staticmethod
-    def parent(rows, i):
-        """The project row a linked Session row sits under."""
-        return next(p for p in reversed(rows[:i]) if p.kind == "project")
+        """→ opens the selected section, ← closes it. A project doesn't open: its Sessions are on the Sessions tab."""
+        self.toggle(rows[self.psel], open_)
 
     def start_folders(self, p):
         """Where a Session for p can start: the project folder, then the folders its Sessions worked in
@@ -483,10 +480,8 @@ class ProjectsTab:
         if not p["closed"]:
             acts.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
                          lambda: self.start_for(p)))
-        if self.showable(p):
-            shown = p["id"] in self.expanded
-            acts.append(("Hide its Sessions" if shown else "Show its Sessions",
-                         lambda: (self.expanded.discard if shown else self.expanded.add)(p["id"])))
+        if self.linked(p):
+            acts.append(("Show its Sessions", lambda: self.show_sessions(p)))
         if p["readme"] and not p["closed"] and not p.get("adopted", True):  # a demo project counts as adopted
             acts.append(("Adopt it: plan its README and files, then write its Handoffs…", lambda: self.ask_adopt(p)))
         if p["readme"]:
@@ -597,9 +592,6 @@ class ProjectsTab:
                 elif row.kind == "head":
                     if how:  # a header opens or closes with one click
                         self.toggle(row)
-                elif how in ("click", "double") and row.kind == "project" and mx <= 5 and self.showable(row.item):
-                    self.last_click = (0, -1)
-                    self.toggle(row)  # so does a click on a project's ▸ or ▾
                 elif how == "menu":
                     return self.menu(row.item.get("name") or label_of(row.item), self.row_actions(row))
                 elif how == "double":
@@ -624,16 +616,16 @@ class ProjectsTab:
 
 if Region:
     class ProjectList(Region):
-        """The column headers, then the sections and their projects, an open project's Sessions under it."""
+        """The column headers, then the sections and their projects."""
         def lines(self):
             ui, w, y0 = self.ui, self.size.width, self.region.y
             rows = getattr(ui, "prows", [])
             page = ui.page = max(self.size.height - 3, 1)  # the headers, a blank row, and the position at the bottom
-            name_w = max(16, min(ui.name_w, w - 100))
+            name_w = max(16, min(ui.name_w, w - 87 - SESSIONS_W))
             # STATUS is as wide as the longest status in the list, plus a gap
             status_w = max([len("STATUS")] + [len(ui.row_status(r, 0)[0]) for r in rows if r.kind not in ("head", "new")]) + 2
             head, cx = self.line(), 5
-            for title, cw in [("NAME", name_w), ("STATUS", status_w), ("SESSIONS", 13), ("CATEGORY", 22), ("TAGS", 22),
+            for title, cw in [("NAME", name_w), ("STATUS", status_w), ("SESSIONS", SESSIONS_W), ("CATEGORY", 22), ("TAGS", 22),
                               ("LAST WORKED", 18)]:
                 head.put(cx, title, curses.A_BOLD | ui.DIM)
                 cx += cw
@@ -669,12 +661,9 @@ if Region:
                 if r.kind == "new":
                     row.put(3, "+ New project", look(ui.ACCENT | (curses.A_BOLD if hl else 0)))
                     continue
-                dim = ui.DIM if r.sec == "Closed" or (r.kind == "linked" and r.item["state"] == "closed") else 0
+                dim = ui.DIM if r.sec == "Closed" else 0
                 if r.kind == "project":
-                    n = len(ui.showable(r.item))
-                    name = ("▾ " if r.item["id"] in ui.expanded else "▸ " if n else "  ") + label_of(r.item)
-                elif r.kind == "linked":
-                    name = "    " + r.item["name"]
+                    name = "  " + label_of(r.item)
                 else:
                     name = "  " + (r.item["name"] if r.kind == "session" else r.item["id"])
                 row.put(3, clip(name, name_w), look((curses.A_BOLD if r.sec == "Recent" and r.kind == "project" else 0) | dim))
@@ -683,11 +672,10 @@ if Region:
                 row.put(cx, text, look(attr)); cx += status_w
                 if r.kind == "project":
                     sx = cx
-                    for key, n in ui.live_counts(r.item):
-                        part = f"{ui.MARKS[key]}{n} "
-                        row.put(sx, part, look(ui.status[key]))
-                        sx += len(part)
-                cx += 13
+                    for part, key in ui.sessions_cell(r.item):
+                        row.put(sx, part, look(ui.status[key] if key else ui.DIM | dim))
+                        sx += len(part) + 1
+                cx += SESSIONS_W
                 if r.kind == "project":
                     row.put(cx, clip(r.item.get("category") or "", 21), look(ui.DIM | dim))
                     row.put(cx + 22, clip(", ".join(r.item.get("tags") or []), 21), look(ui.DIM | dim))

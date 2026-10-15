@@ -43,6 +43,7 @@ DEFAULT_PROJECTS = "~/.roost/projects"
 
 def projects_dir():
     return Path(os.path.expanduser(read_config().get("projects_dir") or DEFAULT_PROJECTS))
+DISMISSED = ROOST_HOME / "dismissed.json"  # the ids of closed Sessions the person dismissed (the Sessions tab lists them last)
 ADOPT_PLANS = ROOST_HOME / "adopt"  # plans as written, so a second run reuses them and the person can edit them
 
 TEXTUAL = "textual==8.2.8"  # what roost setup installs in ~/.roost/venv

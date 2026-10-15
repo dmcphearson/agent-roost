@@ -49,7 +49,7 @@ def start_tab(names):
     return names.index(last) if last in names else 0
 FAILED = re.compile(r"^(Couldn't|Can't|No editor found|Its folder no longer exists|Summary of .+ failed|Handoffs for .+ stopped)")
 REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|\d summaries are running|Its summary is already running|That's .+ work:|"
-                     r"It's wrapped up:|No Sessions list this project|No Sessions to show:|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
+                     r"It's wrapped up:|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
 
 
 class Shell:
@@ -73,7 +73,7 @@ class Shell:
         self.tab = names.index("Sessions") if query else start_tab(names)  # a search is for Sessions
         self.psel, self.ptop, self.prow_y = 0, 0, {}
         self.pquery = ""  # the Projects tab's search
-        self.folded, self.expanded = {"Inactive", "Closed"}, set()  # closed sections; projects showing their Sessions
+        self.folded = {"Inactive", "Closed"}  # closed sections
         self.nsel, self.ntop, self.nrow_y, self.nquery = 0, 0, {}, ""  # Notes: selection, scroll, rows, search
         self.nfolded = {"Recaps"}  # the Notes tab's closed sections
         self.nreading, self.nscroll = False, 0  # Notes: reading the selected note's text, and how far down
@@ -155,6 +155,8 @@ class Shell:
                 return self.mark("expired", "cache expired")
             if left <= CACHE_WARN:
                 return self.mark("expiring", f"expires in {span(left)}", curses.A_BOLD)
+        if state == "closed" and s["id"] in sessiondata.read_dismissed():
+            return f"{self.MARKS['closed']} dismissed", self.DIM
         if state == "closed" and self.wrapped(s):
             return f"{self.MARKS['wrapped']} wrapped up", self.DIM
         if s.get("desktop") and state not in ("busy", "waiting", "blocked"):
