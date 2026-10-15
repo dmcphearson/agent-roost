@@ -366,7 +366,7 @@ def adopt_command(args):
     if ask(f"Plan {len(folders)} project{'s' if len(folders) != 1 else ''}? [y/N] ") != "y":
         print("Nothing ran.")
         return 0
-    taken = set()
+    claimed = {}  # folder -> the names its plan takes, once shown: a skipped plan keeps them for the run
     for i, (f, text, _, _) in enumerate(rows, 1):
         saved = config.ADOPT_PLANS / f"{f.name}.md"
         if text is not None:
@@ -382,7 +382,8 @@ def adopt_command(args):
         while True:
             plan = parse_plan(saved.read_text(errors="replace"))
             print("\n" + saved.read_text(errors="replace").rstrip())
-            problems = plan_problems(f, plan, taken)
+            claimed[f.name] = {n for n in [plan["rename"], *(new for _, new, _ in plan["split"])] if n and n != f.name}
+            problems = plan_problems(f, plan, set().union(*(v for k, v in claimed.items() if k != f.name)))
             for p in problems:
                 print(f"  ⚠ {p}")
             choice = ask(f"\n{f.name}: a apply · e edit · s skip · q stop here: ")
@@ -401,7 +402,6 @@ def adopt_command(args):
                     print(f"  Couldn't apply it: {e}. Check {short(str(f))}: steps before the failure are done, "
                           "and anything they replaced is in its _archive/.")
                     break
-                taken.add(plan["rename"])
                 saved.unlink()
                 print(f"  Applied: {short(str(new))}" + (f" (renamed from {f.name})" if new != f else "")
                       + f". Replaced files are in {short(str(new / '_archive'))}.")
