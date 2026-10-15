@@ -242,8 +242,8 @@ class ProjectsTab:
 
     def wrapped_up(self, p, s):
         """A closed Session whose newest Handoff in p (a project, or a recap) covers its last message;
-        under a project it folds into the "N wrapped up" line."""
-        if s["state"] != "closed" or s.get("attach"):
+        its project's Handoffs have what it did, so it gets no row under the project."""
+        if s.get("state") != "closed" or s.get("attach"):
             return False
         cov = p.get("covered") or {}
         to = max((cov.get(i, 0) for i in s.get("ids") or [s["id"]]), default=0)
@@ -253,6 +253,10 @@ class ProjectsTab:
         """The Sessions a project lists, newest first, in any state."""
         return sorted((s for s in self.sessions if set(s.get("ids") or [s["id"]]) & set(p["sessions"])),
                       key=lambda s: -s["last"])
+
+    def showable(self, p):
+        """The Sessions shown under an open project: the ones it lists, less the wrapped-up ones."""
+        return [s for s in self.linked(p) if not self.wrapped_up(p, s)]
 
     def project_rows(self):
         """What the Projects tab lists, top to bottom: a header for each section that has anything in
@@ -285,13 +289,7 @@ class ProjectsTab:
             for kind, item in items:
                 rows.append(Row(sec, kind, item, 0))
                 if kind == "project" and item["id"] in self.expanded:
-                    done = [s for s in self.linked(item) if self.wrapped_up(item, s)]
-                    rows += [Row(sec, "linked", s, 1) for s in self.linked(item) if s not in done]
-                    if done:
-                        fold = {"id": f"{item['id']} wrapped up", "count": len(done), "project": item["id"]}
-                        rows.append(Row(sec, "wrapped", fold, 1))
-                        if fold["id"] in self.unwrapped:
-                            rows += [Row(sec, "linked", s, 1) for s in done]
+                    rows += [Row(sec, "linked", s, 1) for s in self.showable(item)]
         if not q:
             rows.append(Row("New", "new", {"id": "+ New project"}, 0))
         return rows
@@ -352,10 +350,6 @@ class ProjectsTab:
             return "+ New project", [("", "enter or a click: give it an id (its folder's name) and a one-sentence summary")]
         if r.kind == "head":
             return r.sec, [("Section", f"{r.sec}: {SECTION_RULES[r.sec]}"), ("", "enter or a click opens or closes it")]
-        if r.kind == "wrapped":
-            return f"{plural(item['count'], 'Session')} wrapped up", [
-                ("Wrapped up", "closed, and a Handoff covers each one's last message: the project folder has what they did"),
-                ("", "enter or a click shows or hides them")]
         name = item["name"] if r.kind in ("session", "linked") else label_of(item) if r.kind == "project" else item["id"]
         if r.kind == "project":
             n = len(item["sessions"])
@@ -423,13 +417,11 @@ class ProjectsTab:
         if r.kind == "head":
             shut = r.sec in self.folded if open_ is None else bool(open_)
             (self.folded.discard if shut else self.folded.add)(r.sec)
-        elif r.kind == "wrapped":
-            on = r.item["id"] not in self.unwrapped if open_ is None else open_
-            (self.unwrapped.add if on else self.unwrapped.discard)(r.item["id"])
         elif r.kind == "project":
             on = r.item["id"] not in self.expanded if open_ is None else open_
-            if on and not self.linked(r.item):
-                self.msg = "No Sessions list this project yet"
+            if on and not self.showable(r.item):
+                self.msg = ("No Sessions to show: they're wrapped up, and its Handoffs have what they did"
+                            if self.linked(r.item) else "No Sessions list this project yet")
                 return
             (self.expanded.add if on else self.expanded.discard)(r.item["id"])
 
@@ -437,16 +429,13 @@ class ProjectsTab:
         """→ opens the selected section or project (its Sessions); ← closes it. ← on a
         Session under a project closes the project and selects it."""
         r = rows[self.psel]
-        if r.kind == "wrapped" and (open_ or r.item["id"] in self.unwrapped):
-            self.toggle(r, open_)
-            return
-        if r.kind in ("linked", "wrapped"):
+        if r.kind == "linked":
             if not open_:
                 p = self.parent(rows, self.psel)
                 self.toggle(p, False)
                 self.select_key(self.row_key(p))
             return
-        if r.kind == "head" or (r.kind == "project" and (self.linked(r.item) or not open_)):
+        if r.kind == "head" or (r.kind == "project" and (self.showable(r.item) or not open_)):
             self.toggle(r, open_)
 
     @staticmethod
@@ -494,7 +483,7 @@ class ProjectsTab:
         if not p["closed"]:
             acts.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
                          lambda: self.start_for(p)))
-        if self.linked(p):
+        if self.showable(p):
             shown = p["id"] in self.expanded
             acts.append(("Hide its Sessions" if shown else "Show its Sessions",
                          lambda: (self.expanded.discard if shown else self.expanded.add)(p["id"])))
@@ -605,10 +594,10 @@ class ProjectsTab:
                 if row.kind == "new":
                     if how:  # + New project works like a button
                         return self.new_project()
-                elif row.kind in ("head", "wrapped"):
+                elif row.kind == "head":
                     if how:  # a header opens or closes with one click
                         self.toggle(row)
-                elif how in ("click", "double") and row.kind == "project" and mx <= 5 and self.linked(row.item):
+                elif how in ("click", "double") and row.kind == "project" and mx <= 5 and self.showable(row.item):
                     self.last_click = (0, -1)
                     self.toggle(row)  # so does a click on a project's ▸ or ▾
                 elif how == "menu":
@@ -625,7 +614,7 @@ class ProjectsTab:
         elif k == "enter":
             if not r or r.kind == "new":
                 return self.new_project()
-            if r.kind in ("head", "more", "wrapped"):
+            if r.kind in ("head", "more"):
                 self.toggle(r)
             else:
                 return self.menu(r.item.get("name") or label_of(r.item), self.row_actions(r))
@@ -680,13 +669,9 @@ if Region:
                 if r.kind == "new":
                     row.put(3, "+ New project", look(ui.ACCENT | (curses.A_BOLD if hl else 0)))
                     continue
-                if r.kind == "wrapped":
-                    arrow = "▾" if r.item["id"] in ui.unwrapped else "▸"
-                    row.put(3, f"    {arrow} {r.item['count']} wrapped up", look(ui.DIM))
-                    continue
                 dim = ui.DIM if r.sec == "Closed" or (r.kind == "linked" and r.item["state"] == "closed") else 0
                 if r.kind == "project":
-                    n = len(ui.linked(r.item))
+                    n = len(ui.showable(r.item))
                     name = ("▾ " if r.item["id"] in ui.expanded else "▸ " if n else "  ") + label_of(r.item)
                 elif r.kind == "linked":
                     name = "    " + r.item["name"]

@@ -49,7 +49,7 @@ def start_tab(names):
     return names.index(last) if last in names else 0
 FAILED = re.compile(r"^(Couldn't|Can't|No editor found|Its folder no longer exists|Summary of .+ failed|Handoffs for .+ stopped)")
 REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|\d summaries are running|Its summary is already running|That's .+ work:|"
-                     r"It's wrapped up:|No Sessions list this project|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
+                     r"It's wrapped up:|No Sessions list this project|No Sessions to show:|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
 
 
 class Shell:
@@ -74,7 +74,6 @@ class Shell:
         self.psel, self.ptop, self.prow_y = 0, 0, {}
         self.pquery = ""  # the Projects tab's search
         self.folded, self.expanded = {"Inactive", "Closed"}, set()  # closed sections; projects showing their Sessions
-        self.unwrapped = set()  # projects whose wrapped-up Sessions are showing
         self.nsel, self.ntop, self.nrow_y, self.nquery = 0, 0, {}, ""  # Notes: selection, scroll, rows, search
         self.nfolded = {"Recaps"}  # the Notes tab's closed sections
         self.nreading, self.nscroll = False, 0  # Notes: reading the selected note's text, and how far down
