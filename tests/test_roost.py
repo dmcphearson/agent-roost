@@ -790,8 +790,17 @@ class Tabs(unittest.TestCase):
         self.assertEqual((self.ui.helping, self.got), (False, []))
 
     def test_every_tab_shares_one_set_of_keys(self):
-        self.assertEqual([a for a, _ in roost.UI.GLOBAL_HELP], ["Move", "Views", "Actions", "Search", "New", "Tabs", "Close"])
-        self.assertEqual(roost.BAR_KEYS, "↑↓ move   ←→ views   enter actions   / search   ctrl+n new   tab switch tab   ? help   ctrl+q quit")
+        """? explains the keys the bar names: each shared help row's key is an entry in the bar. What each key
+        does on a real screen is TextualScreens.test_every_key_the_bar_names_does_what_it_says."""
+        entries = re.split(r" {2,}", roost.BAR_KEYS.strip())
+        bar = [e.split(" ", 1)[0] for e in entries]
+        rows = roost.UI.GLOBAL_HELP
+        self.assertEqual(len(bar), len(rows) + 1, entries)  # the Close row explains the bar's last two, ? and ctrl+q
+        for (what, text), key in zip(rows[:-1], bar):  # Move ↑↓, Views ←→, Actions enter, Search /, New ctrl+n, Tabs tab
+            self.assertEqual(text.split(" ", 1)[0], key, what)
+        close = re.split(r"[\s·]+", rows[-1][1])
+        for key in bar[-2:]:
+            self.assertIn(key, close, rows[-1][0])
         for tab in roost.UI.TABS:  # a tab's own help explains its lists; it adds no keys
             self.assertFalse([b for _, b in tab.help if re.search(r"(^|· )[a-zA-Z] ", b)], tab.name)
 
@@ -3060,6 +3069,114 @@ class Adopt(unittest.TestCase):
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("printer-rollout")
         self.assertFalse(any(l.startswith("Adopt it") for l in labels(ui, ui.keys_projects, ui.project_rows())))
 
+    # One roost adopt run: once a plan has been shown, its Rename and Split names are claimed for the rest of the
+    # run, applied or skipped. Both plans are saved, so no model call runs; ask() gives the person's answers.
+
+    LABELS_BODY = """## Summary
+Label printers for the warehouse.
+## Status
+active
+## Moves
+None.
+## Archive
+None.
+## Split out
+{split}
+## First Handoff
+None.
+## README
+# Label printers
+
+## Current state
+
+Two printers ordered.
+"""
+
+    def second_folder(self, rename=None, split="None."):
+        """A second folder to adopt in the same run, with its plan saved (and the first folder's plan saved too)."""
+        other = self.root / "2026-08-label-printers"
+        (other / "badges").mkdir(parents=True)
+        (other / "README.md").write_text("---\nsummary: Labels\nsessions: []\n---\n\n# Label printers\n")
+        (other / "badges" / "plan.md").write_text("Badges.")
+        roost.ADOPT_PLANS.mkdir(parents=True, exist_ok=True)
+        (roost.ADOPT_PLANS / f"{self.old.name}.md").write_text(roost.adopt_plan_text(self.old, PLAN_BODY))
+        text = roost.adopt_plan_text(other, self.LABELS_BODY.format(split=split))
+        if rename:
+            text = text.replace("## Rename\n\nlabel-printers\n", f"## Rename\n\n{rename}\n")
+        (roost.ADOPT_PLANS / f"{other.name}.md").write_text(text)
+        self.assertEqual(roost.plan_problems(other, roost.parse_plan(text)), [])  # on its own, it could be applied
+        return other
+
+    def adopt_batch(self, answers, editor=None):
+        """roost adopt on both folders, the first then the second, answering each ask() in turn ("q" once out).
+        editor, if given, is what "e" does to the plan file. Returns the output."""
+        import unittest.mock
+        asked = []
+        tty = type("TTY", (), {"isatty": lambda self: True})()
+        adopt = sys.modules[roost.adopt_command.__module__]
+        patches = [unittest.mock.patch.object(roost, "ask", lambda prompt: asked.append(prompt) or (answers.pop(0) if answers else "q")),
+                   unittest.mock.patch.object(roost.sys, "stdin", tty),
+                   unittest.mock.patch.object(roost, "claude_print", lambda *a: self.fail("a saved plan needs no model call"))]
+        if editor:
+            patches += [unittest.mock.patch.object(adopt, "open", lambda *a, **k: contextlib.nullcontext(), create=True),
+                        unittest.mock.patch.object(roost.subprocess, "run", lambda cmd, **k: editor(Path(cmd[-1])))]
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            with contextlib.redirect_stdout(out):
+                roost.run_command("adopt", [self.old.name, "2026-08-label-printers"])
+        return out.getvalue()
+
+    @staticmethod
+    def problems_shown(out, folder):
+        """The ⚠ lines printed under folder's plan."""
+        part = out.split(f"# Adopt plan for {folder}", 1)[1]
+        return [l for l in part.splitlines() if l.strip().startswith("⚠")]
+
+    def test_a_skipped_plans_rename_is_taken_for_the_rest_of_the_run(self):
+        other = self.second_folder(rename="printer-rollout")  # what the first plan renames its folder to
+        out = self.adopt_batch(["y", "s", "a", "s"])  # plan both · skip the first · apply the second · skip it
+        self.assertTrue(self.old.is_dir())  # the first was skipped
+        self.assertFalse((self.root / "printer-rollout").exists())  # the second wasn't applied under its name
+        self.assertTrue(other.is_dir() and not (other / "handoffs").exists())
+        self.assertTrue((roost.ADOPT_PLANS / f"{other.name}.md").exists())  # kept for next time
+        self.assertTrue([l for l in self.problems_shown(out, other.name) if "printer-rollout" in l], out)
+
+    def test_a_skipped_plans_split_name_is_taken_for_the_rest_of_the_run(self):
+        other = self.second_folder(split="- `badges/` -> `badge-printers`: its own rollout")  # the first plan's Split name
+        out = self.adopt_batch(["y", "s", "a", "s"])
+        self.assertTrue(self.old.is_dir())
+        self.assertFalse((self.root / "badge-printers").exists())  # not split out to it
+        self.assertFalse((self.root / "label-printers").exists())  # nor applied at all
+        self.assertTrue((other / "badges" / "plan.md").exists())
+        self.assertTrue([l for l in self.problems_shown(out, other.name) if "badge-printers" in l], out)
+
+    def test_a_plan_shown_again_after_an_edit_is_not_blocked_by_its_own_names(self):
+        other = self.second_folder(split="- `badges/` -> `label-badges`: its own rollout")
+        edited = []
+
+        def edit(path):
+            edited.append(path.name)
+            path.write_text(path.read_text().replace("Two printers ordered.", "Two printers ordered and paid for."))
+        out = self.adopt_batch(["y", "s", "e", "a"], editor=edit)  # skip the first · edit the second · apply it
+        self.assertEqual(edited, [f"{other.name}.md"])
+        self.assertEqual(self.problems_shown(out, other.name), [])  # neither showing names a problem
+        new = self.root / "label-printers"
+        self.assertTrue((new / "handoffs").is_dir(), out)  # applied, renamed to its own name
+        self.assertTrue((self.root / "label-badges" / "plan.md").exists())  # and split out to its own name
+        self.assertIn("paid for", (new / "README.md").read_text())  # the edited plan is the one applied
+
+    def test_adopt_status_is_one_or_two_lowercase_words(self):
+        status = lambda s: [p for p in roost.plan_problems(self.old, self.plan(PLAN_BODY.replace("## Status\nactive", f"## Status\n{s}")))
+                            if p.startswith("Status")]
+        for good in ("active", "on hold"):
+            self.assertEqual(status(good), [], good)
+        for bad in ("blocked on vendor", "**active**", "*on hold*", "`active`", "active ✅", "✅"):
+            self.assertTrue(status(bad), bad)
+        self.assertIn("one or two lowercase words", " ".join(status("blocked on vendor")))
+        self.assertIn("one or two lowercase words", roost.ADOPT_PROMPT.split("## Status", 1)[1].split("##", 1)[0].lower())
+
 
 class Notes(unittest.TestCase):
     """2.3: the person's own notes and the Notes tab, in temp folders only."""
@@ -3694,6 +3811,96 @@ class TextualScreens(unittest.TestCase):
             seen["hidden"] = not pilot.app.query_one(roost.StatsPage).display
         self.run_app([hidden])
         self.assertTrue(seen["hidden"])  # only on its own tab
+
+    # The key bar: every key it names does what it says, on each tab that draws it.
+
+    BAR_TABS = ("Projects", "Sessions", "Notes")
+
+    def run_on_tab(self, name, steps):
+        """A fresh roost on tab name, with a project linked to the first Session and two notes."""
+        import unittest.mock
+        self.pid = "2026-10-printer-fleet"
+        proj = {"id": self.pid, "path": "/nowhere/" + self.pid, "sessions": [self.sessions[0]["id"]], "summary": "",
+                "status": "active", "category": "", "tags": [], "last": time.time(), "closed": False, "readme": True}
+        roost.create_note("Printer idea", body="first line")
+        roost.create_note("Laptop idea", body="first line")
+        with unittest.mock.patch.multiple(roost, read_projects=lambda sessions: [proj], read_config=lambda: {"tab": name}):
+            return self.run_app(steps)
+
+    def test_every_key_the_bar_names_does_what_it_says(self):
+        sel = {"Projects": "psel", "Sessions": "sel", "Notes": "nsel"}
+        for name in self.BAR_TABS:
+            seen = {}
+
+            def look(label, get):
+                async def step(pilot):
+                    seen[label] = get(pilot.app.ui)
+                return step
+
+            async def pick_project(pilot):  # ←→ and enter act on the selected row: the project
+                ui = pilot.app.ui
+                ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "project" and r.item["id"] == self.pid)
+                pilot.app.redraw()
+
+            def actions(ui):
+                if name == "Projects":
+                    return [l for l, _ in ui.row_actions(ui.prows[ui.psel])]
+                if name == "Sessions":
+                    return [l for l, _ in ui.session_actions(ui.srows[ui.sel])]
+                return [l for l, _ in ui.note_actions(ui.nrows[ui.nsel])]
+            at = lambda ui: getattr(ui, sel[name])
+            async def catch_exit(pilot):  # what ctrl+q leads to: the app exits (run_test would end it anyway)
+                pilot.app.exit = lambda *a, **k: seen.setdefault("exits", []).append(a)
+            arrows = {"Projects": lambda ui: self.pid in ui.expanded, "Sessions": lambda ui: ui.view,
+                      "Notes": lambda ui: ui.nreading}[name]
+            steps = [look("tab", lambda ui: ui.TABS[ui.tab].name), look("rows", lambda ui: len(ui.draw())),
+                     look("at", at), self.keys("down"), look("down", at), self.keys("up"), look("up", at)]
+            if name == "Projects":
+                steps.append(pick_project)
+            steps += [look("arrows", arrows), self.keys("right"), look("right", arrows), self.keys("left"), look("left", arrows),
+                      look("actions", actions), self.keys("enter"),
+                      look("menu", lambda ui: ui.choosing and [l for l, _ in ui.choosing["options"]]), self.keys("escape"),
+                      self.keys("slash"), look("search", lambda ui: ui.searching), self.keys("escape"),
+                      self.keys("ctrl+n"), look("new", lambda ui: ui.choosing and ui.choosing["title"]),
+                      look("new options", lambda ui: ui.choosing and " ".join(l for l, _ in ui.choosing["options"])),
+                      self.keys("n"), look("note prompt", lambda ui: ui.asking and ui.asking["title"]), self.keys("escape"),
+                      self.keys("tab"), look("next tab", lambda ui: ui.TABS[ui.tab].name), self.keys("shift+tab"),
+                      look("back", lambda ui: ui.TABS[ui.tab].name),
+                      self.keys("question_mark"), look("help", lambda ui: ui.helping), self.keys("escape"),
+                      look("help closed", lambda ui: ui.helping), catch_exit, self.keys("ctrl+q")]
+            app = self.run_on_tab(name, steps)
+            names = [t.name for t in app.ui.TABS]
+            with self.subTest(tab=name):
+                self.assertEqual(seen["tab"], name)
+                self.assertGreater(seen["rows"], seen["at"] + 1)  # room to move down one
+                self.assertEqual((seen["down"], seen["up"]), (seen["at"] + 1, seen["at"]), "↑↓ move")
+                if name == "Sessions":
+                    self.assertEqual((seen["right"], seen["left"]), ((seen["arrows"] + 1) % len(roost.VIEWS), seen["arrows"]), "←→ views")
+                else:  # Projects: → opens the project, ← closes it · Notes: → reads the note, ← goes back to the list
+                    self.assertEqual((seen["arrows"], seen["right"], seen["left"]), (False, True, False), "←→")
+                self.assertTrue(seen["actions"])
+                self.assertEqual(seen["menu"], seen["actions"], "enter actions")
+                self.assertTrue(seen["search"], "/ search")
+                self.assertEqual(seen["new"], "New", "ctrl+n new")
+                self.assertIn("Note", seen["new options"])
+                self.assertEqual(seen["note prompt"], "New note: its title", "ctrl+n then n")
+                self.assertEqual((seen["next tab"], seen["back"]), (names[(names.index(name) + 1) % len(names)], name), "tab switch tab")
+                self.assertEqual((seen["help"], seen["help closed"]), (True, False), "? help")
+                self.assertEqual(seen.get("exits"), [(None,)], "ctrl+q quit")
+
+    def test_the_bar_on_every_tab_names_the_bars_keys(self):
+        entries = re.split(r" {2,}", roost.BAR_KEYS.strip())
+        for name in self.BAR_TABS:
+            app = self.run_on_tab(name, [])
+            rows = len(app.ui.bar[0]) if app.ui.bar else 1
+            drawn = "   ".join(self.screen(app)[-rows:])
+            with self.subTest(tab=name):
+                self.assertEqual(app.ui.TABS[app.ui.tab].name, name)
+                for entry in entries:
+                    if entry.startswith("←→"):  # what ←→ does is the tab's own: views, open/close, or → read
+                        self.assertIn("→ ", drawn)
+                    else:
+                        self.assertIn(entry, drawn)
 
 
 class Stats(unittest.TestCase):
