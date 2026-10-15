@@ -186,6 +186,8 @@ def plan_problems(folder, plan, taken=()):
             out.append(f"Move: `{a}` isn't a file in the folder")
         if dst is None or (dst.exists() and dst != src):
             out.append(f"Move: `{b}` already exists or is outside the folder")
+        elif Path(b).parts and Path(b).parts[0] in ("handoffs", "_archive"):  # the apply writes there first
+            out.append(f"Move: `{b}` is in {Path(b).parts[0]}/, which only roost writes to")
         elif dst in dests:  # the second rename would replace the first file
             out.append(f"Move: `{b}` is the destination of more than one Move")
         dests.add(dst)
