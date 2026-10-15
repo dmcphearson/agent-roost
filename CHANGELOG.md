@@ -3,7 +3,8 @@
 ## 2026.10.21
 
 - **Notes tab:** notes are grouped into Backlog (tagged `backlog`), Recaps (tagged `recap`, folded until opened), and Notes. A note tagged both is under Backlog. Search matches a note's tags, so `/backlog` finds them
-- **Projects tab:** a wrapped-up Session (closed, and a Handoff covers its last message) no longer shows under its project, and the "N wrapped up" line is gone: the project's Handoffs have that work
+- **Projects tab:** Sessions no longer show under projects, and projects don't open. The SESSIONS column counts running Sessions, then unwrapped ones (closed, no Handoff covers them, not dismissed), like "○1 · 1 unwrapped". A project's Show its Sessions opens the Sessions tab on All, searching `project:<its id>`; esc clears it
+- **Dismiss:** a closed Session's actions on the Sessions tab can dismiss it: it's marked dismissed, listed last, and no longer counted as unwrapped. Undismiss brings it back. Only roost's own list (`~/.roost/dismissed.json`) changes
 - **Summaries:** a summary estimated over the cap runs with the cap raised for that run, and the confirm box says so, instead of stopping partway with nothing written
 - **roost adopt:** a Move into `handoffs/` or `_archive/` is refused (it could replace an archived file or the First Handoff); a plan shown in a run keeps its new names for the rest of the run, even if skipped; a plan's Status is one or two lowercase words
 - **Tests:** written by a separate test-writing agent and shown failing before each change; new tests cover the adopt plan checks, Handoff ownership, redaction, and every key the key bar names
