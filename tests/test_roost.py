@@ -965,7 +965,8 @@ class Projects(unittest.TestCase):
         ui.load_projects()
         ui.prow_y = {6: 1}  # the project's row, as draw left it
         click = ("mouse", 3, 6, roost.curses.BUTTON1_CLICKED)
-        for _ in range(2):
+        for _ in range(2):  # two separate single clicks: a quick second one would be a double-click
+            ui.last_click = (0, -1)
             ui.keys_projects(click, ui.project_rows())
             self.assertEqual((self.shown(ui), ui.choosing), ([("head", "Recent"), ("project", "b"), ("new", "+ New project")], None))
         ui.keys_projects(("mouse", 20, 6, roost.curses.BUTTON1_CLICKED), ui.project_rows())  # the name only selects it
