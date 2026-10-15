@@ -175,8 +175,8 @@ def plan_problems(folder, plan, taken=()):
         out.append(f"Rename: {name} already exists (or another plan takes it): give it another name")
     if not plan["summary"]:
         out.append("Summary is empty")
-    if plan["status"] and not re.fullmatch(r"[a-z][a-z0-9 -]{0,39}", plan["status"]):
-        out.append(f"Status {plan['status']!r} isn't a few lowercase words")
+    if plan["status"] and not re.fullmatch(r"[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)?", plan["status"]):
+        out.append(f"Status {plan['status']!r} isn't one or two lowercase words")
     if not plan["readme"] or "## Current state" not in plan["readme"]:
         out.append("README has no ## Current state section")
     dests = set()
