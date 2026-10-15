@@ -961,8 +961,9 @@ class Projects(unittest.TestCase):
         ui.keys_projects(("mouse", 20, 6, roost.curses.BUTTON1_CLICKED), ui.project_rows())  # the name only selects it
         self.assertEqual(ui.expanded, set())
 
-    def test_wrapped_up_sessions_fold_into_one_line(self):
-        """A closed Session whose newest Handoff covers its last message folds into "N wrapped up"."""
+    def test_wrapped_up_sessions_get_no_row_under_their_project(self):
+        """A closed Session whose newest Handoff covers its last message isn't listed under its project:
+        no "N wrapped up" line, and no row of its own."""
         folder = self.project("b", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
         end = time.time() - 3600
         iso = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -976,14 +977,73 @@ class Projects(unittest.TestCase):
         ui.load_projects()
         ui.expanded = {"b"}
         self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("linked", "bb2c0000-0000"),
-                                          ("wrapped", "b wrapped up"), ("new", "+ New project")])
-        ui.psel = 3
-        ui.keys_projects("enter", ui.project_rows())
-        self.assertIn(("linked", "aa1b9a71-0000"), self.shown(ui))
-        ui.keys_projects("left", ui.project_rows())
-        self.assertNotIn(("linked", "aa1b9a71-0000"), self.shown(ui))
-        ui.keys_projects("left", ui.project_rows())  # ← again closes the project
+                                          ("new", "+ New project")])
+        ui.psel = 2
+        ui.keys_projects("left", ui.project_rows())  # ← on its Session closes the project
         self.assertEqual(ui.expanded, set())
+
+    def wrapped_project(self, ids):
+        """Project b listing ids, with a Handoff that covers aa1b9a71-0000 to its last message (an hour ago)
+        and one that stops before bb2c0000-0000's; returns that hour-ago time."""
+        listed = "".join(f"  - name: {i}\n    id: {i}\n" for i in ids)
+        folder = self.project("b", README.split("sessions:\n")[0] + "sessions:\n" + listed + "---\n\n# B\n",
+                              handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        end = time.time() - 3600
+        iso = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        (folder / "handoffs" / "2026-10-01-0900-aa1b9a71.md").write_text(
+            f"---\nsession: aa1b9a71-0000\nname: x\nfrom: \nto: {iso(end)}\n---\n\nDone.\n")
+        (folder / "handoffs" / "2026-10-01-0901-bb2c0000.md").write_text(
+            f"---\nsession: bb2c0000-0000\nname: x\nfrom: \nto: {iso(end - 7200)}\n---\n\nEarlier.\n")
+        return end
+
+    def test_every_session_but_the_wrapped_up_ones_still_shows_under_its_project(self):
+        """Running, idle, and closed-without-a-covering-Handoff Sessions list under the project, newest
+        first, as before; only the wrapped-up one is gone. → still expands it."""
+        end = self.wrapped_project(["aa1b9a71-0000", "bb2c0000-0000", "cc3d0000-0000", "dd4e0000-0000", "ee5f0000-0000"])
+        ui = self.ui()
+        ui.sessions = [dict(session("Wrapped", state="closed", kind=None, mins=60), id="aa1b9a71-0000", active=end),
+                       dict(session("Worked after", state="closed", kind=None, mins=50), id="bb2c0000-0000"),
+                       dict(session("Idle one", mins=5), id="cc3d0000-0000"),
+                       dict(session("No Handoff", state="closed", kind=None, mins=90), id="dd4e0000-0000"),
+                       dict(session("Asking", state="waiting", mins=1), id="ee5f0000-0000")]
+        ui.load_projects()
+        self.assertEqual([ui.wrapped_up(ui.projects[0], s) for s in ui.sessions], [True, False, False, False, False])
+        ui.psel = 1
+        ui.keys_projects("right", ui.project_rows())
+        self.assertEqual(ui.expanded, {"b"})
+        self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("linked", "ee5f0000-0000"),
+                                          ("linked", "cc3d0000-0000"), ("linked", "bb2c0000-0000"),
+                                          ("linked", "dd4e0000-0000"), ("new", "+ New project")])
+
+    def test_a_project_whose_sessions_are_all_wrapped_up_doesnt_expand(self):
+        """With only wrapped-up Sessions, there's nothing to show: →, its actions (enter), and a click on
+        its marker don't expand it, as for a project with no Sessions."""
+        end = self.wrapped_project(["aa1b9a71-0000"])
+        ui = self.ui()
+        ui.sessions = [dict(session("Wrapped", state="closed", kind=None, mins=60), id="aa1b9a71-0000", active=end)]
+        ui.load_projects()
+        self.assertTrue(ui.wrapped_up(ui.projects[0], ui.sessions[0]))  # the fixture really is wrapped up
+        ui.psel = 1
+        ui.keys_projects("right", ui.project_rows())
+        self.assertEqual(ui.expanded, set())
+        acts = labels(ui, ui.keys_projects, ui.project_rows())
+        self.assertNotIn("Show its Sessions", acts)
+        self.assertNotIn("Hide its Sessions", acts)
+        ui.prow_y = {6: 1}  # the project's row, as draw left it
+        ui.keys_projects(("mouse", 3, 6, roost.curses.BUTTON1_CLICKED), ui.project_rows())
+        self.assertEqual(ui.expanded, set())
+        self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("new", "+ New project")])
+
+    def test_a_wrapped_up_session_doesnt_change_the_sessions_column(self):
+        """SESSIONS counts running Sessions; a wrapped-up one is closed, so linking it changes nothing."""
+        end = self.wrapped_project(["aa1b9a71-0000", "cc3d0000-0000"])
+        ui = self.ui()
+        ui.sessions = [dict(session("Asking", state="waiting"), id="cc3d0000-0000"),
+                       dict(session("Wrapped", state="closed", kind=None, mins=60), id="aa1b9a71-0000", active=end)]
+        ui.load_projects()
+        self.assertTrue(ui.wrapped_up(ui.projects[0], ui.sessions[1]))
+        self.assertEqual(ui.live_counts(ui.projects[0]), ui.live_counts({"sessions": ["cc3d0000-0000"]}))
+        self.assertEqual(ui.live_counts(ui.projects[0]), [("input", 1)])
 
     def test_recent_projects_show_and_the_rest_fold_away(self):
         self.project("a", README.replace("status: active", "status: closed"))
@@ -3811,6 +3871,45 @@ class TextualScreens(unittest.TestCase):
             seen["hidden"] = not pilot.app.query_one(roost.StatsPage).display
         self.run_app([hidden])
         self.assertTrue(seen["hidden"])  # only on its own tab
+
+    # Wrapped-up Sessions: a closed Session a project's Handoff covers to its last message.
+
+    def with_wrapped(self, tab, linked, steps=()):
+        """roost on tab with project printer-fleet (short enough not to be clipped) listing linked, where
+        "Old printer audit" (closed, its last message covered by a Handoff) is wrapped up. linked takes
+        "wrapped" and indexes into self.sessions."""
+        import unittest.mock
+        self.pid = "printer-fleet"
+        old = dict(session("Old printer audit", state="closed", kind=None, mins=120), attach=None)
+        self.sessions = self.sessions + [old]
+        ids = [old["id"] if i == "wrapped" else self.sessions[i]["id"] for i in linked]
+        proj = {"id": self.pid, "path": "/nowhere/" + self.pid, "sessions": ids, "summary": "", "status": "active",
+                "category": "", "tags": [], "last": time.time(), "closed": False, "readme": True,
+                "covered": {old["id"]: old["last"]}}
+        with unittest.mock.patch.multiple(roost, read_projects=lambda sessions: [proj], read_config=lambda: {"tab": tab}):
+            app = self.run_app(list(steps))
+        self.assertTrue(app.ui.wrapped_up(proj, old))  # the fixture really is wrapped up
+        return app, next((l for l in self.screen(app) if self.pid in l), None)
+
+    def test_a_project_with_only_wrapped_up_sessions_has_no_open_marker(self):
+        app, line = self.with_wrapped("Projects", ["wrapped"])
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Projects")
+        self.assertNotIn("▸", line)
+        self.assertNotIn("▾", line)
+
+    def test_a_project_with_a_running_session_keeps_its_marker_and_sessions_cell(self):
+        """A wrapped-up Session linked beside a running one changes neither the ▸ nor the SESSIONS cell."""
+        _, without = self.with_wrapped("Projects", [1])
+        self.sessions = self.sessions[:2]
+        _, with_it = self.with_wrapped("Projects", [1, "wrapped"])
+        self.assertIn(f"▸ {self.pid}", without)
+        self.assertEqual(with_it, without)
+
+    def test_the_sessions_tab_still_lists_a_wrapped_up_session(self):
+        app, _ = self.with_wrapped("Sessions", ["wrapped"], [self.keys("right", "right", "right", "right")])  # the All view
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
+        line = next(l for l in self.screen(app)[:-10] if "Old printer audit" in l)
+        self.assertIn("✓ wrapped up", line)
 
     # The key bar: every key it names does what it says, on each tab that draws it.
 
