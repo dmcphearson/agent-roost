@@ -2844,6 +2844,32 @@ class Adopt(unittest.TestCase):
         self.assertEqual((self.old / "notes.md").read_text(), "Working notes.")  # never replaced
         self.assertTrue((self.old / "report.pdf").exists())
 
+    def texts(self):
+        return [p.read_bytes() for p in self.root.rglob("*") if p.is_file()]
+
+    def test_a_move_never_replaces_a_file_the_apply_archives_earlier(self):
+        """Archive runs before Moves, so a Move into today's _archive/ onto an archived file is refused."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        bad = self.plan(PLAN_BODY.replace("`out/report.pdf`", f"`_archive/{today}/notes-backup.md`"))
+        self.assertTrue(roost.plan_problems(self.old, bad))
+        with self.assertRaises(ValueError):
+            roost.apply_plan(self.old, bad, today=today)
+        self.assertIn(b"Older notes.", self.texts())  # the backup keeps its content, wherever it is
+        self.assertIn(b"%PDF-1.4 binary", self.texts())
+
+    def test_a_move_never_replaces_the_first_handoff_the_apply_writes_earlier(self):
+        """The First Handoff is written before Moves, so a Move onto its file in handoffs/ is refused."""
+        stem = f"{datetime.fromtimestamp((self.old / 'HANDOFF.md').stat().st_mtime):%Y-%m-%d-%H%M}-adopted"
+        bad = self.plan(PLAN_BODY.replace("`out/report.pdf`", f"`handoffs/{stem}.md`"))
+        self.assertTrue(roost.plan_problems(self.old, bad))
+        with self.assertRaises(ValueError):
+            roost.apply_plan(self.old, bad)
+        handoffs = [p for p in self.root.rglob(f"handoffs/{stem}.md")]
+        for h in handoffs:  # if one was written, it is still the First Handoff
+            self.assertIn("Packaged the driver", h.read_text(errors="replace"))
+        self.assertIn(b"Start here.", self.texts())  # the hand-written handoff is still somewhere
+        self.assertIn(b"%PDF-1.4 binary", self.texts())
+
     def test_one_file_in_two_steps_stops_the_plan(self):
         bad = self.plan(PLAN_BODY.replace("- `notes-backup.md`: an older copy", "- `export.csv`: an older copy"))
         self.assertIn("`export.csv` is in more than one step", " ".join(roost.plan_problems(self.old, bad)))
