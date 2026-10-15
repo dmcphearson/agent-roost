@@ -53,7 +53,7 @@ roost.NOTES, roost.RECAPS = Path(_SCRATCH.name) / "notes", Path(_SCRATCH.name) /
 # nor their settings, pins, or installed files: a test that misses a stand-in writes here instead
 for _name, _rel in [("CONFIG", "config.json"), ("PINS", "pins.json"), ("UPDATE_CHECK", "update-check.json"),
                     ("DONE", "_done"), ("ADOPT_PLANS", "adopt"), ("APP", "app"), ("SPEND_LOG", "spend.jsonl"),
-                    ("SPEND_CACHE", "spend-cache.json"), ("LOG", "roost.log")]:
+                    ("SPEND_CACHE", "spend-cache.json"), ("LOG", "roost.log"), ("COMPAT_LOGGED", "compat-logged.json")]:
     setattr(roost, _name, Path(_SCRATCH.name) / _rel)
 roost.config.DISMISSED = Path(_SCRATCH.name) / "dismissed.json"  # the dismissed Sessions' ids; never the person's own
 

@@ -87,6 +87,49 @@ class Compat(unittest.TestCase):
 
     AGENT = {k: None for k in roost.AGENT_KEYS}
 
+    def fresh(self):
+        """No log and no record of a logged version, before and after the test."""
+        for path in (roost.LOG, roost.config.COMPAT_LOGGED):
+            path.unlink(missing_ok=True)
+
+    def launch(self, version):
+        """check_compat as one roost launch would run it, with Claude Code reporting this version and
+        a session list that has every field roost reads."""
+        import unittest.mock
+        def run(cmd, *a, **k):
+            return unittest.mock.Mock(stdout=f"{version} (Claude Code)\n" if "--version" in cmd else "[]")
+        with unittest.mock.patch.object(roost.subprocess, "run", run):
+            return roost.check_compat()
+
+    def newer_lines(self, version):
+        line = f"compat: Claude Code {version} is newer than roost was tested with ({roost.TESTED_CLAUDE})"
+        text = roost.LOG.read_text() if roost.LOG.exists() else ""
+        return [l for l in text.splitlines() if l.endswith(line)]
+
+    def test_a_newer_version_is_logged_once_not_every_launch(self):
+        self.fresh(); self.addCleanup(self.fresh)
+        self.assertEqual(self.launch("9.9.9"), "")
+        self.assertEqual(self.launch("9.9.9"), "")
+        self.assertEqual(len(self.newer_lines("9.9.9")), 1)
+
+    def test_a_different_newer_version_is_logged_again(self):
+        self.fresh(); self.addCleanup(self.fresh)
+        self.launch("9.9.9"); self.launch("9.9.9")
+        self.assertEqual(self.launch("9.9.10"), "")
+        self.assertEqual(len(self.newer_lines("9.9.9")), 1)
+        self.assertEqual(len(self.newer_lines("9.9.10")), 1)
+        self.assertEqual(len(self.newer_lines("9.9.9")) + len(self.newer_lines("9.9.10")), 2)
+
+    def test_the_logged_version_is_kept_in_the_compat_logged_file(self):
+        self.fresh(); self.addCleanup(self.fresh)
+        self.launch("9.9.9")
+        self.assertTrue(roost.config.COMPAT_LOGGED.exists())
+        self.launch("9.9.9")
+        self.assertEqual(len(self.newer_lines("9.9.9")), 1)
+        roost.config.COMPAT_LOGGED.unlink()  # forget it on disk: the next launch logs the version again
+        self.launch("9.9.9")
+        self.assertEqual(len(self.newer_lines("9.9.9")), 2)
+
     def test_tested_version_is_quiet(self):
         self.assertEqual(roost.compat_warning(f"{roost.TESTED_CLAUDE} (Claude Code)", [self.AGENT]), "")
 
