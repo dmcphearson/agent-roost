@@ -4087,8 +4087,9 @@ class TextualScreens(unittest.TestCase):
     ALL_VIEW = ("right",) * 4  # from Running, the view roost opens on with a running Session, to All
 
     def test_the_sessions_cell_counts_unwrapped_sessions_after_the_running_ones(self):
-        """Spec 2: the running marks, then "· N unwrapped" for linked closed Sessions no Handoff covers;
-        with only unwrapped ones, "N unwrapped"; with only wrapped-up ones, nothing. Spec 1: no ▸."""
+        """Spec 2: the running marks, then "N unwrapped" for linked closed Sessions no Handoff covers, on a
+        second line under the marks; with only unwrapped ones, "N unwrapped"; with only wrapped-up ones,
+        nothing. Spec 1: no ▸."""
         p, _, _ = self.fleet()
         desks = [self.closed("Desk order", 35), self.closed("Desk survey", 45)]
         vpn = self.closed("VPN audit", 150)
@@ -4096,7 +4097,11 @@ class TextualScreens(unittest.TestCase):
         projects = [p, self.proj("bravo-desks", desks), self.proj("charlie-vpn", [vpn], covered=[vpn])]
         lines = self.screen(self.run_with("Projects", projects, []))
         both, unwrapped, wrapped = (self.line_of(lines, pid) for pid in ("Printer fleet", "bravo-desks", "charlie-vpn"))
-        self.assertIn("○1 · 1 unwrapped", both)
+        i = lines.index(both)
+        self.assertIn("○1", both)
+        self.assertNotIn("unwrapped", both)
+        self.assertEqual(lines[i + 1].strip(), "1 unwrapped")
+        self.assertEqual(lines[i + 1].index("1 unwrapped"), both.index("○1"))
         self.assertIn("2 unwrapped", unwrapped)
         self.assertFalse(set("○◆●·") & set(unwrapped.split("bravo-desks", 1)[1]), unwrapped)
         self.assertNotIn("unwrapped", wrapped)
@@ -4129,7 +4134,11 @@ class TextualScreens(unittest.TestCase):
         seen = {}
         names = lambda app: [s["name"] for s in app.ui.srows]
         status = lambda app: self.line_of(screen_text(app), "Toner order")
-        project = lambda app: self.line_of(screen_text(app), "Printer fleet")
+
+        def project(app):  # the project's line and the line under it, where "N unwrapped" goes
+            lines = screen_text(app)
+            i = lines.index(self.line_of(lines, "Printer fleet"))
+            return lines[i] + "\n" + lines[i + 1]
         self.run_with("Sessions", [p], [
             self.keys(*self.ALL_VIEW), self.look(seen, "before", names),
             self.on_session("Toner order"), self.pick("Dismiss"),
@@ -4354,3 +4363,427 @@ class Stats(unittest.TestCase):
         from datetime import date
         days = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-08", "2026-10-09"]
         self.assertEqual(roost.streaks(days, date(2026, 10, 10)), (2, 3))
+
+
+# ---------- Projects rows: the NAME first (dates, a two-line SESSIONS cell, and the column widths) ----------
+
+import importlib
+import locale
+FMT = importlib.import_module("roost.core.formatting")  # date_order is patched where it's defined
+TIME_TODAY = re.compile(r"^(1[0-2]|[1-9]):[0-5]\d (AM|PM)$")
+SHORT_DATE = re.compile(r"\d\d/\d\d/\d\d")
+
+
+def clock(ts):
+    """A time today as the spec writes it: 12-hour, no leading zero, English AM/PM."""
+    d = datetime.fromtimestamp(ts)
+    return f"{d.hour % 12 or 12}:{d:%M} {'AM' if d.hour < 12 else 'PM'}"
+
+
+class ShortWhen(unittest.TestCase):
+    """formatting.short_when(ts, now): a time today as "2:17 PM", any other day as two-digit MM/DD/YY or
+    DD/MM/YY, in the order formatting.date_order() gives ("MDY" or "DMY")."""
+    NOW = datetime(2026, 10, 14, 18, 0).timestamp()
+
+    def at(self, *when):
+        return datetime(*when).timestamp()
+
+    def order(self, which):
+        import unittest.mock
+        return unittest.mock.patch.object(FMT, "date_order", lambda: which)
+
+    def test_a_time_today_is_the_time_only(self):
+        for when, shown in [((2026, 10, 14, 14, 17), "2:17 PM"), ((2026, 10, 14, 0, 5), "12:05 AM"),
+                            ((2026, 10, 14, 12, 0), "12:00 PM"), ((2026, 10, 14, 9, 5), "9:05 AM"),
+                            ((2026, 10, 14, 23, 59), "11:59 PM")]:
+            for order in ("MDY", "DMY"):
+                with self.order(order):
+                    self.assertEqual(roost.short_when(self.at(*when), self.NOW), shown, (when, order))
+
+    def test_any_other_day_is_the_date_only_month_first(self):
+        with self.order("MDY"):
+            self.assertEqual(roost.short_when(self.at(2026, 10, 13, 14, 17), self.NOW), "10/13/26")  # yesterday
+            self.assertEqual(roost.short_when(self.at(2026, 1, 5, 9, 0), self.NOW), "01/05/26")
+            self.assertEqual(roost.short_when(self.at(2025, 10, 14, 14, 17), self.NOW), "10/14/25")  # today's date, a year ago
+
+    def test_any_other_day_is_the_date_only_day_first(self):
+        with self.order("DMY"):
+            self.assertEqual(roost.short_when(self.at(2026, 10, 13, 14, 17), self.NOW), "13/10/26")
+            self.assertEqual(roost.short_when(self.at(2026, 1, 5, 9, 0), self.NOW), "05/01/26")
+            self.assertEqual(roost.short_when(self.at(2025, 10, 14, 14, 17), self.NOW), "14/10/25")
+
+    def test_now_defaults_to_the_current_time(self):
+        ts = time.time()
+        self.assertEqual(roost.short_when(ts), clock(ts))
+        with self.order("MDY"):
+            self.assertEqual(roost.short_when(ts - 3 * 86400), datetime.fromtimestamp(ts - 3 * 86400).strftime("%m/%d/%y"))
+
+    def test_am_and_pm_are_english_whatever_the_locale(self):
+        saved = locale.setlocale(locale.LC_TIME)
+        tried = 0
+        try:
+            for name in ("en_GB.UTF-8", "ja_JP.UTF-8", "de_DE.UTF-8"):  # p.m., 午後, and nothing, for %p
+                try:
+                    locale.setlocale(locale.LC_TIME, name)
+                except locale.Error:
+                    continue
+                tried += 1
+                self.assertEqual(roost.short_when(self.at(2026, 10, 14, 14, 17), self.NOW), "2:17 PM", name)
+                self.assertEqual(roost.short_when(self.at(2026, 10, 14, 9, 5), self.NOW), "9:05 AM", name)
+        finally:
+            locale.setlocale(locale.LC_TIME, saved)
+        if not tried:
+            self.skipTest("none of en_GB, ja_JP, de_DE is installed")
+
+    def test_the_order_comes_from_a_locales_date_format(self):
+        for fmt, order in [("%m/%d/%Y", "MDY"), ("%m/%d/%y", "MDY"), ("%d/%m/%Y", "DMY"), ("%d.%m.%Y", "DMY"),
+                           ("%Y/%m/%d", "MDY"), ("", "MDY"), ("%x", "MDY")]:
+            self.assertEqual(roost.order_from_format(fmt), order, fmt)
+
+    def test_date_order_is_month_or_day_first(self):
+        self.assertIn(FMT.date_order(), ("MDY", "DMY"))
+
+
+class WorkedStaysInFilesAndCommands(unittest.TestCase):
+    """Text roost writes to files or prints from roost project list keeps worked()'s "Oct 7, 4:12 pm"."""
+    setUp, tearDown, project = Projects.setUp, Projects.tearDown, Projects.project
+
+    def test_roost_project_list_prints_the_long_form(self):
+        import argparse
+        self.project("2026-09-a", handoffs=["2026-10-07-1612-aa1b9a71.md"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(roost.project_list(argparse.Namespace(all=False)), 0)
+        self.assertIn("Oct 7, 4:12 pm", out.getvalue())
+        self.assertNotRegex(out.getvalue(), SHORT_DATE)
+
+    def test_a_handoffs_times_keep_the_long_form(self):
+        self.assertRegex(roost.iso_time("2026-10-07T16:12:00.000Z"), r"^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d\d (am|pm)$")
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class ProjectRows(unittest.TestCase):
+    """The Projects tab with the NAME as its most readable part, on a real Textual screen."""
+    setUp = TextualScreens.setUp
+    closed = staticmethod(TextualScreens.closed)
+    proj = staticmethod(TextualScreens.proj)
+    select = staticmethod(TextualScreens.select)
+    keys = staticmethod(TextualScreens.keys)
+    TITLES = [("NAME", "NAME"), ("STATUS", "STAT"), ("SESSIONS", "SESS"), ("CATEGORY", "CATE"), ("TAGS", "TAGS"),
+              ("LAST WORKED", "LAST")]
+    PAST = datetime(2025, 1, 5, 9, 30).timestamp()  # MDY 01/05/25, DMY 05/01/25
+
+    def run_on(self, projects, steps=(), size=(160, 30), tab="Projects", config=None):
+        import asyncio, unittest.mock
+        settings = dict(config or {}, tab=tab)
+        with unittest.mock.patch.multiple(roost, read_projects=lambda sessions: projects, read_config=lambda: settings):
+            app = roost.RoostApp(self.sessions, "")
+
+            async def go():
+                async with app.run_test(size=size) as pilot:
+                    await pilot.pause()
+                    for step in [self.select(lambda ui: ui.folded.discard("Inactive"))] + list(steps):  # past dates list as Inactive
+                        await step(pilot)
+                        await pilot.pause()
+                    app.lines = screen_text(app)
+            asyncio.run(go())
+        return app
+
+    def on_project(self, pid):
+        return self.select(lambda ui: setattr(ui, "psel", next(i for i, r in enumerate(ui.project_rows())
+                                                               if r.kind == "project" and r.item["id"] == pid)))
+
+    @staticmethod
+    def chosen(app):
+        r = app.ui.project_rows()[app.ui.psel]
+        return r.item["id"] if r.kind == "project" else r.kind
+
+    @staticmethod
+    def head_index(lines):
+        return next(i for i, l in enumerate(lines) if "NAME" in l and "STAT" in l)
+
+    def columns(self, header):
+        """Where each column's title starts, for the titles drawn, in order."""
+        x, at = {}, 0
+        for title, prefix in self.TITLES:
+            i = header.find(prefix, at)
+            if i >= 0:
+                x[title], at = i, i + 1
+        return x
+
+    def widths(self, x):
+        """Each column's width, from its title to the next column's, when both are drawn."""
+        names = [t for t, _ in self.TITLES]
+        return {t: x[n] - x[t] for t, n in zip(names, names[1:]) if t in x and n in x}
+
+    def listing(self, lines):
+        """The list's lines: under the column titles, above the panel's rule."""
+        h = self.head_index(lines)
+        edge = next(i for i in range(h + 1, len(lines)) if lines[i].strip() and set(lines[i].strip()) == {"─"})
+        return lines[h + 1:edge]
+
+    @staticmethod
+    def row_of(lines, text):
+        return next(i for i, l in enumerate(lines) if text in l)
+
+    def project(self, pid, linked=(), label=None, status="active", category="", tags=(), last=None, covered=()):
+        p = self.proj(pid, list(linked), covered=covered, label=label)
+        p.update(status=status, category=category, tags=list(tags), last=time.time() if last is None else last)
+        return p
+
+    # 1. Dates
+
+    def test_last_worked_is_a_time_today_and_a_short_date_otherwise(self):
+        import unittest.mock
+        now = time.time()
+        projects = [self.project("today-one", status="active", last=now), self.project("older-one", status="active", last=self.PAST)]
+        for order, shown in (("MDY", "01/05/25"), ("DMY", "05/01/25")):
+            with unittest.mock.patch.object(FMT, "date_order", lambda o=order: o):
+                lines = self.run_on(projects).lines
+            x = self.columns(lines[self.head_index(lines)])
+            today, older = (lines[self.row_of(lines[:-10], pid)] for pid in ("today-one", "older-one"))
+            self.assertEqual(today[x["LAST WORKED"]:].strip(), clock(now), order)
+            self.assertEqual(older[x["LAST WORKED"]:].strip(), shown, order)
+
+    def test_the_projects_card_dates_are_short(self):
+        import unittest.mock
+        p = self.project("older-one", last=self.PAST)
+        seen = {}
+
+        async def panels(pilot):
+            ui = pilot.app.ui
+            s = dict(self.sessions[0], last=self.PAST)
+            recap = {"id": "printer-recap", "last": self.PAST, "sessions": [], "path": "/nowhere/printer-recap.md", "summary": ""}
+            for kind, item in (("session", s), ("recap", recap)):
+                ui.psel = 0
+                seen[kind] = dict(ui.project_panel([roost.Row("Recent", kind, item, 0)], 30, 160)[1])["Status"]
+        with unittest.mock.patch.object(FMT, "date_order", lambda: "DMY"):
+            app = self.run_on([p], [self.on_project("older-one"), panels])
+        status = next(l for l in app.lines[-10:] if "Last worked" in l)
+        self.assertRegex(status, r"Last worked +05/01/25(\s|$)")
+        self.assertRegex(seen["session"], r"Last active +05/01/25(\s|$)")
+        self.assertRegex(seen["recap"], r"Last worked +05/01/25(\s|$)")
+
+    def test_the_notes_list_and_card_dates_are_short(self):
+        import unittest.mock
+        old = roost.create_note("Printer idea", body="first line")
+        os.utime(old, (self.PAST, self.PAST))
+        new = roost.create_note("Laptop budget", body="first line")
+        made = Path(new).stat().st_mtime
+        with unittest.mock.patch.object(FMT, "date_order", lambda: "DMY"):
+            lines = self.run_on([], tab="Notes").lines
+            self.assertTrue(any(re.search(rf"Laptop budget +{clock(made)}(\s|$)", l) for l in lines), lines)
+            self.assertTrue(any(re.search(r"Printer idea +05/01/25(\s|$)", l) for l in lines), lines)
+            app = self.run_on([], [self.select(lambda ui: setattr(ui, "nsel", next(
+                i for i, r in enumerate(ui.nrows) if r.get("name") == "Printer idea")))], tab="Notes")
+        self.assertTrue(any(re.search(r"Edited +05/01/25(\s|$)", l) for l in app.lines), app.lines)
+
+    def test_the_sessions_tab_keeps_last_active_relative(self):
+        lines = self.run_on([], tab="Sessions").lines
+        line = next(l for l in lines[:-10] if "Printer fix" in l)
+        self.assertIn("5m ago", line)
+        self.assertNotRegex(line, r"\d:\d\d (AM|PM)")
+
+    # 2. SESSIONS on two lines
+
+    def two_line_fleet(self):
+        """alpha: idle Printer fix and closed Toner order (○1, then 1 unwrapped); bravo: waiting Laptop
+        refresh (◆1, nothing unwrapped); charlie: no Sessions; delta: closed Desk order only (1 unwrapped,
+        nothing running); echo: no Sessions."""
+        toner, desk = self.closed("Toner order", 30), self.closed("Desk order", 40)
+        self.sessions = self.sessions + [toner, desk]
+        now = time.time()
+        return [self.project("alpha", [self.sessions[0], toner], last=now),
+                self.project("bravo", [self.sessions[1]], last=now - 60),
+                self.project("charlie", [], last=now - 120),
+                self.project("delta", [desk], last=now - 180),
+                self.project("echo", [], last=now - 240)]
+
+    def test_unwrapped_is_on_a_second_line_under_the_running_counts(self):
+        lines = self.run_on(self.two_line_fleet()).lines
+        x = self.columns(lines[self.head_index(lines)])
+        a, b, c = (self.row_of(lines[:-10], pid) for pid in ("alpha", "bravo", "charlie"))
+        self.assertTrue(lines[a][x["SESSIONS"]:].startswith("○1"), lines[a])
+        self.assertNotIn("unwrapped", lines[a])
+        self.assertEqual(lines[a + 1].strip(), "1 unwrapped")
+        self.assertEqual(lines[a + 1].index("1 unwrapped"), x["SESSIONS"])
+        self.assertEqual(b, a + 2)  # alpha takes two lines
+        self.assertTrue(lines[b][x["SESSIONS"]:].startswith("◆1"), lines[b])
+        self.assertEqual(c, b + 1)  # bravo takes one
+        d, e = (self.row_of(lines[:-10], pid) for pid in ("delta", "echo"))
+        self.assertEqual(lines[d][x["SESSIONS"]:x["CATEGORY"]].strip(), "1 unwrapped")  # nothing running: first line
+        self.assertEqual(e, d + 1)  # so delta takes one line too
+
+    def test_a_click_on_either_line_selects_the_project(self):
+        projects = self.two_line_fleet()
+        lines = self.run_on(projects).lines
+        a = self.row_of(lines[:-10], "alpha")
+        sx = self.columns(lines[self.head_index(lines)])["SESSIONS"]
+        for y in (a, a + 1):
+            app = self.run_on(projects, [self.on_project("charlie"), lambda pilot, y=y: pilot.click(offset=(sx + 2, y))])
+            self.assertEqual(self.chosen(app), "alpha", y)
+
+    def test_down_from_a_two_line_row_selects_the_next_row(self):
+        app = self.run_on(self.two_line_fleet(), [self.on_project("alpha"), self.keys("down")])
+        self.assertEqual(self.chosen(app), "bravo")
+
+    def test_scrolling_down_shows_both_lines_of_the_selected_row(self):
+        now, projects = time.time(), []
+        self.sessions = []
+        for i in range(14):
+            live, gone = session(f"Live {i:02d}", mins=i), self.closed(f"Gone {i:02d}", 30 + i)
+            self.sessions += [live, gone]
+            projects.append(self.project(f"proj-{i:02d}", [live, gone], label=f"Project {i:02d}", last=now - i * 60))
+        seen = []
+
+        async def look(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            seen.append((self.chosen(pilot.app), screen_text(pilot.app)))
+        steps = []
+        for _ in range(15):
+            steps += [self.keys("down"), look]
+        self.run_on(projects, steps)
+        scrolled = False
+        for pid, lines in seen:
+            if not pid.startswith("proj-"):
+                continue
+            listed = self.listing(lines)
+            label = f"Project {pid[-2:]}"
+            i = next((i for i, l in enumerate(listed) if label in l), None)
+            self.assertIsNotNone(i, (pid, listed))
+            self.assertLess(i + 1, len(listed), (pid, listed))
+            self.assertEqual(listed[i + 1].strip(), "1 unwrapped", (pid, listed))
+            scrolled = scrolled or not any("Project 00" in l for l in listed)
+        self.assertTrue(scrolled, "the list never scrolled: the fixture needs more projects")
+
+    # 3. Widths
+
+    def test_in_a_wide_window_name_is_its_target_and_the_rest_stays_blank(self):
+        """160 and 170 columns, one name longer than 46: NAME 48 (its longest + 2, capped at 48), STATUS its
+        longest value plus 2 (as today), SESSIONS 12, CATEGORY 14, TAGS 14, LAST WORKED drawn whole; the 10
+        columns more change nothing (they stay blank to the right)."""
+        long_name = "Quarterly laptop refresh, printer fleet consolidation, and badge reader rollout"
+        p = self.project("wide", label=long_name, status="active", category="ops", tags=["q4"], last=self.PAST)
+        got = {}
+        for w in (160, 170):
+            lines = self.run_on([p], size=(w, 30)).lines
+            header = lines[self.head_index(lines)]
+            x = self.columns(header)
+            self.assertEqual([t for t, _ in self.TITLES], list(x), (w, header))
+            self.assertIn("LAST WORKED", header)
+            wd = self.widths(x)
+            self.assertEqual((wd["NAME"], wd["STATUS"], wd["SESSIONS"], wd["CATEGORY"], wd["TAGS"]),
+                             (48, len("active") + 2, 12, 14, 14), w)
+            row = lines[self.row_of(lines[:-10], long_name[:20])]
+            self.assertTrue(SHORT_DATE.fullmatch(row[x["LAST WORKED"]:].strip()), row)
+            got[w] = (header.rstrip(), row.rstrip())
+        self.assertEqual(got[170], got[160])
+
+    def test_name_is_its_longest_name_plus_two_up_to_48(self):
+        names = ["Printer fleet consolidation", "Laptop refresh"]  # the longest is 27
+        projects = [self.project(f"p{i}", label=n, last=time.time() - i) for i, n in enumerate(names)]
+        for size in ((160, 30), (250, 30)):
+            lines = self.run_on(projects, size=size).lines
+            w = self.widths(self.columns(lines[self.head_index(lines)]))
+            self.assertEqual(w["NAME"], 29, size)
+            self.assertEqual((w["SESSIONS"], w["CATEGORY"], w["TAGS"]), (12, 14, 14), size)
+        longer = projects + [self.project("p9", label="x" * 47 + " and a little more")]
+        lines = self.run_on(longer, size=(250, 30)).lines
+        self.assertEqual(self.widths(self.columns(lines[self.head_index(lines)]))["NAME"], 48)
+
+    def test_projects_name_ignores_the_name_width_setting(self):
+        names = ["Printer fleet consolidation", "Laptop refresh"]
+        projects = [self.project(f"p{i}", label=n, last=time.time() - i) for i, n in enumerate(names)]
+        for setting in (16, 60):
+            lines = self.run_on(projects, config={"name_width": setting}).lines
+            self.assertEqual(self.widths(self.columns(lines[self.head_index(lines)]))["NAME"], 29, setting)
+
+    def test_long_category_and_tags_are_cut_with_an_ellipsis(self):
+        cat, tags = "vendor-evaluation-and-procurement", ["alpha", "bravo", "charlie", "delta"]
+        projects = [self.project("long-one", category=cat, tags=tags), self.project("short-one", category="ops", tags=["q4"])]
+        lines = self.run_on(projects).lines
+        x = self.columns(lines[self.head_index(lines)])
+        long_row, short_row = (lines[self.row_of(lines[:-10], pid)] for pid in ("long-one", "short-one"))
+        for value, start, end in ((cat, x["CATEGORY"], x["TAGS"]), (", ".join(tags), x["TAGS"], x["LAST WORKED"])):
+            cell = long_row[start:end].rstrip()
+            self.assertTrue(cell.endswith("…"), cell)
+            self.assertTrue(value.startswith(cell[:-1]) and len(cell) > 1, cell)
+            self.assertLessEqual(len(cell), 14)
+        self.assertEqual(short_row[x["CATEGORY"]:x["TAGS"]].strip(), "ops")
+        self.assertEqual(short_row[x["TAGS"]:x["LAST WORKED"]].strip(), "q4")
+
+    def test_the_column_titles_line_up_with_their_columns(self):
+        import unittest.mock
+        p = self.project("lined-up", [self.sessions[1]], label="Lined up", status="active", category="ops", tags=["q4"],
+                         last=self.PAST)
+        with unittest.mock.patch.object(FMT, "date_order", lambda: "MDY"):
+            lines = self.run_on([p]).lines
+        x = self.columns(lines[self.head_index(lines)])
+        row = lines[self.row_of(lines[:-10], "Lined up")]
+        for title, text in (("NAME", "Lined up"), ("STATUS", "active"), ("SESSIONS", "◆1"), ("CATEGORY", "ops"),
+                            ("TAGS", "q4"), ("LAST WORKED", "01/05/25")):
+            self.assertEqual(row[x[title]:x[title] + len(text)], text, (title, row))
+
+    def test_columns_give_up_width_in_order_as_the_window_narrows(self):
+        """From 200 columns down to 100, one long name and a long status: LAST WORKED goes first (and
+        isn't drawn), then SESSIONS, then TAGS, then CATEGORY, then STATUS; NAME holds its target (48)
+        throughout. A narrowed column's title is cut with "…". LAST WORKED is 12 wide: once SESSIONS is
+        whole, 12 columns more fit everything."""
+        name = "Quarterly laptop refresh and printer fleet consolidation for every office"
+        status = "waiting on the vendor's revised quote for the second office"
+        cat, tags = "vendor-evaluation", ["alpha", "bravo", "charlie"]
+        p = self.project("narrowing", label=name, status=status, category=cat, tags=tags, last=self.PAST)
+        frames = {}
+
+        async def sweep(pilot):
+            for w in range(200, 99, -1):
+                await pilot.resize_terminal(w, 30)
+                await pilot.pause()
+                frames[w] = screen_text(pilot.app)
+        self.run_on([p], [sweep], size=(200, 30))
+        S = len(status) + 2
+
+        def frame(w):
+            lines = frames[w]
+            x = self.columns(lines[self.head_index(lines)])
+            row = lines[self.row_of(lines[:-10], name[:12])]
+            return x, self.widths(x), row
+        x, wd, row = frame(200)
+        self.assertEqual(wd["STATUS"], S)
+        cat_full, tags_full = row[x["CATEGORY"]:x["CATEGORY"] + 14].rstrip(), row[x["TAGS"]:x["TAGS"] + 14].rstrip()
+        phases, cut_sessions = set(), []
+        for w in sorted(frames, reverse=True):
+            x, wd, row = frame(w)
+            lw, ses, tg, ct = ("LAST WORKED" in x), ("SESSIONS" in x), ("TAGS" in x), ("CATEGORY" in x)
+            cat_ok = ct and row[x["CATEGORY"]:x["CATEGORY"] + 14].rstrip() == cat_full
+            tags_ok = tg and row[x["TAGS"]:x["TAGS"] + 14].rstrip() == tags_full
+            status_ok = status in row
+            name_w = wd["NAME"]
+            if lw:  # LAST WORKED still has width: every other column is whole
+                self.assertEqual((wd.get("SESSIONS"), wd.get("CATEGORY"), wd.get("TAGS")), (12, 14, 14), w)
+                self.assertTrue(status_ok, w)
+            else:
+                self.assertNotRegex(row, SHORT_DATE, w)
+                self.assertNotRegex(row, r"\d:\d\d (AM|PM)", w)
+            if ses:  # SESSIONS has width: TAGS, CATEGORY, STATUS are whole
+                self.assertTrue(tags_ok and cat_ok and status_ok, (w, row))
+            if tg:  # TAGS has width: CATEGORY and STATUS are whole
+                self.assertTrue(cat_ok and status_ok, (w, row))
+            if ct:  # CATEGORY has width: STATUS is whole
+                self.assertTrue(status_ok, (w, row))
+            self.assertEqual(name_w, 48, w)  # others are still there: NAME holds its target
+            header = frames[w][self.head_index(frames[w])]
+            for title, _ in self.TITLES:
+                if title in wd and wd[title] < len(title):  # a narrowed title is cut with …
+                    cell = header[x[title]:x[title] + wd[title]].rstrip()
+                    self.assertTrue(cell.endswith("…") and title.startswith(cell[:-1]), (w, title, cell))
+            if ses and wd.get("SESSIONS", 12) < 12:
+                cut_sessions.append(w)
+            phases.add("all" if lw else "sessions" if ses else "tags" if tg else "category" if ct else "status")
+        self.assertEqual(phases, {"all", "sessions", "tags", "category", "status"})
+        whole = max(cut_sessions) + 1  # the narrowest window with SESSIONS whole: LAST WORKED has nothing
+        look = lambda w: (frames[w][self.head_index(frames[w])].rstrip(), frame(w)[2].rstrip())
+        self.assertEqual(look(whole + 12), look(200))  # LAST WORKED's 12 columns fit everything
+        last_title = look(whole + 10)[0][x_lw:] if (x_lw := self.columns(look(whole + 10)[0]).get("LAST WORKED")) else ""
+        self.assertTrue(last_title.endswith("…") and "LAST WORKED".startswith(last_title[:-1]), last_title)  # 10 of 12: cut
