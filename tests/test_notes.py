@@ -1,6 +1,6 @@
 from support import *  # noqa: F401,F403 (the shared namespace, helpers, and fixtures)
 from support import _SCRATCH, own_tests  # noqa: F401
-from test_projects import Projects  # for their helpers; their tests run in test_projects.py
+from test_projects import Projects, ProjectRows  # for their helpers; their tests run in test_projects.py
 
 load_tests = own_tests(__name__)
 
@@ -291,6 +291,65 @@ class Notes(unittest.TestCase):
         finally:
             roost.sys.stdin = saved
         self.assertIn("From stdin.", (roost.NOTES / "piped.md").read_text())
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class NotesCreated(unittest.TestCase):
+    """The selected note's card footer shows Created as a short date in the locale's order, like Edited,
+    but never a time: a created: line is a plain date."""
+    setUp = ProjectRows.setUp
+    select = staticmethod(ProjectRows.select)
+    run_on = ProjectRows.run_on
+
+    def note(self, name, created=None):
+        """A note written by hand; created=None leaves out the created: line."""
+        roost.NOTES.mkdir(parents=True, exist_ok=True)
+        line = "" if created is None else f"created: {created}\n"
+        (roost.NOTES / f"{roost.slug(name)}.md").write_text(f"---\ntitle: {name}\n{line}tags: []\n---\n\n# {name}\n")
+
+    def footer(self, name, order):
+        """The drawn screen's line with Created on it, with the note called name selected."""
+        import unittest.mock
+        pick = self.select(lambda ui: setattr(ui, "nsel", next(i for i, r in enumerate(ui.nrows) if r.get("name") == name)))
+        with unittest.mock.patch.object(FMT, "date_order", lambda: order):
+            lines = self.run_on([], [pick], tab="Notes").lines
+        return next((l for l in lines if "Created" in l), "\n".join(lines))
+
+    @staticmethod
+    def today(order):
+        d = datetime.now()
+        return f"{d:%d/%m/%y}" if order == "DMY" else f"{d:%m/%d/%y}"
+
+    def test_created_shows_as_a_short_date_month_or_day_first(self):
+        self.note("Printer idea", "2026-10-12")
+        for order, shown in (("MDY", "10/12/26"), ("DMY", "12/10/26")):
+            line = self.footer("Printer idea", order)
+            self.assertRegex(line, rf"Created +{shown}(\s|$)", order)
+            self.assertNotIn("2026-10-12", line, order)
+
+    def test_created_with_a_time_after_its_date_shows_the_date_alone(self):
+        self.note("Printer idea", "2026-10-12T09:30")
+        line = self.footer("Printer idea", "MDY")
+        self.assertRegex(line, r"Created +10/12/26(\s|$)")
+        self.assertNotRegex(line, r"Created +\S*\s*\d?\d:\d\d")
+
+    def test_a_note_created_today_shows_todays_date_not_a_time(self):
+        roost.create_note("Laptop budget")  # created: today's date
+        for order in ("MDY", "DMY"):
+            line = self.footer("Laptop budget", order)
+            self.assertRegex(line, rf"Created +{re.escape(self.today(order))}(\s|$)", order)
+            self.assertNotRegex(line, r"Created +\d?\d:\d\d", order)
+
+    def test_a_created_value_that_isnt_a_date_shows_as_written(self):
+        self.note("Printer idea", "last spring")
+        self.assertRegex(self.footer("Printer idea", "DMY"), r"Created +last spring(\s|$)")
+
+    def test_a_note_without_created_shows_its_files_date_short(self):
+        self.note("Hand written")  # no created: line, so the file's own date: made just now
+        for order in ("MDY", "DMY"):
+            line = self.footer("Hand written", order)
+            self.assertRegex(line, rf"Created +{re.escape(self.today(order))}(\s|$)", order)
+            self.assertNotRegex(line, r"Created +\d{4}-\d\d-\d\d", order)
 
 
 if __name__ == "__main__":
