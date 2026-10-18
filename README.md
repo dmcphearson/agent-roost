@@ -12,7 +12,12 @@ Roost is a session manager, not an orchestrator. It never sends work to a sessio
   <img src="assets/stats.png" width="32%" alt="The Stats tab: spend by day, kind, and project">
 </p>
 
-<sub>Projects, then Sessions, Notes, and Stats. Screenshots are of `roost --demo`: made-up Sessions, projects, and notes.</sub>
+<p>
+  <img src="assets/project-actions.png" width="49%" alt="A project's actions: Start a Session, Show its Sessions, Set its category, Edit its tags, Show its folder in Finder, New project">
+  <img src="assets/session-actions.png" width="49%" alt="A Session's actions: Open in a new window, Move to another project, Write its Handoff, Ask what to do with it, Unpin, Rename, Stop, Copy its id">
+</p>
+
+<sub>Projects, then Sessions, Notes, and Stats; below them, a project's and a Session's actions (Enter or right-click on a row). Screenshots are of `roost --demo`: made-up Sessions, projects, and notes.</sub>
 
 ## Install
 
@@ -51,6 +56,7 @@ Clone this repo and run `./dev-link.sh`. It links `~/.local/bin/roost` and `~/.r
 | `roost <text>` | Open it with a search applied |
 | `roost --list` | Plain-text listing, for scripts |
 | `roost --demo` | Made-up sessions for screenshots; nothing real is read or changed |
+| `roost --version` | Print the version |
 | `roost setup` | Check prerequisites, choose a terminal and the Projects folder, and install the plugin |
 | `roost update` | Install the latest release and bring the plugin along (Homebrew: `brew upgrade roost` first) |
 | `roost project new <id> --summary "…"` | Make a project folder and its README; `brief`, `list`, and `status` read and set the rest |
@@ -88,9 +94,11 @@ The keys are the same on every tab. Everything you can do to a row is in its act
 | ? | Show the keys |
 | Ctrl+q | Quit (a plain q does nothing) |
 
-**A Session's actions:** Open (or go to its window), New project from this Session, Add to a project (or move to another), Write its Handoff or Session recap from the transcript (shows the cost first), Pin or Unpin (on a closed one, restart it in the background, pinned), Rename, Dismiss or Undismiss (a closed one), Stop or Delete to the Trash (both ask first), Copy its id, and Show its folder in Finder. A closed Session a project lists isn't reopened; its first action starts a fresh Session for the project.
+**A Session's actions:** Open (or go to its window), New project from this Session, Add to a project (or move to another), Write its Handoff or Session recap from the transcript (shows the cost first), Ask what to do with it, Pin or Unpin (on a closed one, restart it in the background, pinned), Rename, Dismiss or Undismiss (a closed one), Stop or Delete to the Trash (both ask first), Copy its id, and Show its folder in Finder. A closed Session a project lists isn't reopened; its first action starts a fresh Session for the project. A Session with a recap can read it, make it a project (the recap's Handoffs move in), or start a fresh Session from it.
 
-**A project's actions:** Start a Session, Show its Sessions (the Sessions tab, on All, searching `project:<its id>`; esc clears it), Set its category, Edit its tags, Show its folder in Finder, clear an old `_archive/` from roost adopt, and New project. **+ New project**, at the bottom of the list, makes one too.
+**Ask what to do with it** has a model read the Session's transcript and your open projects (it shows the cost first) and comes back with a verdict and why: delete it, write its Session recap, write its Handoff, add it to one of your projects, or leave it as it is, with its open items and anything you'd lose by deleting it. The advised choice is selected in a menu of every choice; nothing happens until you pick one, and anything that spends or deletes asks again.
+
+**A project's actions:** Start a Session, Show its Sessions (the Sessions tab, on All, searching `project:<its id>`; esc clears it), Adopt it (a folder not yet in roost's layout: plans its README and files, you review the plan, then it writes its Handoffs), Set its category, Edit its tags, Rename (its folder; not while a Session runs in it), Show its folder in Finder, clear an old `_archive/` from roost adopt, and New project. **+ New project**, at the bottom of the list, makes one too.
 
 A project has one category (what kind of work it is), its README's `category:` line, and any number of tags (what it's about), its `tags: [a, b]` list. Set its category lists the categories in `CATEGORIES.md` in your Projects folder, one `- name: what it covers` line each, plus any other a project uses; a new one you type joins the list. Edit its tags ticks tags from every tag already in use, or adds a new one. Sessions are listed only on the Sessions tab. A project's SESSIONS column counts its running ones (◆ need input · ● working · ○ idle) and, on a line under them, its unwrapped ones: closed, with no Handoff covering their last message, and not dismissed. NAME gets the most room; in a wide window, spare room goes to NAME, then CATEGORY and TAGS until their values show whole, then evenly to every column; when the window is narrow, LAST WORKED gives way first, then SESSIONS, TAGS, CATEGORY, and STATUS. Dates in the lists and panels are a time today (2:17 PM) and a date otherwise, month or day first as your locale has it (10/14/26 or 14/10/26). A Session recap (what `/wrap-up` writes for a Session no project lists) shows in its Session's panel, and the Session's actions can read it or make it a project.
 
@@ -108,6 +116,25 @@ From the shell, `roost note "Printer driver idea" Push it from the MDM` saves a 
 
 Roost opens notes in the `editor` setting in `~/.config/roost/config.json`, else `$VISUAL`, else `$EDITOR`, else [micro](https://micro-editor.github.io) (`brew install micro`). It waits for an editor in the terminal and gets out of the way of one with its own window (VS Code, Zed, and the like); `editor_wait` (true or false) overrides that. Roost never edits a note itself, except for setting its `project:` line when you move it.
 
+### Stats
+
+What your Sessions cost: every reply's tokens at Anthropic's list price, before any discount, so it's a ceiling, not your invoice. ← → picks the range: Today, This week (from Monday), Month to date, or All time (as far back as Claude Code keeps transcripts). The tab shows the month's spend and its pace, a calendar of spend by day, the most expensive day, Session, and project, your streaks, how much of your prompt tokens came from the cache, and spend by day split by kind: Live work, Wrap-ups (after `/wrap-up`), and roost's own calls for Recaps and Handoffs, Ask, and Adopt (logged in `~/.roost/spend.jsonl` as they run). `/` narrows the spend-by-project list to the projects you type. Set `monthly_limit` (below) to see the month against it.
+
+### Settings
+
+`roost setup` writes the first two; the rest are optional. All live in `~/.config/roost/config.json`.
+
+| Setting | What it does |
+|---|---|
+| `terminal` | Where sessions open: `ghostty`, `terminal`, or `iterm2` |
+| `projects_dir` | Your Projects folder (default `~/.roost/projects`) |
+| `editor`, `editor_wait` | The editor notes open in, and whether roost waits for it (see Notes) |
+| `name_width` | The Sessions tab's NAME width (default 40) |
+| `summary_model` | The model that writes Handoffs, recaps, and adopt plans and answers Ask (default `claude-sonnet-5-5`) |
+| `summary_budget_usd` | The most one of those runs may spend, in dollars (default 5) |
+| `monthly_limit` | A monthly budget in dollars: the Stats tab shows month to date against it |
+| `adopt_archive_days` | Days before roost suggests clearing an `_archive/` from roost adopt (default 5) |
+
 While a Handoff is being written from a transcript, the row counts up: `summarizing 2/3 · 1m40s` (the draft, the review, then the README).
 
 Click a column header to sort by it, and click again to reverse.
@@ -118,7 +145,7 @@ Ghostty, Terminal.app, and iTerm2 can open sessions in new windows. Choose one w
 
 ## How it works
 
-Roost reads Claude Code's local state. It calls a model only when you ask for a Handoff, a Session recap, or an adopt plan, shows the estimated cost first, and logs what each call cost in `~/.roost/spend.jsonl`. Everything else comes from:
+Roost reads Claude Code's local state. It calls a model only when you ask for a Handoff, a Session recap, an adopt plan, or what to do with a Session, shows the estimated cost first, and logs what each call cost in `~/.roost/spend.jsonl`. Everything else comes from:
 
 - `claude agents --json` for live sessions and their status
 - `~/.claude/projects/**/*.jsonl` transcripts for names, summaries, files touched, and context size (cached in `~/.cache/`)
