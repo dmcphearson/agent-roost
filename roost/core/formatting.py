@@ -110,6 +110,16 @@ def short_when(ts, now=None):
     return f"{d:%d/%m/%y}" if date_order() == "DMY" else f"{d:%m/%d/%y}"
 
 
+def short_day(text):
+    """A written date that starts YYYY-MM-DD, as the lists and cards show a date: "10/14/26" (or
+    "14/10/26"), never a time, since a plain date has none. Anything else comes back as written."""
+    try:
+        d = datetime.strptime(text[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return text
+    return f"{d:%d/%m/%y}" if date_order() == "DMY" else f"{d:%m/%d/%y}"
+
+
 def ktok(n):
     return f"{n / 1000:.0f}k"
 

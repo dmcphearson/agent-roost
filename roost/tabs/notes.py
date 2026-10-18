@@ -5,7 +5,7 @@ from pathlib import Path
 from roost.core.config import HOME
 from roost.core.projectdata import plural
 from roost.core.notedata import at_end, create_note, editor
-from roost.core.formatting import clip, short, short_when
+from roost.core.formatting import clip, short, short_day, short_when
 from roost.app.shell import BAR_KEYS, CLICK, NOTE_READ_KEYS, NOTE_SECTIONS
 from roost.app.widgets import Widget
 from roost.core import config
@@ -92,7 +92,7 @@ class NotesTab:
         if r.get("head"):
             return [("Section", f"{r['head']}: {NOTE_SECTIONS[r['head']]}")], [("", "enter or a click opens or closes it")]
         left = [("Tags", ", ".join(r["tags"]) or "none"), ("File", short(r["path"]))]
-        right = [("Created", r["created"]), ("Edited", short_when(r["last"]))]
+        right = [("Created", short_day(r["created"])), ("Edited", short_when(r["last"]))]
         if r["sessions"]:
             right.append(("Sessions", str(len(r["sessions"]))))
         return left + [(k.capitalize(), v) for k, v in r["extra"].items()], right
