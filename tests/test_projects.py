@@ -660,52 +660,163 @@ class ProjectRows(unittest.TestCase):
 
     # 3. Widths
 
-    def test_in_a_wide_window_name_is_its_target_and_the_rest_stays_blank(self):
-        """160 and 170 columns, one name longer than 46: NAME 48 (its longest + 2, capped at 48), STATUS its
-        longest value plus 2 (as today), SESSIONS 12, CATEGORY 14, TAGS 14, LAST WORKED drawn whole; the 10
-        columns more change nothing (they stay blank to the right)."""
+    def drawn_widths(self, projects, w):
+        """The Projects tab in a window w wide: each column's start, the five widths read off the column
+        titles, LAST WORKED's width (it has no column after it, so it is read from the list's own
+        widths), the list's width, and the drawn lines."""
+        seen = {}
+
+        async def last(pilot):
+            region = pilot.app.query_one(roost.ProjectList)
+            seen["list"] = region.size.width
+            seen["LAST WORKED"] = pilot.app.ui.project_widths(pilot.app.ui.prows, region.size.width)["LAST WORKED"]
+        lines = self.run_on(projects, [last], size=(w, 30)).lines
+        x = self.columns(lines[self.head_index(lines)])
+        wd = dict(self.widths(x), **{"LAST WORKED": seen["LAST WORKED"]})
+        return x, wd, seen["list"], lines
+
+    SIX = ("NAME", "STATUS", "SESSIONS", "CATEGORY", "TAGS", "LAST WORKED")
+
+    def six(self, wd):
+        return tuple(wd.get(t) for t in self.SIX)
+
+    def test_in_a_wide_window_name_is_its_target_and_the_rest_is_spread(self):
+        """160 and 170 columns, one name of 79: NAME grows past 48 to its longest + 2 (81) and the rest
+        of the spare width is spread across all six columns, leftmost first. Before spare width:
+        NAME 48, STATUS 8, SESSIONS 12, CATEGORY 14, TAGS 14, LAST WORKED 12 = 108, + 6 for the
+        offset and margin. 160: 46 spare, 33 to NAME, 13 = 2 each + 1 to NAME. 170: 56 spare, 33 to
+        NAME, 23 = 3 each + 1 to NAME through TAGS."""
         long_name = "Quarterly laptop refresh, printer fleet consolidation, and badge reader rollout"
         p = self.project("wide", label=long_name, status="active", category="ops", tags=["q4"], last=self.PAST)
-        got = {}
-        for w in (160, 170):
-            lines = self.run_on([p], size=(w, 30)).lines
+        for w, want in ((160, (84, 10, 14, 16, 16, 14)), (170, (85, 12, 16, 18, 18, 15))):
+            x, wd, width, lines = self.drawn_widths([p], w)
             header = lines[self.head_index(lines)]
-            x = self.columns(header)
             self.assertEqual([t for t, _ in self.TITLES], list(x), (w, header))
             self.assertIn("LAST WORKED", header)
-            wd = self.widths(x)
-            self.assertEqual((wd["NAME"], wd["STATUS"], wd["SESSIONS"], wd["CATEGORY"], wd["TAGS"]),
-                             (48, len("active") + 2, 12, 14, 14), w)
+            self.assertEqual(self.six(wd), want, w)
+            self.assertEqual(5 + sum(wd.values()) + 1, width, w)  # the columns fill the window
             row = lines[self.row_of(lines[:-10], long_name[:20])]
+            self.assertIn(long_name, row)
             self.assertTrue(SHORT_DATE.fullmatch(row[x["LAST WORKED"]:].strip()), row)
-            got[w] = (header.rstrip(), row.rstrip())
-        self.assertEqual(got[170], got[160])
 
-    def test_name_is_its_longest_name_plus_two_up_to_48(self):
+    def test_name_is_its_longest_name_plus_two_with_no_cap(self):
+        """Before spare width NAME is its longest name + 2 (29 here); with STATUS 8 and 12, 14, 14, 12 that
+        is 89, + 6 = 95: at 101 the 6 spare are one each (roost draws nothing under 100). At 250, 155 spare: NAME is already whole and nothing
+        needs CATEGORY or TAGS to grow, so it is 25 each + 1 to NAME through TAGS. A name of 65 has no
+        cap: NAME 67 once there is room (114 + 19 = 133), and at 250 the 117 left after NAME's 19 is 19
+        each + 1 to NAME, STATUS, SESSIONS."""
         names = ["Printer fleet consolidation", "Laptop refresh"]  # the longest is 27
         projects = [self.project(f"p{i}", label=n, last=time.time() - i) for i, n in enumerate(names)]
-        for size in ((160, 30), (250, 30)):
-            lines = self.run_on(projects, size=size).lines
-            w = self.widths(self.columns(lines[self.head_index(lines)]))
-            self.assertEqual(w["NAME"], 29, size)
-            self.assertEqual((w["SESSIONS"], w["CATEGORY"], w["TAGS"]), (12, 14, 14), size)
-        longer = projects + [self.project("p9", label="x" * 47 + " and a little more")]
-        lines = self.run_on(longer, size=(250, 30)).lines
-        self.assertEqual(self.widths(self.columns(lines[self.head_index(lines)]))["NAME"], 48)
+        for w, want in ((101, (30, 9, 13, 15, 15, 13)), (250, (55, 34, 38, 40, 40, 37))):
+            self.assertEqual(self.six(self.drawn_widths(projects, w)[1]), want, w)
+        longer = projects + [self.project("p9", label="x" * 47 + " and a little more")]  # 65
+        for w, want in ((133, (67, 8, 12, 14, 14, 12)), (250, (87, 28, 32, 33, 33, 31))):
+            self.assertEqual(self.six(self.drawn_widths(longer, w)[1]), want, w)
 
     def test_projects_name_ignores_the_name_width_setting(self):
         names = ["Printer fleet consolidation", "Laptop refresh"]
         projects = [self.project(f"p{i}", label=n, last=time.time() - i) for i, n in enumerate(names)]
-        for setting in (16, 60):
-            lines = self.run_on(projects, config={"name_width": setting}).lines
-            self.assertEqual(self.widths(self.columns(lines[self.head_index(lines)]))["NAME"], 29, setting)
+        drawn = {}
+        for setting in (None, 16, 60):
+            lines = self.run_on(projects, config={} if setting is None else {"name_width": setting}).lines
+            drawn[setting] = self.widths(self.columns(lines[self.head_index(lines)]))["NAME"]
+        self.assertEqual(drawn[16], drawn[None], drawn)
+        self.assertEqual(drawn[60], drawn[None], drawn)
+
+    LONG_NAME = "Laptop refresh and printer fleet consolidation for two office"  # 61: NAME 63 whole
+    LONG_CAT = "vendor-evaluation-and-procureme"  # 31: CATEGORY 32 whole
+    LONG_TAGS = ["alpha", "bravo", "charlie", "delta"]  # "alpha, bravo, charlie, delta", 28: TAGS 29 whole
+
+    def long_values(self):
+        return [self.project("long-values", label=self.LONG_NAME, status="active", category=self.LONG_CAT,
+                             tags=self.LONG_TAGS, last=self.PAST)]
+
+    def test_a_window_exactly_wide_enough_leaves_nothing_spare(self):
+        """Before spare width: NAME 48 (a name of 61, capped until there is spare), STATUS 8, SESSIONS 12,
+        CATEGORY 14, TAGS 14, LAST WORKED 12 = 108; with the offset and margin, 114 columns. At 114
+        those are the widths drawn and LAST WORKED's title is whole; one column fewer narrows LAST
+        WORKED (as today); one column more goes to NAME."""
+        p = self.long_values()
+        x, wd, width, lines = self.drawn_widths(p, 114)
+        self.assertEqual(self.six(wd), (48, 8, 12, 14, 14, 12))
+        self.assertIn("LAST WORKED", lines[self.head_index(lines)])
+        x, wd, width, lines = self.drawn_widths(p, 113)
+        self.assertEqual(self.six(wd), (48, 8, 12, 14, 14, 11))
+        x, wd, width, lines = self.drawn_widths(p, 115)
+        self.assertEqual(self.six(wd), (49, 8, 12, 14, 14, 12))
+
+    def test_name_grows_past_48_before_any_other_column_grows(self):
+        """A name of 61 (NAME whole at 63), with long CATEGORY and TAGS waiting: the first 15 spare
+        columns all go to NAME, and CATEGORY and TAGS stay 14 and cut until NAME is whole."""
+        p = self.long_values()
+        for w, name_w in ((114 + 7, 55), (114 + 15, 63)):
+            x, wd, width, lines = self.drawn_widths(p, w)
+            self.assertEqual(self.six(wd), (name_w, 8, 12, 14, 14, 12), w)
+            row = lines[self.row_of(lines[:-10], self.LONG_NAME[:20])]
+            self.assertTrue(row[x["CATEGORY"]:x["TAGS"]].rstrip().endswith("…"), (w, row))
+            self.assertTrue(row[x["TAGS"]:x["LAST WORKED"]].rstrip().endswith("…"), (w, row))
+            if name_w == 63:
+                self.assertIn(self.LONG_NAME, row)
+
+    def test_category_and_tags_grow_to_show_long_values_once_name_is_whole(self):
+        """NAME is whole at 129 columns. The next spare columns go to CATEGORY and TAGS, split evenly while
+        both need more (10 spare: 5 each, 19 and 19), until each shows its longest value whole: CATEGORY
+        its 31 + 1, TAGS its 28 + 1 (129 + 18 + 15 = 162). Nothing else grows meanwhile."""
+        p = self.long_values()
+        x, wd, width, lines = self.drawn_widths(p, 129 + 10)
+        self.assertEqual(self.six(wd), (63, 8, 12, 19, 19, 12))
+        x, wd, width, lines = self.drawn_widths(p, 162)
+        self.assertEqual(self.six(wd), (63, 8, 12, 32, 29, 12))
+        row = lines[self.row_of(lines[:-10], self.LONG_NAME[:20])]
+        self.assertEqual(row[x["CATEGORY"]:x["TAGS"]].rstrip(), self.LONG_CAT)
+        self.assertEqual(row[x["TAGS"]:x["LAST WORKED"]].rstrip(), ", ".join(self.LONG_TAGS))
+        self.assertEqual(5 + sum(wd.values()) + 1, width)  # every column whole: they fill the window exactly
+
+    def test_an_odd_category_and_tags_split_gives_the_extra_column_to_category(self):
+        """NAME is whole at 129; 11 spare after that, both still needing more: CATEGORY 6, TAGS 5."""
+        x, wd, width, lines = self.drawn_widths(self.long_values(), 129 + 11)
+        self.assertEqual(self.six(wd), (63, 8, 12, 20, 19, 12))
+
+    def test_once_category_or_tags_is_whole_the_other_takes_the_rest_before_the_even_spread(self):
+        """NAME is whole at 129. CATEGORY of 17 needs 18 (4 more), TAGS of 28 needs 29 (15 more): with 12
+        spare, CATEGORY stops at 18 and TAGS takes the other 8; with 19 both are whole and nothing is
+        spread; 6 more is then one each. The other way round, TAGS "alpha, bravo, q4" (16) needs 17 (3
+        more): with 10 spare TAGS stops at 17 and CATEGORY of 31 takes the other 7."""
+        def one(category, tags):
+            return [self.project("long-values", label=self.LONG_NAME, status="active", category=category,
+                                 tags=tags, last=self.PAST)]
+        short_cat = one("vendor-evaluation", self.LONG_TAGS)
+        for w, want in ((129 + 12, (63, 8, 12, 18, 22, 12)), (129 + 19, (63, 8, 12, 18, 29, 12)),
+                        (129 + 19 + 6, (64, 9, 13, 19, 30, 13))):
+            self.assertEqual(self.six(self.drawn_widths(short_cat, w)[1]), want, w)
+        short_tags = one(self.LONG_CAT, ["alpha", "bravo", "q4"])
+        self.assertEqual(self.six(self.drawn_widths(short_tags, 129 + 10)[1]), (63, 8, 12, 21, 17, 12))
+
+    def test_what_is_left_is_spread_evenly_across_all_six_columns_leftmost_first(self):
+        """Once NAME, CATEGORY, and TAGS are whole (162 columns), what is left goes to all six evenly; a
+        remainder goes one each to the leftmost columns. Short values that never needed to grow (CATEGORY
+        and TAGS of a few letters) get the same share from 14."""
+        p = self.long_values()
+        for w, want in ((162 + 6, (64, 9, 13, 33, 30, 13)),
+                        (162 + 6 * 3 + 5, (67, 12, 16, 36, 33, 15)),  # 3 each, then NAME to TAGS 1 more
+                        (162 + 1, (64, 8, 12, 32, 29, 12))):  # a single column: NAME's
+            x, wd, width, lines = self.drawn_widths(p, w)
+            self.assertEqual(self.six(wd), want, w)
+            self.assertEqual(5 + sum(wd.values()) + 1, width, w)
+        short = [self.project("short-values", label="Short", status="active", category="ops", tags=["q4"], last=self.PAST)]
+        # before spare: NAME 16, STATUS 8, 12, 14, 14, 12 = 76, + 6 = 82; 82 + 6 * 5 + 3 = 115
+        x, wd, width, lines = self.drawn_widths(short, 115)
+        self.assertEqual(self.six(wd), (22, 14, 18, 19, 19, 17))
 
     def test_long_category_and_tags_are_cut_with_an_ellipsis(self):
+        """In a window with no spare width: a name of 40 (NAME 42), STATUS 8, 12, 14, 14, 12, + 6 = 108."""
         cat, tags = "vendor-evaluation-and-procurement", ["alpha", "bravo", "charlie", "delta"]
-        projects = [self.project("long-one", category=cat, tags=tags), self.project("short-one", category="ops", tags=["q4"])]
-        lines = self.run_on(projects).lines
+        label = "Vendor evaluation and procurement review"  # 40: long enough that the exact fit is over 100
+        projects = [self.project("long-one", label=label, category=cat, tags=tags),
+                    self.project("short-one", category="ops", tags=["q4"])]
+        lines = self.run_on(projects, size=(108, 30)).lines
         x = self.columns(lines[self.head_index(lines)])
-        long_row, short_row = (lines[self.row_of(lines[:-10], pid)] for pid in ("long-one", "short-one"))
+        long_row, short_row = (lines[self.row_of(lines[:-10], text)] for text in (label, "short-one"))
         for value, start, end in ((cat, x["CATEGORY"], x["TAGS"]), (", ".join(tags), x["TAGS"], x["LAST WORKED"])):
             cell = long_row[start:end].rstrip()
             self.assertTrue(cell.endswith("…"), cell)
@@ -727,10 +838,11 @@ class ProjectRows(unittest.TestCase):
             self.assertEqual(row[x[title]:x[title] + len(text)], text, (title, row))
 
     def test_columns_give_up_width_in_order_as_the_window_narrows(self):
-        """From 200 columns down to 100, one long name and a long status: LAST WORKED goes first (and
-        isn't drawn), then SESSIONS, then TAGS, then CATEGORY, then STATUS; NAME holds its target (48)
-        throughout. A narrowed column's title is cut with "…". LAST WORKED is 12 wide: once SESSIONS is
-        whole, 12 columns more fit everything."""
+        """From the window exactly wide enough for every column (NAME 48 + STATUS 61 + 12 + 14 + 14 + 12,
+        + 6 = 167: no spare width) down to 100, one long name and a long status: LAST WORKED goes first
+        (and isn't drawn), then SESSIONS, then TAGS, then CATEGORY, then STATUS; NAME holds its target
+        (48) throughout. A narrowed column's title is cut with "…". LAST WORKED is 12 wide: once SESSIONS
+        is whole, 12 columns more fit everything."""
         name = "Quarterly laptop refresh and printer fleet consolidation for every office"
         status = "waiting on the vendor's revised quote for the second office"
         cat, tags = "vendor-evaluation", ["alpha", "bravo", "charlie"]
@@ -738,19 +850,20 @@ class ProjectRows(unittest.TestCase):
         frames = {}
 
         async def sweep(pilot):
-            for w in range(200, 99, -1):
+            for w in range(EXACT, 99, -1):
                 await pilot.resize_terminal(w, 30)
                 await pilot.pause()
                 frames[w] = screen_text(pilot.app)
-        self.run_on([p], [sweep], size=(200, 30))
         S = len(status) + 2
+        EXACT = 48 + S + 12 + 14 + 14 + 12 + 6
+        self.run_on([p], [sweep], size=(EXACT, 30))
 
         def frame(w):
             lines = frames[w]
             x = self.columns(lines[self.head_index(lines)])
             row = lines[self.row_of(lines[:-10], name[:12])]
             return x, self.widths(x), row
-        x, wd, row = frame(200)
+        x, wd, row = frame(EXACT)
         self.assertEqual(wd["STATUS"], S)
         cat_full, tags_full = row[x["CATEGORY"]:x["CATEGORY"] + 14].rstrip(), row[x["TAGS"]:x["TAGS"] + 14].rstrip()
         phases, cut_sessions = set(), []
@@ -785,7 +898,7 @@ class ProjectRows(unittest.TestCase):
         self.assertEqual(phases, {"all", "sessions", "tags", "category", "status"})
         whole = max(cut_sessions) + 1  # the narrowest window with SESSIONS whole: LAST WORKED has nothing
         look = lambda w: (frames[w][self.head_index(frames[w])].rstrip(), frame(w)[2].rstrip())
-        self.assertEqual(look(whole + 12), look(200))  # LAST WORKED's 12 columns fit everything
+        self.assertEqual(look(whole + 12), look(EXACT))  # LAST WORKED's 12 columns fit everything
         last_title = look(whole + 10)[0][x_lw:] if (x_lw := self.columns(look(whole + 10)[0]).get("LAST WORKED")) else ""
         self.assertTrue(last_title.endswith("…") and "LAST WORKED".startswith(last_title[:-1]), last_title)  # 10 of 12: cut
 
