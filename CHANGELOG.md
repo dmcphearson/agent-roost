@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2026.10.22
 
 - **Dates:** lists and cards show a time for today (2:17 PM) and otherwise the date alone, MM/DD/YY or DD/MM/YY by your locale's date format. The Sessions tab keeps its relative times
 - **Projects tab:** NAME is as wide as the longest name, and a wide window's spare room goes to NAME, then CATEGORY and TAGS until their values show whole, then evenly to every column. When the window is narrow the other columns give way first, LAST WORKED first and STATUS last. A project's unwrapped count goes on its own line under the running counts, so those rows take two lines and select, click, and scroll as one
+- **Notes:** the card's Created date shows the same short way as Edited
+- **README:** every row action (with screenshots of the menus), the Stats tab, and the settings in `config.json`
 - **Fixes:** closing roost no longer raises an error when a redraw lands while the screen is being taken down
 - **Tests:** split from one file into files by area, with shared helpers in `tests/support.py`
 - **Log:** the "Claude Code X is newer than roost was tested with" line is logged once per Claude Code version (kept in `~/.roost/compat-logged.json`), not on every launch
