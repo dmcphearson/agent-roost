@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **License:** Apache License 2.0, with NOTICE and TRADEMARKS.md. Releases up to 2026.10.22 stay MIT
+
 ## 2026.10.22
 
 - **Dates:** lists and cards show a time for today (2:17 PM) and otherwise the date alone, MM/DD/YY or DD/MM/YY by your locale's date format. The Sessions tab keeps its relative times
