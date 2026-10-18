@@ -189,3 +189,7 @@ Roost logs failed actions and compatibility warnings to `~/.cache/roost.log`. At
 
 Under a Python without Textual, the tests of the Textual screens are skipped. The tests use demo data and temporary files only; they never touch your real sessions.
 
+
+## License
+
+Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Releases up to 2026.10.22 were published under MIT and stay MIT for anyone who has them. The name "Roost" and its logo and icon are not licensed with the code: see [TRADEMARKS.md](TRADEMARKS.md). Issues are welcome; code pull requests are by arrangement.
