@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-VERSION = "2026.10.21"
+VERSION = "2026.10.22"
 TESTED_CLAUDE = "2.1.291"  # newest Claude Code release roost has been checked against
 AGENT_KEYS = {"id", "kind", "name", "pid", "sessionId", "state", "status"}  # fields roost reads
 LOG = Path.home() / ".cache" / "roost.log"
@@ -43,6 +43,7 @@ DEFAULT_PROJECTS = "~/.roost/projects"
 
 def projects_dir():
     return Path(os.path.expanduser(read_config().get("projects_dir") or DEFAULT_PROJECTS))
+COMPAT_LOGGED = ROOST_HOME / "compat-logged.json"  # the last Claude Code version logged as newer than roost was tested with
 DISMISSED = ROOST_HOME / "dismissed.json"  # the ids of closed Sessions the person dismissed (the Sessions tab lists them last)
 ADOPT_PLANS = ROOST_HOME / "adopt"  # plans as written, so a second run reuses them and the person can edit them
 

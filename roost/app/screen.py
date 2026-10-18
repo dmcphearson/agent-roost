@@ -17,6 +17,7 @@ from roost.core import config
 if Widget:
     from rich.style import Style
     from textual.app import App
+    from textual.css.query import NoMatches
     from textual.screen import Screen
     from textual.containers import Horizontal, Vertical
     from textual.widgets import Input, Label
@@ -231,7 +232,10 @@ if Widget:
             ui = self.ui
             h, w = ui.scr.getmaxyx()
             ui.too_small = w < MIN_SIZE[0] or h < MIN_SIZE[1]
-            small = self.query_one(TooSmall)
+            try:
+                small = self.query_one(TooSmall)
+            except NoMatches:  # the once-a-second tick can land while the screen is being taken down
+                return
             small.display = ui.too_small
             if ui.too_small:
                 small.refresh()

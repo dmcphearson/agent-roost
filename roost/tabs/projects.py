@@ -3,7 +3,7 @@ import curses, os, textwrap, threading, time
 from pathlib import Path
 
 from roost.core.statsdata import log_spend
-from roost.core.projectdata import label_of, plural, rename_project, session_name, worked
+from roost.core.projectdata import label_of, plural, rename_project, session_name
 from roost.core.notedata import read_notes
 from roost.core.summaries import summary_settings
 from roost.core.adopt import (
@@ -17,7 +17,7 @@ from roost.core.adopt import (
     parse_plan,
     plan_problems,
 )
-from roost.core.formatting import clip, plain_text, short
+from roost.core.formatting import clip, plain_text, short, short_when
 from roost.app.shell import BAR_KEYS, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES
 from roost.core.config import VIEWS
 from roost.app.widgets import Widget
@@ -35,8 +35,6 @@ if Widget:
 else:
     Region = None
 
-
-SESSIONS_W = 20  # the SESSIONS column: running counts, then "· N unwrapped"
 
 class ProjectsTab:
     """The Projects tab."""
@@ -264,12 +262,57 @@ class ProjectsTab:
                 and not self.wrapped_up(p, s) and s["id"] not in gone]
 
     def sessions_cell(self, p):
-        """The SESSIONS cell's parts, (text, color key or None): the running counts, then "N unwrapped"."""
-        parts = [(f"{self.MARKS[key]}{n}", key) for key, n in self.live_counts(p)]
+        """The SESSIONS cell, as lines of (text, color key or None) parts: the running counts, and
+        "N unwrapped" on a line of its own under them (on the first line when nothing is running)."""
+        running = [(f"{self.MARKS[key]}{n}", key) for key, n in self.live_counts(p)]
         n = len(self.unwrapped(p))
-        if n:
-            parts += ([("·", None)] if parts else []) + [(f"{n} unwrapped", None)]
-        return parts
+        loose = [(f"{n} unwrapped", None)] if n else []
+        return [running, loose] if running and loose else [running or loose]
+
+    def row_height(self, r):
+        """Lines a Projects row takes: two for a project with both running and unwrapped Sessions."""
+        return len(self.sessions_cell(r.item)) if r.kind == "project" else 1
+
+    def project_widths(self, rows, w):
+        """Column widths for a window w wide: NAME aims for its longest name + 2 (16 to 48); SESSIONS,
+        CATEGORY, TAGS, and LAST WORKED have set widths, STATUS its longest value + 2. When they don't
+        all fit, LAST WORKED gives way first, then SESSIONS, TAGS, CATEGORY, and STATUS; NAME, last.
+        Spare width goes to NAME up to its longest name + 2, then to CATEGORY and TAGS until their
+        longest values show whole, and what's left is spread evenly over every column, leftmost first."""
+        projects = [r.item for r in rows if r.kind == "project"]
+        names = [len(label_of(p)) for p in projects]
+        widths = {"NAME": max(16, min(48, max(names, default=0) + 2)),
+                  "STATUS": max([len("STATUS")] + [len(self.row_status(r, 0)[0]) for r in rows if r.kind not in ("head", "new")]) + 2,
+                  "SESSIONS": 12, "CATEGORY": 14, "TAGS": 14, "LAST WORKED": 12}
+        over = sum(widths.values()) - (w - 6)  # NAME starts at 5; a column of margin on the right
+        spare = -over  # room left over only when nothing has to give way
+        for col in ["LAST WORKED", "SESSIONS", "TAGS", "CATEGORY", "STATUS", "NAME"]:
+            if over <= 0:
+                break
+            floor = 16 if col == "NAME" else 0
+            give = min(over, widths[col] - floor)
+            widths[col] -= give
+            over -= give
+            if col != "NAME" and widths[col] < 3:  # too narrow to say anything: not drawn
+                over -= widths[col]
+                widths[col] = 0
+        if spare > 0:
+            give = min(spare, max(names, default=0) + 2 - widths["NAME"])
+            widths["NAME"] += max(give, 0)
+            spare -= max(give, 0)
+            # a cell is clipped to its width - 1, so a value shows whole in its length + 1
+            need_c = max(max([len(p.get("category") or "") for p in projects], default=0) + 1 - widths["CATEGORY"], 0)
+            need_t = max(max([len(", ".join(p.get("tags") or [])) for p in projects], default=0) + 1 - widths["TAGS"], 0)
+            give_c = min(need_c, (spare + 1) // 2)  # an odd split's extra column goes to CATEGORY
+            give_t = min(need_t, spare - give_c)
+            give_c += min(need_c - give_c, spare - give_c - give_t)  # TAGS was whole first: CATEGORY takes the rest
+            widths["CATEGORY"] += give_c
+            widths["TAGS"] += give_t
+            spare -= give_c + give_t
+            each, extra = divmod(spare, len(widths))
+            for i, col in enumerate(widths):
+                widths[col] += each + (i < extra)
+        return widths
 
     def show_sessions(self, p):
         """The Sessions tab, on All, searching for project:<id>: exactly the Sessions p lists. Esc clears it."""
@@ -370,7 +413,7 @@ class ProjectsTab:
         name = item["name"] if r.kind == "session" else label_of(item) if r.kind == "project" else item["id"]
         if r.kind == "project":
             n = len(item["sessions"])
-            last = worked(item["last"]) if item["last"] else "never (no Sessions or Handoffs yet)"
+            last = short_when(item["last"]) if item["last"] else "never (no Sessions or Handoffs yet)"
             fields = [("Status", f"{item['status'] or 'none set'}   Last worked  {last}   Sessions  {n}"
                        + ("" if item["readme"] else "   (no README.md)")),
                       ("Category", item.get("category") or "none"),
@@ -382,14 +425,14 @@ class ProjectsTab:
                 fields.append(("Archive", f"_archive/{folder} is {days} days old, from roost adopt: its actions (enter) can move it to the Trash"))
         elif r.kind == "session":
             text, _ = self.status_cell(item)
-            fields = [("Status", f"{text}   Last active  {worked(item['last'])}   Session  {item['id'][:8]}"
+            fields = [("Status", f"{text}   Last active  {short_when(item['last'])}   Session  {item['id'][:8]}"
                        + "   in this project"),
                       ("Folder", short(item["cwd"]))]
             job = self.summaries.get(item["id"])
             if job and job["state"] != "done":
                 fields.append(("Handoff", f"{job['state']}{' ' + self.progress(job) if job['state'] == 'running' else ''}: {job['text']}"))
         else:
-            fields = [("Status", f"Session recap   Last worked  {worked(item['last'])}   Sessions  {len(item.get('sessions') or [])}"),
+            fields = [("Status", f"Session recap   Last worked  {short_when(item['last'])}   Sessions  {len(item.get('sessions') or [])}"),
                       ("File", short(item["path"])),
                       ("", "enter: start a Session from it, or make it a project (its Handoffs move in)")]
         summary = textwrap.wrap(plain_text(item["summary"]), max(w - 18, 10)) or ["(none)"]
@@ -403,25 +446,27 @@ class ProjectsTab:
     def project_lines(self, rows, page):
         """The list's lines: a row's index, or None for the blank line before every header but the
         first. Scrolls self.ptop so the selected row is in the page."""
-        lines, sel_line = [], None
+        lines, sel_line, sel_end = [], None, None
         for idx, r in enumerate(rows):
             if r.kind in ("head", "new") and idx:
                 lines.append(None)
-            lines.append(idx)
             if idx == self.psel:
-                sel_line = len(lines) - 1
+                sel_line = len(lines)
+            lines += [idx] * self.row_height(r)  # a two-line row's lines both name it
+            if idx == self.psel:
+                sel_end = len(lines) - 1
         if sel_line is not None:
             if sel_line < self.ptop:
                 self.ptop = sel_line
-            elif sel_line >= self.ptop + page:
-                self.ptop = sel_line - page + 1
+            elif sel_end >= self.ptop + page:
+                self.ptop = min(sel_end - page + 1, sel_line)
         self.ptop = max(0, min(self.ptop, max(len(lines) - page, 0)))
         return lines
 
     PROJECTS_HELP = [
         ("Sections", f"Recent (active in {RECENT_PROJECT_DAYS} days), Inactive, then Closed, folded until opened"),
         ("Open", "→ opens a section, ← closes it · enter or a click on a header does too"),
-        ("Columns", "SESSIONS counts the project's running Sessions (◆ need input · ● working · ○ idle), then its unwrapped ones: closed, no Handoff covers them, not dismissed"),
+        ("Columns", "SESSIONS counts the project's running Sessions (◆ need input · ● working · ○ idle), and under them its unwrapped ones: closed, no Handoff covers them, not dismissed · LAST WORKED is a time today, else a date"),
         ("Sessions", "listed on the Sessions tab only: a project's Show its Sessions opens it on just that project's, searching project:<its id>"),
         ("Lists", "your projects (roost setup picks the folder); Sessions no project lists are on the Sessions tab, recaps on Notes"),
         ("Kinds", "each project has one category (what kind of work) and any tags (what it's about), both from its actions"),
@@ -621,13 +666,11 @@ if Region:
             ui, w, y0 = self.ui, self.size.width, self.region.y
             rows = getattr(ui, "prows", [])
             page = ui.page = max(self.size.height - 3, 1)  # the headers, a blank row, and the position at the bottom
-            name_w = max(16, min(ui.name_w, w - 87 - SESSIONS_W))
-            # STATUS is as wide as the longest status in the list, plus a gap
-            status_w = max([len("STATUS")] + [len(ui.row_status(r, 0)[0]) for r in rows if r.kind not in ("head", "new")]) + 2
+            cols = ui.project_widths(rows, w)
+            name_w, status_w = cols["NAME"], cols["STATUS"]
             head, cx = self.line(), 5
-            for title, cw in [("NAME", name_w), ("STATUS", status_w), ("SESSIONS", SESSIONS_W), ("CATEGORY", 22), ("TAGS", 22),
-                              ("LAST WORKED", 18)]:
-                head.put(cx, title, curses.A_BOLD | ui.DIM)
+            for title, cw in cols.items():
+                head.put(cx, clip(title, cw - 1 if title != "NAME" else cw), curses.A_BOLD | ui.DIM)
                 cx += cw
             out = [head, self.line()]
             lines = ui.project_lines(rows, page)
@@ -637,7 +680,8 @@ if Region:
                                                else " Try the other view, or esc to clear the search."), ui.DIM)
                 out.append(note)
             ui.prow_y = {}
-            for i, idx in enumerate(lines[ui.ptop:ui.ptop + page]):
+            shown = lines[ui.ptop:ui.ptop + page]
+            for i, idx in enumerate(shown):
                 row = self.line()
                 out.append(row)
                 if idx is None:
@@ -646,9 +690,16 @@ if Region:
                 ui.prow_y[y] = idx
                 hl = idx == ui.psel
                 look = ui.selected if hl else (lambda a: a)
+                below = ui.ptop + i > 0 and lines[ui.ptop + i - 1] == idx  # a two-line row's second line
                 if hl:
                     row.put(1, " " * (w - 2), look(0))
-                    row.put(1, "›", look(curses.A_BOLD | ui.ACCENT))
+                    if not below:
+                        row.put(1, "›", look(curses.A_BOLD | ui.ACCENT))
+                if below:
+                    sx = 5 + name_w + status_w
+                    for part, key in ui.sessions_cell(r.item)[1] if cols["SESSIONS"] else []:
+                        row.put(sx, clip(part, cols["SESSIONS"] - 1), look(ui.DIM | (ui.DIM if r.sec == "Closed" else 0)))
+                    continue
                 if r.kind == "head":
                     label = f"{'▸' if r.sec in ui.folded else '▾'} {r.sec} ({r.item['count']}) "
                     rule = "" if r.sec == "Recent" else f"· {SECTION_RULES[r.sec]} "
@@ -669,19 +720,23 @@ if Region:
                 row.put(3, clip(name, name_w), look((curses.A_BOLD if r.sec == "Recent" and r.kind == "project" else 0) | dim))
                 cx = 5 + name_w
                 text, attr = ui.row_status(r, dim)
-                row.put(cx, text, look(attr)); cx += status_w
-                if r.kind == "project":
-                    sx = cx
-                    for part, key in ui.sessions_cell(r.item):
+                row.put(cx, clip(text, status_w - 1), look(attr)); cx += status_w
+                if r.kind == "project" and cols["SESSIONS"]:
+                    sx, end = cx, cx + cols["SESSIONS"] - 1
+                    for part, key in ui.sessions_cell(r.item)[0]:
+                        part = clip(part, end - sx)
                         row.put(sx, part, look(ui.status[key] if key else ui.DIM | dim))
                         sx += len(part) + 1
-                cx += SESSIONS_W
+                cx += cols["SESSIONS"]
                 if r.kind == "project":
-                    row.put(cx, clip(r.item.get("category") or "", 21), look(ui.DIM | dim))
-                    row.put(cx + 22, clip(", ".join(r.item.get("tags") or []), 21), look(ui.DIM | dim))
-                cx += 44
+                    if cols["CATEGORY"]:
+                        row.put(cx, clip(r.item.get("category") or "", cols["CATEGORY"] - 1), look(ui.DIM | dim))
+                    if cols["TAGS"]:
+                        row.put(cx + cols["CATEGORY"], clip(", ".join(r.item.get("tags") or []), cols["TAGS"] - 1), look(ui.DIM | dim))
+                cx += cols["CATEGORY"] + cols["TAGS"]
                 last = r.item["last"]
-                row.put(cx, worked(last) if last else "never", look(dim if last else ui.DIM))
+                if cols["LAST WORKED"]:
+                    row.put(cx, clip(short_when(last) if last else "never", cols["LAST WORKED"] - 1), look(dim if last else ui.DIM))
             if len(lines) > page:
                 while len(out) < self.size.height - 1:
                     out.append(self.line())
