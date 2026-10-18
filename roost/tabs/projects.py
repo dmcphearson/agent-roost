@@ -276,12 +276,16 @@ class ProjectsTab:
     def project_widths(self, rows, w):
         """Column widths for a window w wide: NAME aims for its longest name + 2 (16 to 48); SESSIONS,
         CATEGORY, TAGS, and LAST WORKED have set widths, STATUS its longest value + 2. When they don't
-        all fit, LAST WORKED gives way first, then SESSIONS, TAGS, CATEGORY, and STATUS; NAME, last."""
-        names = [len(label_of(r.item)) for r in rows if r.kind == "project"]
+        all fit, LAST WORKED gives way first, then SESSIONS, TAGS, CATEGORY, and STATUS; NAME, last.
+        Spare width goes to NAME up to its longest name + 2, then to CATEGORY and TAGS until their
+        longest values show whole, and what's left is spread evenly over every column, leftmost first."""
+        projects = [r.item for r in rows if r.kind == "project"]
+        names = [len(label_of(p)) for p in projects]
         widths = {"NAME": max(16, min(48, max(names, default=0) + 2)),
                   "STATUS": max([len("STATUS")] + [len(self.row_status(r, 0)[0]) for r in rows if r.kind not in ("head", "new")]) + 2,
                   "SESSIONS": 12, "CATEGORY": 14, "TAGS": 14, "LAST WORKED": 12}
         over = sum(widths.values()) - (w - 6)  # NAME starts at 5; a column of margin on the right
+        spare = -over  # room left over only when nothing has to give way
         for col in ["LAST WORKED", "SESSIONS", "TAGS", "CATEGORY", "STATUS", "NAME"]:
             if over <= 0:
                 break
@@ -292,6 +296,22 @@ class ProjectsTab:
             if col != "NAME" and widths[col] < 3:  # too narrow to say anything: not drawn
                 over -= widths[col]
                 widths[col] = 0
+        if spare > 0:
+            give = min(spare, max(names, default=0) + 2 - widths["NAME"])
+            widths["NAME"] += max(give, 0)
+            spare -= max(give, 0)
+            # a cell is clipped to its width - 1, so a value shows whole in its length + 1
+            need_c = max(max([len(p.get("category") or "") for p in projects], default=0) + 1 - widths["CATEGORY"], 0)
+            need_t = max(max([len(", ".join(p.get("tags") or [])) for p in projects], default=0) + 1 - widths["TAGS"], 0)
+            give_c = min(need_c, (spare + 1) // 2)  # an odd split's extra column goes to CATEGORY
+            give_t = min(need_t, spare - give_c)
+            give_c += min(need_c - give_c, spare - give_c - give_t)  # TAGS was whole first: CATEGORY takes the rest
+            widths["CATEGORY"] += give_c
+            widths["TAGS"] += give_t
+            spare -= give_c + give_t
+            each, extra = divmod(spare, len(widths))
+            for i, col in enumerate(widths):
+                widths[col] += each + (i < extra)
         return widths
 
     def show_sessions(self, p):
