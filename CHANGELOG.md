@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2026.10.23
 
 - **License:** Apache License 2.0, with NOTICE and TRADEMARKS.md. Releases up to 2026.10.22 stay MIT
+- **Typing no longer lags:** the refresh every few seconds reads Sessions and projects in a background thread, so keys never wait on it (it used to hold the screen for up to half a second, and a prompt being typed in didn't pause it). Pin, Rename, and Stop run in the background too, showing Restarting…, Renaming…, or Stopping… until they're done
+- **Sessions tab:** columns size the way the Projects tab's do: each fits its longest value and its header with the sort arrow, a wide window's spare room goes to NAME, then PROJECT, then evenly to every column, and a narrow one takes from PROJECT first and NAME last. CONTEXT's sizes line up under its header. The `name_width` setting is retired
+- **Stats:** the Project spend card's names are as wide as the longest one, not cut at 34 characters
 
 ## 2026.10.22
 

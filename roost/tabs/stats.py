@@ -300,7 +300,7 @@ if Static:
             if not rows:
                 return Text("No spend in this range" + (" for that search" if self.app.ui.squery else ""), style=MUTED)
             top = max(c for _, c in rows)
-            name_w = max(min(self.content_size.width - 24, 34), 10)
+            name_w = max(min(self.content_size.width - 24, max(len(name) for name, _ in rows)), 10)  # the longest name, whole
             for name, cost in rows:
                 t.append(f"{clip(name, name_w):<{name_w + 1}}", style=MUTED if name == statsdata.NO_PROJECT else TEXT)
                 t.append(f"{money(cost):>10}  ", style=f"bold {TEXT}")

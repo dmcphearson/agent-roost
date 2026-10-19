@@ -636,6 +636,185 @@ class TextualScreens(unittest.TestCase):
                     else:
                         self.assertIn(entry, drawn)
 
+    # Slow work off the UI thread: the idle refresh and the slow actions don't hold up the keys.
+
+    QUICK = 0.3  # what "returns at once" allows; each slow call below takes 1s unless the test lets it finish
+
+    class Slow:
+        """A stand-in for a slow call: it waits (up to 1s) until the test lets it finish, then returns
+        what result gives for its arguments, or raises error. It counts its calls and says when one has
+        started and when one has finished."""
+        def __init__(self, result=lambda *a, **k: None, error=None):
+            import threading
+            self.result, self.error, self.calls = result, error, 0
+            self.go, self.started, self.finished = threading.Event(), threading.Event(), threading.Event()
+
+        def __call__(self, *a, **k):
+            self.calls += 1
+            self.started.set()
+            self.go.wait(1.0)
+            self.finished.set()
+            if self.error:
+                raise self.error
+            return self.result(*a, **k)
+
+    @staticmethod
+    async def until(pilot, done, limit=3.0):
+        """Tick and let the app run until done() or limit seconds; returns done()."""
+        end = time.monotonic() + limit
+        while time.monotonic() < end and not done():
+            pilot.app.tick()
+            await pilot.pause(0.02)
+        return done()
+
+    @staticmethod
+    def idle(app):
+        """As if no key came for a while and the last refresh was long ago, so the next tick refreshes."""
+        app.last_key = app.last_refresh = time.time() - 60
+
+    def refresh_reads(self, slow, steps):
+        import unittest.mock
+        with unittest.mock.patch.multiple(roost, regather=slow):
+            return self.run_app(steps)
+
+    def test_an_idle_refresh_doesnt_hold_up_the_tick_and_shows_what_it_read(self):
+        added = session("Badge printer setup", mins=1)
+        slow = self.Slow(result=lambda old: [dict(s) for s in old] + [added])
+        seen = {}
+
+        async def step(pilot):
+            app = pilot.app
+            self.idle(app)
+            t = time.monotonic()
+            app.tick()
+            seen["took"] = time.monotonic() - t
+            seen["before"] = [s["name"] for s in app.ui.sessions]
+            seen["started"] = slow.started.wait(1.0)
+            slow.go.set()
+            seen["shown"] = await self.until(pilot, lambda: added["id"] in [s["id"] for s in app.ui.sessions])
+        self.refresh_reads(slow, [step])
+        self.assertLess(seen["took"], self.QUICK, "tick waited for the refresh's read")
+        self.assertNotIn("Badge printer setup", seen["before"])
+        self.assertTrue(seen["started"], "the idle tick didn't start a refresh")
+        self.assertTrue(seen["shown"], "a later tick didn't show the Sessions the refresh read")
+
+    def test_only_one_refresh_read_runs_at_a_time(self):
+        slow = self.Slow(result=lambda old: old)
+        seen = {}
+
+        async def step(pilot):
+            app = pilot.app
+            self.idle(app)
+            app.tick()
+            seen["started"] = slow.started.wait(1.0)
+            for _ in range(3):  # idle and due again each time: only the read in flight holds them back
+                self.idle(app)
+                app.tick()
+            seen["in flight"] = not slow.finished.is_set()
+            seen["calls"] = slow.calls
+            slow.go.set()
+        self.refresh_reads(slow, [step])
+        self.assertTrue(seen["started"])
+        self.assertTrue(seen["in flight"], "the first read had already finished, so this shows nothing")
+        self.assertEqual(seen["calls"], 1)
+
+    def test_a_refresh_read_from_before_a_key_isnt_applied(self):
+        added = session("Badge printer setup", mins=1)
+        slow = self.Slow(result=lambda old: [dict(s) for s in old] + [added])
+        seen = {}
+
+        async def step(pilot):
+            app = pilot.app
+            self.idle(app)
+            app.tick()
+            seen["started"] = slow.started.wait(1.0)
+            app.press("down")  # a key while the read is out: what it read is already old
+            slow.go.set()
+            seen["finished"] = slow.finished.wait(2.0)
+            await self.until(pilot, lambda: False, limit=0.3)  # ticks that would pick the read up
+            seen["names"] = [s["name"] for s in app.ui.sessions]
+        self.refresh_reads(slow, [step])
+        self.assertTrue(seen["started"] and seen["finished"])
+        self.assertNotIn("Badge printer setup", seen["names"])
+
+    def slow_action(self, patch, slow, opens, act, during, after):
+        """On the Sessions tab's All view: opens(pilot) gets the action ready, act(app) does it with
+        patch (a sessiondata name) replaced by slow. Returns how long act took, what the screen said
+        then, whether during was what it said, and what it said once a later tick said after."""
+        import unittest.mock
+        seen = {}
+        shown = lambda ui: ui.alerting or ui.msg
+
+        async def step(pilot):
+            app = pilot.app
+            t = time.monotonic()
+            act(app)
+            seen["took"] = time.monotonic() - t
+            seen["during"] = shown(app.ui)
+            slow.go.set()
+            seen["ended"] = await self.until(pilot, lambda: shown(app.ui).startswith(after))
+            seen["after"] = shown(app.ui)
+        with unittest.mock.patch.multiple(roost, **{patch: slow}):
+            self.run_app([self.keys("tab", *self.ALL_VIEW)] + opens + [step])
+        self.assertLess(seen["took"], self.QUICK, f"the action waited for {patch}")
+        self.assertEqual(seen["during"], during)
+        self.assertTrue(seen["ended"], f"a later tick said {seen['after']!r}, not {after!r}…")
+        return seen
+
+    def picked(self, name, label):
+        """Select the Session name and open its actions with label chosen, ready for enter."""
+        async def step(pilot):
+            app = pilot.app
+            app.press("enter")
+            ui = app.ui
+            opts = [l for l, _ in ui.choosing["options"]] if ui.choosing else []
+            assert label in opts, f"{label!r} not in its actions {opts}"
+            ui.choosing["sel"] = opts.index(label)
+            app.redraw()
+        return [self.on_session(name), step]
+
+    def pin_closed(self, slow):
+        self.sessions = self.sessions + [self.closed("Toner order", 30)]
+        return self.slow_action("revive_pinned", slow, self.picked("Toner order", "Restart in the background, pinned"),
+                                lambda app: app.press("enter"), "Restarting Toner order in the background…",
+                                "Pinned Toner order: " if not slow.error else "Couldn't restart it: ")
+
+    def test_pin_on_a_closed_session_restarts_it_without_holding_up_the_keys(self):
+        seen = self.pin_closed(self.Slow())
+        self.assertEqual(seen["after"], "Pinned Toner order: running in the background, won't be closed when idle")
+
+    def test_pin_on_a_closed_session_that_fails_says_why(self):
+        seen = self.pin_closed(self.Slow(error=RuntimeError("no worker started")))
+        self.assertEqual(seen["after"], "Couldn't restart it: no worker started")
+
+    def rename_one(self, slow):
+        def act(app):
+            app.ui.asking["text"] = "Printer fix 2"
+            app.press("enter")
+        return self.slow_action("rename_session", slow, self.picked("Printer fix", "Rename…") + [self.keys("enter")], act,
+                                "Renaming Printer fix…", "Renamed to " if not slow.error else "Couldn't rename: ")
+
+    def test_rename_doesnt_hold_up_the_keys(self):
+        seen = self.rename_one(self.Slow())
+        self.assertEqual(seen["after"], "Renamed to Printer fix 2")
+
+    def test_a_rename_that_fails_says_why(self):
+        seen = self.rename_one(self.Slow(error=RuntimeError("claude stop timed out")))
+        self.assertEqual(seen["after"], "Couldn't rename: claude stop timed out")
+
+    def stop_one(self, slow):
+        return self.slow_action("stop_session", slow, self.picked("Printer fix", "Stop…") + [self.keys("enter")],
+                                lambda app: app.press("y"), "Stopping Printer fix…",
+                                "Stopped Printer fix" if not slow.error else "Couldn't stop it: ")
+
+    def test_stop_after_its_confirmation_doesnt_hold_up_the_keys(self):
+        seen = self.stop_one(self.Slow())
+        self.assertEqual(seen["after"], "Stopped Printer fix. It's under Recently closed")
+
+    def test_a_stop_that_fails_says_why(self):
+        seen = self.stop_one(self.Slow(error=RuntimeError("no such job")))
+        self.assertEqual(seen["after"], "Couldn't stop it: no such job")
+
 
 if __name__ == "__main__":
     unittest.main()

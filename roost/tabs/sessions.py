@@ -39,6 +39,11 @@ else:
     Region = None
 
 
+def shown_name(s):
+    """A Session's name as its row shows it: an open pinned one keeps its pin, a partial copy gets a warning mark."""
+    return (PIN + " " if s.get("pinned") and group(s) == 0 else "") + s["name"] + (" ⚠" if s.get("partial") else "")
+
+
 class SessionsTab:
     """The Sessions tab."""
 
@@ -99,6 +104,42 @@ class SessionsTab:
             f"roost {self.update_note} is out: quit and run {'brew upgrade roost' if config.BREW else 'roost update'}" if self.update_note else ""),
             (self.ACCENT if self.msg else self.YELLOW) | curses.A_BOLD)
         return rows
+
+    def session_widths(self, rows, w):
+        """Column widths for a window w wide, sized the way the Projects tab sizes its own: each column
+        fits its longest value + 2 and its header with a sort arrow, PROJECT up to 24.
+        When they don't all fit, PROJECT gives way first, then CONTEXT, LAST ACTIVE, and STATUS; NAME,
+        last. Spare width goes to NAME up to its longest name + 2, then to PROJECT up to its longest
+        label + 2, and what's left is spread evenly over every column, leftmost first."""
+        head = lambda title: len(title) + 3  # the title, its sort arrow, and a space before the next
+        names = max([len(shown_name(s)) for s in rows], default=0) + 2
+        projs = max([len(s.get("proj") or "") for s in rows], default=0) + 2
+        widths = {"NAME": max(16, names),
+                  "STATUS": max([head("STATUS")] + [len(self.status_cell(s)[0]) + 2 for s in rows]),
+                  "LAST ACTIVE": max([head("LAST ACTIVE")] + [len(ago(s)) + 2 for s in rows]),
+                  "CONTEXT": head("CONTEXT"),
+                  "PROJECT": max(head("PROJECT"), min(24, projs))}
+        over = sum(widths.values()) - (w - 6)  # NAME starts at 5; a column of margin on the right
+        spare = -over  # room left over only when nothing has to give way
+        for col in ["PROJECT", "CONTEXT", "LAST ACTIVE", "STATUS", "NAME"]:
+            if over <= 0:
+                break
+            floor = 16 if col == "NAME" else 0
+            give = min(over, widths[col] - floor)
+            widths[col] -= give
+            over -= give
+            if col != "NAME" and widths[col] < 3:  # too narrow to say anything: not drawn
+                over -= widths[col]
+                widths[col] = 0
+        if spare > 0:
+            for col, want in (("NAME", names), ("PROJECT", projs)):
+                give = max(min(spare, want - widths[col]), 0)
+                widths[col] += give
+                spare -= give
+            each, extra = divmod(spare, len(widths))
+            for i, col in enumerate(widths):
+                widths[col] += each + (i < extra)
+        return widths
 
     def session_lines(self, rows, page):
         """The list's lines: ("r", row index) for a Session, and where a view holds more than one
@@ -396,36 +437,35 @@ class SessionsTab:
     def pin(self, s):
         """Pin or unpin a background Session; restart a closed one in the background, pinned."""
         if not s.get("attach"):
-            self.msg = f"Restarting {s['name']} in the background…"
-            self.draw()
-            try:
-                sessiondata.revive_pinned(s)
-                self.msg = f"Pinned {s['name']}: running in the background, won't be closed when idle"
-            except Exception as e:
-                config.log(f"restart {s['id'][:8]}: {e}")
-                self.msg = f"Couldn't restart it: {e}"
-        else:
-            try:
-                sessiondata.set_pin(s["attach"], not s.get("pinned"))
-                self.msg = f"{'Unpinned' if s.get('pinned') else 'Pinned'} {s['name']}" + \
-                    ("" if s.get("pinned") else ": it won't be closed when idle")
-            except Exception as e:
-                config.log(f"pin {s['id'][:8]}: {e}")
-                self.msg = f"Couldn't change pin: {e}"
-        self.refresh()
+            def restart():
+                try:
+                    sessiondata.revive_pinned(s)
+                    return f"Pinned {s['name']}: running in the background, won't be closed when idle"
+                except Exception as e:
+                    config.log(f"restart {s['id'][:8]}: {e}")
+                    return f"Couldn't restart it: {e}"
+            self.read_later(restart, f"Restarting {s['name']} in the background…")
+            return None
+        try:
+            sessiondata.set_pin(s["attach"], not s.get("pinned"))
+            self.msg = f"{'Unpinned' if s.get('pinned') else 'Pinned'} {s['name']}" + \
+                ("" if s.get("pinned") else ": it won't be closed when idle")
+        except Exception as e:
+            config.log(f"pin {s['id'][:8]}: {e}")
+            self.msg = f"Couldn't change pin: {e}"
+        self.read_later(lambda: None)
         return None
 
     def rename(self, s):
         def done(text):
-            self.msg = f"Renaming {s['name']}…"
-            self.draw()
-            try:
-                sessiondata.rename_session(s, text)
-                self.msg = f"Renamed to {' '.join(text.split())}"
-                self.refresh()
-            except Exception as e:
-                config.log(f"rename {s['id'][:8]}: {e}")
-                self.msg = f"Couldn't rename: {e}"
+            def act():
+                try:
+                    sessiondata.rename_session(s, text)
+                    return f"Renamed to {' '.join(text.split())}"
+                except Exception as e:
+                    config.log(f"rename {s['id'][:8]}: {e}")
+                    return f"Couldn't rename: {e}"
+            self.read_later(act, f"Renaming {s['name']}…")
             return None
         self.ask("", s["name"], done, "rename", title=f"Rename {clip(s['name'], 40)}")
         return None
@@ -523,13 +563,14 @@ if Region:
             ui, w, y0 = self.ui, self.size.width, self.region.y
             rows = getattr(ui, "srows", [])
             page = ui.page = max(self.size.height - 3, 1)  # the headers, a blank row, and the position at the bottom
-            name_w = max(16, min(ui.name_w, w - 90))  # NAME is name_width wide (config); PROJECT gets whatever is left
-            cols = [("NAME", name_w), ("STATUS", 19), ("LAST ACTIVE", 14), ("CONTEXT", 10), ("PROJECT", 0)]
+            cols = ui.session_widths(rows, w)
             head, cx, ui.col_x, ui.list_top = self.line(), 5, [], y0
-            for title, cw in cols:
+            for title, cw in cols.items():
+                if not cw:
+                    continue
                 on = ui.sort[0] == title
                 head.put(cx, title + (" ▾" if ui.sort[1] else " ▴") if on else title, curses.A_BOLD | (ui.ACCENT if on else ui.DIM))
-                ui.col_x.append((cx, cx + (cw or w) - 1, title))
+                ui.col_x.append((cx, cx + cw - 1, title))
                 cx += cw
             out = [head, self.line()]
             lines = ui.session_lines(rows, page)
@@ -559,16 +600,19 @@ if Region:
                 if hl:
                     row.put(1, " " * (w - 2), look(0))
                     row.put(1, "›", look(curses.A_BOLD | ui.ACCENT))
-                cx = 5
-                # pinned sessions keep their pin while open; partial copies get a warning mark
-                name = (PIN + " " if s.get("pinned") and group(s) == 0 else "") + s["name"] + (" ⚠" if s.get("partial") else "")
-                row.put(cx, clip(name, name_w - 2), look(curses.A_BOLD if hl or group(s) == 0 else 0)); cx += name_w
                 text, attr = ui.status_cell(s)
-                row.put(cx, text, look(attr)); cx += 19
-                row.put(cx, ago(s), look(0)); cx += 14
                 done = s["state"] == "closed" and ui.wrapped(s)  # never re-read, so its size costs nothing
-                row.put(cx, ("—" if done else ktok(s["tokens"])).rjust(5), look(ui.DIM if done else 0)); cx += 10
-                row.put(cx, clip(s.get("proj") or "", w - cx - 2), look(0))  # its folder is in the panel
+                cells = {"NAME": (shown_name(s), look(curses.A_BOLD if hl or group(s) == 0 else 0)),
+                         "STATUS": (text, look(attr)),
+                         "LAST ACTIVE": (ago(s), look(0)),
+                         # right-aligned under the word CONTEXT, so the sizes line up
+                         "CONTEXT": (("—" if done else ktok(s["tokens"])).rjust(len("CONTEXT")), look(ui.DIM if done else 0)),
+                         "PROJECT": (s.get("proj") or "", look(0))}  # its folder is in the panel
+                cx = 5
+                for title, cw in cols.items():
+                    if cw:
+                        row.put(cx, clip(cells[title][0], cw - 2), cells[title][1])
+                        cx += cw
                 out.append(row)
             if len(lines) > page:
                 while len(out) < self.size.height - 1:
