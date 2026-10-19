@@ -129,7 +129,6 @@ What your Sessions cost: every reply's tokens at Anthropic's list price, before 
 | `terminal` | Where sessions open: `ghostty`, `terminal`, or `iterm2` |
 | `projects_dir` | Your Projects folder (default `~/.roost/projects`) |
 | `editor`, `editor_wait` | The editor notes open in, and whether roost waits for it (see Notes) |
-| `name_width` | The Sessions tab's NAME width (default 40) |
 | `summary_model` | The model that writes Handoffs, recaps, and adopt plans and answers Ask (default `claude-sonnet-5-5`) |
 | `summary_budget_usd` | The most one of those runs may spend, in dollars (default 5) |
 | `monthly_limit` | A monthly budget in dollars: the Stats tab shows month to date against it |

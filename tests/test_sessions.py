@@ -1,6 +1,7 @@
 from support import *  # noqa: F401,F403 (the shared namespace, helpers, and fixtures)
 from support import _SCRATCH, own_tests  # noqa: F401
-from test_projects import Projects  # for their helpers; their tests run in test_projects.py
+from test_projects import Projects, ProjectRows  # for their helpers; their tests run in test_projects.py
+from test_screens import TextualScreens  # for its helpers; its tests run in test_screens.py
 
 load_tests = own_tests(__name__)
 
@@ -724,6 +725,225 @@ class Dismissing(unittest.TestCase):
         acts = self.acts(again, "Old")
         self.assertIn("Dismiss", acts)
         self.assertNotIn("Undismiss", acts)
+
+
+class SessionColumns(unittest.TestCase):
+    """The Sessions tab's columns scale with the window, read off the drawn header and rows. NAME
+    starts at column 5; then STATUS, LAST ACTIVE, CONTEXT, PROJECT."""
+    setUp = TextualScreens.setUp
+    proj = staticmethod(TextualScreens.proj)
+    select = staticmethod(TextualScreens.select)
+    run_on = ProjectRows.run_on
+    TITLES = [("NAME", "NAME"), ("STATUS", "STAT"), ("LAST ACTIVE", "LAST"), ("CONTEXT", "CONT"), ("PROJECT", "PROJ")]
+
+    def fleet(self, names, label="Printer fleet"):
+        """Running Sessions with these names (the first idle, the second waiting, the rest idle), at
+        5m, 2h, 3d... ago with 181k, 35k, 9k... of context; the first two are in a project called label."""
+        tokens, mins = [181000, 35000, 9000, 120000, 4000], [5, 120, 3 * 1440, 30, 50]
+        self.sessions = [session(n, state="waiting" if i == 1 else "idle", mins=mins[i % 5], tokens=tokens[i % 5])
+                         for i, n in enumerate(names)]
+        return [self.proj("p1", self.sessions[:2], label=label)]
+
+    def drawn(self, projects, w, sort=None, config=None):
+        """The Sessions tab w wide: its lines, the list's lines (header first), the list's width, and
+        each Session's status text, LAST ACTIVE value and PROJECT label as roost works them out."""
+        seen = {}
+
+        async def look(pilot):
+            ui = pilot.app.ui
+            if sort:
+                ui.sort = sort
+            pilot.app.redraw()
+            await pilot.pause()
+            seen["list"] = pilot.app.query_one(roost.SessionList).region.width
+            seen["cells"] = {s["name"]: (ui.status_cell(s)[0], roost.ago(s), s.get("proj") or "") for s in ui.srows}
+        lines = self.run_on(projects, [look], size=(w, 30), tab="Sessions", config=config).lines
+        h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
+        edge = next(i for i in range(h + 1, len(lines)) if lines[i].strip() and set(lines[i].strip()) == {"─"})
+        return lines[h:edge], seen["list"], seen["cells"]
+
+    def starts(self, header):
+        """Where each drawn column title starts."""
+        x, at = {}, 0
+        for title, prefix in self.TITLES:
+            i = header.find(prefix, at)
+            if i >= 0:
+                x[title], at = i, i + 1
+        return x
+
+    @staticmethod
+    def row(listing, name):
+        return next(l for l in listing[1:] if name[:12] in l)
+
+    def whole(self, listing, cells, w_titles=("NAME", "STATUS", "LAST ACTIVE", "PROJECT")):
+        """True when every Session's name, status, LAST ACTIVE and PROJECT text is drawn whole."""
+        for name, (status, when, label) in cells.items():
+            row = self.row(listing, name)
+            want = {"NAME": name, "STATUS": status, "LAST ACTIVE": when, "PROJECT": label}
+            if any(want[t] and want[t] not in row for t in w_titles):
+                return False
+        return True
+
+    SHORT = ["Printer fix", "Laptop refresh", "Badge audit"]  # the longest is 14
+
+    # 1. NAME is its longest name + 2, whatever name_width says
+
+    def test_name_grows_with_its_longest_name_not_a_fixed_width(self):
+        """Same window (200), same everything but the longest name, 12 then 20: NAME is 8 wider less
+        its share of the 8 spare columns it took (spread over five columns), so 5 to 8 wider."""
+        widths = {}
+        for longest in ("Printer fixe", "Printer fix for desk"):  # 12, 20
+            listing, _, _ = self.drawn(self.fleet([longest, "Laptop"]), 200)
+            widths[len(longest)] = self.starts(listing[0])["STATUS"] - 5
+        self.assertGreaterEqual(widths[20] - widths[12], 5, widths)
+        self.assertLessEqual(widths[20] - widths[12], 8, widths)
+
+    def test_sessions_name_ignores_the_name_width_setting(self):
+        headers = {}
+        for setting in (None, 20, 60):
+            listing, _, _ = self.drawn(self.fleet(self.SHORT), 160, config={} if setting is None else {"name_width": setting})
+            headers[setting] = listing[0]
+        self.assertEqual(headers[20], headers[None], headers)
+        self.assertEqual(headers[60], headers[None], headers)
+
+    # 2. Whole values on a wide window
+
+    def test_every_value_shows_whole_on_a_wide_window(self):
+        long_name = "Quarterly laptop refresh and printer rollout"  # 44
+        label = "Office printer fleet consolidation, phase two"  # 45
+        listing, _, cells = self.drawn(self.fleet([long_name, "Laptop refresh", "Badge audit"], label=label), 220)
+        self.assertTrue(cells[long_name][2], cells)  # it has its project
+        for name, (status, when, proj) in cells.items():
+            row = self.row(listing, name)
+            for text in (name, status, when, proj):
+                self.assertIn(text, row, (name, row))
+            self.assertNotIn("…", row)
+
+    # 3. Headers never run into each other
+
+    def test_a_header_never_runs_into_the_next_one(self):
+        """Every pair of drawn headers has a space between the first's text (its sort arrow included)
+        and the second's start, at widths from 100 to 200, sorted on LAST ACTIVE, CONTEXT, STATUS."""
+        projects = self.fleet(["Printer fix", "Laptop", "Badge audit for the front lobby doors"], label="Fleet")
+        for sort in (("LAST ACTIVE", True), ("CONTEXT", True), ("STATUS", False), ("CONTEXT", False)):
+            arrow = "▾" if sort[1] else "▴"
+            for w in (100, 115, 130, 160, 200):
+                head = self.drawn(projects, w, sort=sort)[0][0]
+                x = self.starts(head)
+                order = [t for t, _ in self.TITLES if t in x]
+                if sort[0] in x and w >= 130:
+                    self.assertTrue(head[x[sort[0]]:].startswith(f"{sort[0]} {arrow}"), (sort, w, head))
+                for a, b in zip(order, order[1:]):
+                    text = head[x[a]:x[b]].rstrip()
+                    self.assertLess(x[a] + len(text), x[b], (sort, w, a, b, head))
+                    self.assertTrue(text.startswith(a), (sort, w, a, head))
+
+    # 4. Values start under their headers; CONTEXT is right-aligned under its word
+
+    def test_each_value_starts_in_its_column(self):
+        projects = self.fleet(self.SHORT + ["Toner order"])
+        for w in (120, 200):
+            listing, _, cells = self.drawn(projects, w)
+            x = self.starts(listing[0])
+            context_end = x["CONTEXT"] + len("CONTEXT")
+            for name, (status, when, label) in cells.items():
+                row = self.row(listing, name)
+                self.assertEqual(row.find(status, x["STATUS"] - 2), x["STATUS"], (w, name, row))
+                self.assertEqual(row.find(when, x["LAST ACTIVE"] - 2), x["LAST ACTIVE"], (w, name, row))
+                s = next(q for q in self.sessions if q["name"] == name)
+                ctx = roost.ktok(s["tokens"])
+                self.assertEqual(row[context_end - len(ctx):context_end], ctx, (w, name, row))
+                self.assertEqual(row[context_end - len(ctx) - 1], " ", (w, name, row))
+                if label:
+                    self.assertEqual(row.find(label, x["PROJECT"] - 2), x["PROJECT"], (w, name, row))
+
+    def test_a_wrapped_up_sessions_dash_ends_under_context(self):
+        """A wrapped-up Session's CONTEXT is "—", right-aligned under the word like a size."""
+        old = dict(session("Old printer audit", state="closed", kind=None, mins=120), attach=None)
+        self.sessions = self.sessions + [old]
+        proj = self.proj("printer-fleet", [old], covered=[old])
+        lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", ALL))], size=(160, 30), tab="Sessions").lines
+        h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
+        x = self.starts(lines[h])
+        row = next(l for l in lines[h + 1:] if "Old printer audit" in l)
+        end = x["CONTEXT"] + len("CONTEXT")
+        self.assertEqual(row[end - 1], "—", row)
+        self.assertEqual(row[end - 2], " ", row)
+
+    # 5. Spare width: NAME up to its longest + 2, then spread evenly
+
+    def test_a_very_wide_windows_spare_width_is_spread_over_every_column(self):
+        """At 240 with short values, each column is wider than its contents by about the same amount:
+        no single column (PROJECT, last) takes the spare. A column's contents are its longest value or
+        its title (with the sort arrow), whichever is longer, + 2; PROJECT runs to one column short of
+        the list's right edge."""
+        listing, width, cells = self.drawn(self.fleet(self.SHORT), 240)
+        x = self.starts(listing[0])
+        self.assertEqual(list(x), [t for t, _ in self.TITLES], listing[0])
+        drawn = {"NAME": x["STATUS"] - 5, "STATUS": x["LAST ACTIVE"] - x["STATUS"],
+                 "LAST ACTIVE": x["CONTEXT"] - x["LAST ACTIVE"], "CONTEXT": x["PROJECT"] - x["CONTEXT"],
+                 "PROJECT": width - 1 - x["PROJECT"]}
+        values = {"NAME": [n for n in cells], "STATUS": [c[0] for c in cells.values()],
+                  "LAST ACTIVE": [c[1] for c in cells.values()] + ["LAST ACTIVE ▾"],
+                  "CONTEXT": [roost.ktok(s["tokens"]) for s in self.sessions], "PROJECT": [c[2] for c in cells.values()]}
+        need = {t: max(len(v) for v in values[t] + [t]) + 2 for t in drawn}
+        spare = {t: drawn[t] - need[t] for t in drawn}
+        for t in drawn:
+            self.assertGreaterEqual(spare[t], 10, (t, spare, drawn))
+        self.assertLessEqual(max(spare.values()) - min(spare.values()), 3, (spare, drawn))
+
+    # 6. A narrow window: PROJECT gives way first, then CONTEXT, LAST ACTIVE, STATUS; NAME last
+
+    def test_project_gives_way_first(self):
+        """Find the narrowest window that shows every value whole; 3 columns narrower, only PROJECT
+        is narrower: every other column starts where it did, and PROJECT is still drawn."""
+        long_name = "Quarterly laptop refresh and badge audit"  # 40
+        label = "Office printer fleet consolidation phase"  # 40
+        projects = self.fleet([long_name, "Laptop refresh"], label=label)
+
+        def fits(w):
+            listing, _, cells = self.drawn(projects, w)
+            return self.whole(listing, cells), listing
+        lo, hi = 100, 240
+        self.assertTrue(fits(hi)[0], "nothing shows whole even at 240")
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if fits(mid)[0]:
+                hi = mid
+            else:
+                lo = mid + 1
+        self.assertGreaterEqual(lo, 103, "the fixture needs longer values")
+        full, narrow = fits(lo)[1], fits(lo - 3)[1]
+        x, y = self.starts(full[0]), self.starts(narrow[0])
+        self.assertIn("PROJECT", y, narrow[0])
+        for t in ("NAME", "STATUS", "LAST ACTIVE", "CONTEXT", "PROJECT"):
+            self.assertEqual(x[t], y[t], (t, full[0], narrow[0]))
+        self.assertNotIn(label, self.row(narrow, long_name))
+        self.assertIn(long_name, self.row(narrow, long_name))
+
+    def test_then_context_then_last_active_and_name_keeps_its_width(self):
+        """At 100 columns, a longer and longer name: PROJECT goes first, then CONTEXT, then LAST
+        ACTIVE, and NAME stays its longest name + 2 while any column after it still has room."""
+        for n, gone, kept in ((56, ["PROJECT"], ["STATUS", "LAST ACTIVE"]),
+                              (66, ["PROJECT", "CONTEXT"], ["STATUS"]),
+                              (80, ["PROJECT", "CONTEXT", "LAST ACTIVE"], [])):
+            long_name = ("Quarterly laptop refresh and badge audit for the front lobby doors and the annex")[:n]
+            listing, _, cells = self.drawn(self.fleet([long_name, "Laptop refresh"], label="Printer fleet"), 100)
+            x = self.starts(listing[0])
+            self.assertIn("STATUS", x, (n, listing[0]))
+            self.assertGreaterEqual(x["STATUS"] - 5, n + 2, (n, listing[0]))  # NAME whole
+            self.assertIn(long_name, self.row(listing, long_name), n)
+            for t in gone:
+                self.assertNotIn(t, x, (n, listing[0]))
+            for t in kept:
+                self.assertIn(t, listing[0], (n, listing[0]))
+            for name, (status, when, label) in cells.items():
+                row = self.row(listing, name)
+                self.assertNotIn("Printer fleet", row, n)
+                if "STATUS" in kept:
+                    self.assertIn(status, row, (n, row))
+                if "LAST ACTIVE" in kept:
+                    self.assertIn(when, row, (n, row))
 
 
 if __name__ == "__main__":

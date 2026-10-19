@@ -68,7 +68,6 @@ class Shell:
         self.sort = ("LAST ACTIVE", True)
         self.col_x, self.list_top = [], 4  # clickable column headers, filled in by draw()
         self.page = 10  # rows that fit on screen, set by draw()
-        self.name_w = config.read_config().get("name_width", 40)
         self.asking = None  # the one-line prompt up on the bottom row (see ask), on any tab
         self.helping = False
         self.alerting = None  # a failure, or why an action didn't run, shown as a box until a key

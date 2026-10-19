@@ -1,5 +1,6 @@
 from support import *  # noqa: F401,F403 (the shared namespace, helpers, and fixtures)
 from support import _SCRATCH, own_tests  # noqa: F401
+from test_screens import TextualScreens  # for its helpers; its tests run in test_screens.py
 
 load_tests = own_tests(__name__)
 
@@ -90,6 +91,62 @@ class Stats(unittest.TestCase):
         from datetime import date
         days = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-08", "2026-10-09"]
         self.assertEqual(roost.streaks(days, date(2026, 10, 10)), (2, 3))
+
+
+class ProjectSpendCard(unittest.TestCase):
+    """The Stats tab's Project spend card, rendered on a real Textual screen."""
+    setUp = TextualScreens.setUp
+    keys = staticmethod(TextualScreens.keys)
+
+    def card(self, projects, size=(220, 50)):
+        """The Project spend card's lines for spend today on these (project, cost) pairs."""
+        import asyncio, unittest.mock
+        from datetime import date
+        today = date.today().isoformat()
+        data = {"rows": [(today, "Live work", None, p, c) for p, c in projects], "tokens": {}, "unpriced": [], "priced": True}
+        seen = {}
+
+        async def look(pilot):
+            for _ in range(20):  # the first read runs in the background
+                if pilot.app.ui.stats_view():
+                    break
+                await pilot.pause(0.05)
+            pilot.app.redraw()
+            await pilot.pause()
+            bars = pilot.app.query_one(roost.ProjectBars)
+            seen["width"] = bars.content_size.width
+            seen["lines"] = bars.render().plain.splitlines()
+        with unittest.mock.patch.multiple(roost, gather_spend=lambda table=None, now=None: data, monthly_limit=lambda: None):
+            app = roost.RoostApp(self.sessions, "")
+
+            async def go():
+                async with app.run_test(size=size) as pilot:
+                    await pilot.pause()
+                    await pilot.press("tab", "tab", "tab")
+                    await pilot.pause()
+                    await look(pilot)
+            asyncio.run(go())
+        return seen["lines"], seen["width"]
+
+    def test_a_long_project_name_shows_whole_on_a_wide_card(self):
+        long_name = "Office printer fleet consolidation, phase two"  # 45
+        lines, width = self.card([(long_name, 12.5), ("printer", 3.0)])
+        self.assertGreaterEqual(width, len(long_name) + 30, "the card is too narrow for this test")
+        row = next(l for l in lines if l.startswith(long_name[:20]))
+        self.assertTrue(row.startswith(long_name), row)
+        self.assertNotIn("…", row)
+
+    def test_short_project_names_dont_take_34_columns(self):
+        """The cost column (money right-aligned in its 10) starts right after the longest name + 1:
+        between the name and its cost there are only spaces, and the cost ends by longest + 1 + 10."""
+        names = [("printer", 12.5), ("toner order", 3.0)]  # the longest is 11
+        lines, width = self.card(names)
+        for name, cost in names:
+            row = next(l for l in lines if l.startswith(name + " "))
+            money = f"${cost:,.2f}"
+            at = row.index(money)
+            self.assertEqual(row[len(name):at].strip(), "", row)
+            self.assertLessEqual(at + len(money), 11 + 1 + 10, row)
 
 
 # ---------- Projects rows: the NAME first (dates, a two-line SESSIONS cell, and the column widths) ----------
