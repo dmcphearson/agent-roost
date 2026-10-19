@@ -54,6 +54,9 @@ REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|\d summari
 
 class Shell:
     """The screens' shell: what every tab shares. Each tab's module adds its own draw, keys, and actions (see roost.app.ui)."""
+    reading, fresh, told = False, None, None  # a refresh's reads in a thread (see read_later)
+    keys_seen = 0  # keys so far: a read that a key came during may be out of date
+
     def setup(self, sessions, query):
         """Everything the screens keep, read once at start: no terminal is touched."""
         self.sessions, self.query = sessions, query
@@ -117,11 +120,53 @@ class Shell:
     def pair_of(attr):
         return curses.pair_number(attr)
 
-    def refresh(self):
-        """Re-read sessions and projects, keeping the same row selected even if rows move."""
+    def read_fresh(self, sessions):
+        """What a refresh reads: the Sessions (claude agents, ps, the transcripts), which are open in a
+        window, and the projects, recaps, and notes. Only reads, so it can run off the UI thread."""
+        fresh = terminals.mark_open(sessiondata.regather(sessions), self.term)
+        return (fresh, *self.read_projects_notes(fresh))
+
+    def read_later(self, act=None, doing=""):
+        """refresh() with its reads in a thread: they take a few hundred ms, mostly claude agents, which on
+        the UI thread stalls every key. act, a slow action (a stop, a restart), runs first in the same
+        thread and returns the message for after it; doing is the message meanwhile. draw() takes what
+        was read, unless a key came while it was read: that key may have changed it (a delete, a stop).
+        Without act, one runs at a time."""
+        if act is None:
+            if self.reading:
+                return
+            self.reading = True
+        elif doing:
+            self.msg = doing
+
+        def work():
+            try:
+                if act:
+                    self.told = act()
+                keys = self.keys_seen
+                self.fresh = (keys, self.read_fresh(list(self.sessions)))
+            except Exception as e:
+                config.log(f"refresh: {e}")
+            finally:
+                if act is None:
+                    self.reading = False
+        threading.Thread(target=work, daemon=True).start()
+
+    def take_fresh(self):
+        """Show what read_later read and said, if no key came since it was read."""
+        if self.told:
+            self.msg, self.told = self.told, None
+        if self.fresh:
+            (keys, fresh), self.fresh = self.fresh, None
+            if keys == self.keys_seen:
+                self.refresh(fresh)
+
+    def refresh(self, fresh=None):
+        """Re-read sessions and projects (or take fresh, what read_fresh read), keeping the same row
+        selected even if rows move."""
         rows = visible(self.sessions, self.view, self.query, self.sort, self.summarizing())
         sel_id = rows[self.sel]["id"] if rows and self.sel < len(rows) else None
-        self.sessions = terminals.mark_open(sessiondata.regather(self.sessions), self.term)
+        self.sessions, *rest = fresh or self.read_fresh(self.sessions)
         rows = visible(self.sessions, self.view, self.query, self.sort, self.summarizing())
         ids = [s["id"] for s in rows]
         if sel_id in ids:
@@ -129,7 +174,7 @@ class Shell:
         prows, nrows = self.project_rows(), self.note_rows()
         picked = self.row_key(prows[self.psel]) if self.psel < len(prows) else None
         note = nrows[self.nsel].get("path") if self.nsel < len(nrows) else None
-        self.load_projects()
+        self.projects, self.recaps, self.notes = rest
         self.select_key(picked)
         self.select_note(note)
 
@@ -181,6 +226,7 @@ class Shell:
         works out its rows, its corner note, and its key bar (its widgets draw them). Returns what the
         tab worked out, which its key handler gets back."""
         self.report_summaries()
+        self.take_fresh()
         if self.msg and (FAILED.search(self.msg) or REFUSED.search(self.msg)):
             self.alerting, self.msg = self.msg, ""
         self.corner, self.bar = None, None
@@ -272,13 +318,14 @@ class Shell:
                 self.msg = f"Couldn't move it: {e}"
             self.load_projects()
         elif action == "stop" and k in ("y", "Y"):
-            try:
-                sessiondata.stop_session(s["attach"])
-                self.msg = f"Stopped {s['name']}. It's under Recently closed"
-            except Exception as e:
-                config.log(f"stop {s['id'][:8]}: {e}")
-                self.msg = f"Couldn't stop it: {e}"
-            self.refresh()
+            def stop():
+                try:
+                    sessiondata.stop_session(s["attach"])
+                    return f"Stopped {s['name']}. It's under Recently closed"
+                except Exception as e:
+                    config.log(f"stop {s['id'][:8]}: {e}")
+                    return f"Couldn't stop it: {e}"
+            self.read_later(stop, f"Stopping {s['name']}…")
         elif action == "delete" and k in ("y", "Y"):
             try:
                 sessiondata.delete_session(s)
@@ -363,6 +410,7 @@ class Shell:
         current tab's. A mouse event arrives as ("mouse", x, y, buttons). Returns None to keep
         going, QUIT, or a session to open here."""
         self.msg = ""
+        self.keys_seen += 1
         if getattr(self, "alerting", None):
             self.alerting = None
             return None

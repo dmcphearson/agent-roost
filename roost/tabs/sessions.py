@@ -396,36 +396,35 @@ class SessionsTab:
     def pin(self, s):
         """Pin or unpin a background Session; restart a closed one in the background, pinned."""
         if not s.get("attach"):
-            self.msg = f"Restarting {s['name']} in the background…"
-            self.draw()
-            try:
-                sessiondata.revive_pinned(s)
-                self.msg = f"Pinned {s['name']}: running in the background, won't be closed when idle"
-            except Exception as e:
-                config.log(f"restart {s['id'][:8]}: {e}")
-                self.msg = f"Couldn't restart it: {e}"
-        else:
-            try:
-                sessiondata.set_pin(s["attach"], not s.get("pinned"))
-                self.msg = f"{'Unpinned' if s.get('pinned') else 'Pinned'} {s['name']}" + \
-                    ("" if s.get("pinned") else ": it won't be closed when idle")
-            except Exception as e:
-                config.log(f"pin {s['id'][:8]}: {e}")
-                self.msg = f"Couldn't change pin: {e}"
-        self.refresh()
+            def restart():
+                try:
+                    sessiondata.revive_pinned(s)
+                    return f"Pinned {s['name']}: running in the background, won't be closed when idle"
+                except Exception as e:
+                    config.log(f"restart {s['id'][:8]}: {e}")
+                    return f"Couldn't restart it: {e}"
+            self.read_later(restart, f"Restarting {s['name']} in the background…")
+            return None
+        try:
+            sessiondata.set_pin(s["attach"], not s.get("pinned"))
+            self.msg = f"{'Unpinned' if s.get('pinned') else 'Pinned'} {s['name']}" + \
+                ("" if s.get("pinned") else ": it won't be closed when idle")
+        except Exception as e:
+            config.log(f"pin {s['id'][:8]}: {e}")
+            self.msg = f"Couldn't change pin: {e}"
+        self.read_later(lambda: None)
         return None
 
     def rename(self, s):
         def done(text):
-            self.msg = f"Renaming {s['name']}…"
-            self.draw()
-            try:
-                sessiondata.rename_session(s, text)
-                self.msg = f"Renamed to {' '.join(text.split())}"
-                self.refresh()
-            except Exception as e:
-                config.log(f"rename {s['id'][:8]}: {e}")
-                self.msg = f"Couldn't rename: {e}"
+            def act():
+                try:
+                    sessiondata.rename_session(s, text)
+                    return f"Renamed to {' '.join(text.split())}"
+                except Exception as e:
+                    config.log(f"rename {s['id'][:8]}: {e}")
+                    return f"Couldn't rename: {e}"
+            self.read_later(act, f"Renaming {s['name']}…")
             return None
         self.ask("", s["name"], done, "rename", title=f"Rename {clip(s['name'], 40)}")
         return None

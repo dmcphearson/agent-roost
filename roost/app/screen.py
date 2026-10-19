@@ -262,14 +262,11 @@ if Widget:
 
         def tick(self):
             """Each second: redraw (a summary's clock counts up); when no key came for a few seconds,
-            re-read status, last used, context, and summaries first, as the curses screen did."""
+            start re-reading status, last used, context, and summaries in a thread (a later redraw shows it)."""
             now = time.time()
             if now - self.last_key >= 3 and now - self.last_refresh >= 2.5:
                 self.last_refresh = now
-                try:
-                    self.ui.refresh()
-                except Exception as e:
-                    config.log(f"refresh: {e}")
+                self.ui.read_later()
             self.redraw()
 
         def press(self, k):
