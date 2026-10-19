@@ -229,9 +229,12 @@ class ProjectsTab:
         return None
 
     def load_projects(self):
-        self.projects = projectdata.read_projects(self.sessions)
-        self.recaps = projectdata.read_recaps()
-        self.notes = read_notes()
+        self.projects, self.recaps, self.notes = self.read_projects_notes(self.sessions)
+
+    @staticmethod
+    def read_projects_notes(sessions):
+        """The projects, Session recaps, and notes on disk. Only reads, so a refresh can run it off the UI thread."""
+        return projectdata.read_projects(sessions), projectdata.read_recaps(), read_notes()
 
     def wrapped(self, s):
         """A closed Session whose newest Handoff, in its project or its Session recap, covers its last

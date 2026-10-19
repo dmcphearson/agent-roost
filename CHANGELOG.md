@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **License:** Apache License 2.0, with NOTICE and TRADEMARKS.md. Releases up to 2026.10.22 stay MIT
+- **Typing no longer lags:** the refresh every few seconds reads Sessions and projects in a background thread, so keys never wait on it (it used to hold the screen for up to half a second, and a prompt being typed in didn't pause it). Pin, Rename, and Stop run in the background too, showing Restarting…, Renaming…, or Stopping… until they're done
 
 ## 2026.10.22
 
