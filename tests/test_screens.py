@@ -840,6 +840,53 @@ class TextualScreens(unittest.TestCase):
         seen = self.stop_one(self.Slow(error=RuntimeError("no such job")))
         self.assertEqual(seen["after"], "Couldn't stop it: no such job")
 
+    def assert_wren_below_the_note(self, lines):
+        """The empty note, then every row of the wren's cells on the lines below it, in order."""
+        note = next((i for i, l in enumerate(lines) if "Nothing here." in l), None)
+        self.assertIsNotNone(note, "no Nothing here. note:\n" + "\n".join(lines))
+        below = lines[note + 1:]
+        self.assertTrue(any(b in l for l in below for b in "▀▄"), "no half blocks below the note:\n" + "\n".join(lines))
+        art = ["".join(cell[0] for cell in row).strip() for row in roost.wren_rows()]
+        art = art[next(i for i, a in enumerate(art) if a):len(art) - next(i for i, a in enumerate(reversed(art)) if a)]
+        start = next((i for i in range(len(below)) if art[0] in below[i]), None)
+        self.assertIsNotNone(start, "the wren's top row isn't below the note:\n" + "\n".join(lines))
+        for k, row in enumerate(art):
+            self.assertIn(row, below[start + k], f"wren row {k} isn't drawn under the one above it:\n" + "\n".join(lines))
+
+    def test_an_empty_projects_tab_draws_the_wren_below_its_note(self):
+        # no projects (read_projects returns none) and a search that matches nothing: no rows at all,
+        # not even + New project, so the Nothing here. note shows
+        app = self.run_app([self.keys("/", *"zzqx", "enter")])
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Projects")
+        self.assert_wren_below_the_note(self.screen(app))
+
+    def test_an_empty_sessions_tab_draws_the_wren_below_its_note(self):
+        self.sessions = []
+        app = self.run_app([self.keys("tab")])
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
+        self.assert_wren_below_the_note(self.screen(app))
+
+    def test_a_projects_tab_with_rows_has_no_wren(self):
+        import unittest.mock
+        pid = "2026-10-printer-fleet"
+        proj = {"id": pid, "path": "/nowhere/" + pid, "sessions": [], "summary": "", "status": "active",
+                "category": "", "tags": [], "last": time.time(), "closed": False, "readme": True}
+        with unittest.mock.patch.object(roost, "read_projects", lambda sessions: [proj]):
+            app = self.run_app([])
+        lines = self.screen(app)
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Projects")
+        self.assertTrue(any(pid in l for l in lines), "\n".join(lines))
+        self.assertFalse(any("Nothing here." in l for l in lines))
+        self.assertFalse(any(b in l for l in lines for b in "▀▄"), "\n".join(lines))
+
+    def test_a_sessions_tab_with_rows_has_no_wren(self):
+        app = self.run_app([self.keys("tab")])
+        lines = self.screen(app)
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
+        self.assertTrue(any("Printer fix" in l for l in lines), "\n".join(lines))
+        self.assertFalse(any("Nothing here." in l for l in lines))
+        self.assertFalse(any(b in l for l in lines for b in "▀▄"), "\n".join(lines))
+
 
 if __name__ == "__main__":
     unittest.main()
