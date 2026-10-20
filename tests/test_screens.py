@@ -164,7 +164,10 @@ class TextualScreens(unittest.TestCase):
 
         async def scroll(pilot):
             pilot.app.query_one(roost.SessionList).on_mouse_scroll_down(wheel)
-        app = self.run_app([lambda pilot: pilot.click(offset=(24, 0)), scroll])
+
+        async def click_sessions(pilot):  # the middle of "Sessions", wherever the top bar draws it
+            await pilot.click(offset=(screen_text(pilot.app)[0].index(" Sessions ") + 5, 0))
+        app = self.run_app([click_sessions, scroll])
         self.assertEqual((app.ui.TABS[app.ui.tab].name, app.ui.sel), ("Sessions", 1))
 
     def test_a_triple_click_acts_once(self):
