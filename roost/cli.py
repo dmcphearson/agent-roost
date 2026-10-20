@@ -33,6 +33,7 @@ from roost.app.ui import UI
 from roost.app.screen import App, run_screens, textual_python
 from roost.demo import use_demo
 from roost.core import config
+from roost.core import wren
 from roost.core import projectdata
 from roost.core import sessiondata
 from roost.core import install
@@ -88,8 +89,10 @@ def run_command(name, argv):
 
 def main(argv):
     if argv and argv[0] in ("-h", "--help"):
+        wren.print_wren()
         print(usage()); return
     if argv and argv[0] == "--version":
+        wren.print_wren()
         print(f"roost {config.VERSION}"); return
     if "--demo" not in argv:
         try:

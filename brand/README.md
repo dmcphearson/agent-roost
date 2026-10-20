@@ -12,7 +12,8 @@ The icon is a low-poly wren, the dreoilín: a small brown bird with its tail coc
 - `source/wren.svg`: the master drawing, a 512 px tile edited in Pixelmator Pro. Change the bird here; everything else is built from it.
 - `svg/`: the icon (square) and a rounded preview, for press and social posts. Lockups come two ways: `agent-roost-lockup-dark` and `-light` sit on a navy or cream panel, ready to use as they are; `-on-dark` and `-on-light` are transparent, for placing on your own background. `agent-roost-wordmark-on-dark` and `-on-light` are the words alone, for places that already show the icon. Text is outlined, so no font is needed.
 - `png/`: the icon at 1024 px, the rounded preview at 512 px, and each lockup at twice its SVG size.
+- The terminal wren: `roost/core/wren.py` holds the bird as 26 x 24 pixel art, drawn with half blocks in `roost --version`, `--help`, `setup`, and an empty Projects or Sessions tab. It's built from the master drawing; the eye and legs, smaller than a pixel at that size, are stamped in by hand-set positions in `build_brand.py`.
 
-Regenerate the SVGs with `python3 brand/build_brand.py` (needs fontTools; Quicksand is in `fonts/`, SIL OFL), and the PNGs too with `--png` (renders with headless Google Chrome).
+Regenerate the SVGs with `python3 brand/build_brand.py` (needs fontTools; Quicksand is in `fonts/`, SIL OFL), and the PNGs and the terminal wren too with `--png` (renders with headless Google Chrome; the wren also needs Pillow).
 
 These files are © David McPhearson, all rights reserved, and are not covered by the repository's Apache License (see [TRADEMARKS.md](../TRADEMARKS.md)). The Quicksand font keeps its own SIL Open Font License.

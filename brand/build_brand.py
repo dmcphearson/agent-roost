@@ -2,7 +2,8 @@
 
 The wren is drawn in source/wren.svg (a 512 px tile, edited in Pixelmator); this script takes the bird from it as is.
 python3 brand/build_brand.py           writes the SVGs to brand/svg
-python3 brand/build_brand.py --png     also renders brand/png with headless Chrome
+python3 brand/build_brand.py --png     also renders brand/png and the terminal wren (roost/core/wren.py)
+                                       with headless Chrome; the wren needs Pillow
 """
 import math
 import re
@@ -172,6 +173,71 @@ def render(svg_path, png_path, scale):
                        check=True, capture_output=True)
 
 
+# The terminal wren: the bird as a WREN_W x WREN_H pixel grid, drawn with half blocks by roost/core/wren.py.
+WREN_W, WREN_H = 32, 26
+WREN_BOX = (104, 128, 320, 268)  # the bird's box in the source tile: x, y, width, height
+WREN_PY = HERE.parent / "roost/core/wren.py"
+EYE, EYE_AT, LEG = (0x1B, 0x15, 0x12), (338, 204), (0xA8, 0x6F, 0x69)
+LEGS = [(254, 330, 378), (288, 348, 382)]  # x, top and bottom of each leg in the tile
+
+
+def wren_pixels():
+    """Render the bird crisp at 4x, keep each 4x4 block's most common colour, then stamp the eye and legs,
+    which are smaller than a pixel at this size. Rows of (r, g, b) or None for transparent."""
+    from collections import Counter
+    from PIL import Image
+    x0, y0, cw, ch = WREN_BOX
+    s = 4
+    with tempfile.TemporaryDirectory() as tmp:
+        svg, png = Path(tmp) / "wren.svg", Path(tmp) / "wren.png"
+        svg.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{WREN_W * s}" height="{WREN_H * s}" '
+                       f'viewBox="{x0} {y0} {cw} {ch}" preserveAspectRatio="none" shape-rendering="crispEdges">{bird()}</svg>')
+        render(svg, png, 1)
+        im = Image.open(png).convert("RGBA")
+    grid = []
+    for y in range(WREN_H):
+        row = []
+        for x in range(WREN_W):
+            block = [im.getpixel((x * s + i, y * s + j)) for i in range(s) for j in range(s)]
+            row.append(Counter(None if a < 128 else (r, g, b) for r, g, b, a in block).most_common(1)[0][0])
+        grid.append(row)
+    at = lambda ux, uy: (int((ux - x0) / cw * WREN_W), int((uy - y0) / ch * WREN_H))
+    ex, ey = at(*EYE_AT)
+    face = grid[ey][ex + 2]
+    for row in grid:  # the eye's own pixels give way, so it's stamped clean
+        for i, c in enumerate(row):
+            if c == EYE:
+                row[i] = face
+    for dx, dy in ((-1, -1), (0, -1), (-1, 0), (0, 0)):
+        grid[ey + dy][ex + dx] = EYE
+    grid[ey - 1][ex] = (0xFF, 0xFF, 0xFF)  # its highlight
+    for lx, top, bottom in LEGS:
+        x, ya = at(lx, top)
+        yb = min(at(lx, bottom)[1], WREN_H - 1)
+        for y in range(ya, yb + 1):
+            grid[y][x] = LEG
+        grid[yb][min(x + 1, WREN_W - 1)] = LEG  # a toe forward
+    # trim empty rows and columns from every side, then pad to an even number of rows for the half blocks
+    while grid and not any(grid[0]):
+        grid.pop(0)
+    while grid and not any(grid[-1]):
+        grid.pop()
+    used = [x for x in range(WREN_W) if any(row[x] for row in grid)]
+    grid = [row[used[0]:used[-1] + 1] for row in grid]
+    if len(grid) % 2:
+        grid.append([None] * len(grid[0]))
+    return grid
+
+
+def write_wren(grid):
+    """Replace the WREN block in roost/core/wren.py with the grid, one string per pixel row."""
+    rows = ["".join("......" if c is None else "%02x%02x%02x" % c for c in row) for row in grid]
+    block = "WREN = [\n" + "".join(f'    "{r}",\n' for r in rows) + "]\n"
+    text = WREN_PY.read_text()
+    start, end = text.index("WREN = ["), text.index("]\n", text.index("WREN = [")) + 2
+    WREN_PY.write_text(text[:start] + block + text[end:])
+
+
 def main():
     SVG.mkdir(parents=True, exist_ok=True)
     files = {
@@ -196,6 +262,8 @@ def main():
         for svg, png, scale in renders:
             render(SVG / svg, PNG / png, scale)
         print(f"[brand] Rendered {len(renders)} PNGs to {PNG}")
+        write_wren(wren_pixels())
+        print(f"[brand] Wrote the terminal wren to {WREN_PY}")
 
 
 if __name__ == "__main__":

@@ -34,7 +34,7 @@ from roost.core import terminals
 
 if Widget:
     from textual.containers import Vertical
-    from roost.app.widgets import Region
+    from roost.app.widgets import Region, wren_below
 else:
     Region = None
 
@@ -620,6 +620,8 @@ if Region:
                 pos = self.line()
                 pos.put(w - 12, f"{ui.sel + 1}/{len(rows)}", ui.DIM)
                 out.append(pos)
+            if not rows:
+                wren_below(self, out)
             return out
 
     class SessionPanel(Region):

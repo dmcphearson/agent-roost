@@ -3,10 +3,12 @@ tab, and Line, a row of text laid out by column. Each tab's own widgets are in i
 import curses, re, textwrap
 
 from roost.core.formatting import clip
+from roost.core import wren
 from roost.app.shell import SAVE
 
 try:
     from rich.cells import cell_len
+    from rich.style import Style
     from rich.text import Text
     from textual.widget import Widget
 except ImportError:  # the CLI commands need none of it
@@ -28,8 +30,8 @@ BAR_KEY = re.compile(r"^(page up/down|← or esc|\S+)( .*)?$")  # a key bar item
 
 class Line:
     """One row of a widget, written column by column like a terminal row: put(x, text, attr) places
-    text at column x in the look of attr (a curses attr: see TextualUI.style). text() is the row as
-    Rich Text. A wide character takes two columns; one cut in half is a space."""
+    text at column x in the look of attr (a curses attr: see TextualUI.style, or a Rich Style for exact
+    colors). text() is the row as Rich Text. A wide character takes two columns; one cut in half is a space."""
     def __init__(self, ui, width, fill=None, card=False):
         self.ui, self.card, self.width = ui, card, max(width, 0)
         self.cells = [(" ", fill)] * self.width
@@ -70,9 +72,27 @@ class Line:
         return out
 
     def style(self, attr):
+        if isinstance(attr, Style):
+            return attr
         if isinstance(attr, tuple):
             return self.ui.style(attr[1], self.card, line=True)
         return self.ui.style(attr or 0, self.card)
+
+
+def wren_below(region, out):
+    """The wren, centred under a list with nothing to show, when the whole bird fits below what's drawn
+    (out, the region's lines so far): never a clipped one. Adds its lines to out."""
+    art = wren.wren_rows()
+    if not art or len(out) + 1 + len(art) > region.size.height:
+        return
+    x = max((region.size.width - len(art[0])) // 2, 0)
+    out.append(region.line())
+    for cells in art:
+        row = region.line()
+        for i, (ch, fg, bg) in enumerate(cells):
+            if fg:
+                row.put(x + i, ch, Style(color=fg, bgcolor=bg))
+        out.append(row)
 
 
 def wrap_body(body, width):
