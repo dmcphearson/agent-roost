@@ -863,7 +863,9 @@ class TextualScreens(unittest.TestCase):
 
     def test_an_empty_sessions_tab_draws_the_wren_below_its_note(self):
         self.sessions = []
-        app = self.run_app([self.keys("tab")])
+        # 120x40: at 120x30 the detail panel and views row leave too little room for the whole wren,
+        # and a wren that doesn't fit isn't drawn
+        app = self.run_app([self.keys("tab")], size=(120, 40))
         self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
         self.assert_wren_below_the_note(self.screen(app))
 
