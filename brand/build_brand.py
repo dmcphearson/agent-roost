@@ -1,0 +1,201 @@
+"""Build agent roost brand files: the low-poly wren icon and the logo lockups, wordmark outlined from Outfit.
+
+The wren is drawn in source/wren.svg (a 512 px tile, edited in Pixelmator); this script takes the bird from it as is.
+python3 brand/build_brand.py           writes the SVGs to brand/svg
+python3 brand/build_brand.py --png     also renders brand/png with headless Chrome
+"""
+import math
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from fontTools.pens.boundsPen import BoundsPen
+from fontTools.pens.svgPathPen import SVGPathPen
+from fontTools.pens.transformPen import TransformPen
+from fontTools.ttLib import TTFont
+from fontTools.varLib.instancer import instantiateVariableFont
+
+HERE = Path(__file__).parent
+FONT = HERE / "fonts/Outfit-Variable.ttf"
+SOURCE = HERE / "source/wren.svg"
+SVG, PNG = HERE / "svg", HERE / "png"
+CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+NAVY, CREAM = "#14213D", "#F6F0E4"
+TILE, CORNER = 512, 113  # the source tile and its corner radius
+TITLE = "agent roost"
+
+
+def bird():
+    """The wren's paths from the source tile, without the tile's own background."""
+    text = SOURCE.read_text()
+    group = re.search(r'<g id="Group">(.*?)</g>', text, re.S)
+    if not group:
+        sys.exit(f"[brand] No <g id=\"Group\"> in {SOURCE}")
+    return f"<g>{group.group(1).strip()}</g>"
+
+
+def icon_body(rounded, prefix=""):
+    """The icon in TILE units: cream ground and the wren, clipped to rounded corners when asked."""
+    body = f'<rect width="{TILE}" height="{TILE}" fill="{CREAM}"/>{bird()}'
+    if not rounded:
+        return body
+    return (f'<defs><clipPath id="{prefix}corner"><rect width="{TILE}" height="{TILE}" rx="{CORNER}"/></clipPath></defs>'
+            f'<g clip-path="url(#{prefix}corner)">{body}</g>')
+
+
+def icon_svg(size, rounded=False):
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {TILE} {TILE}">'
+            f"<title>{TITLE}</title>{icon_body(rounded)}</svg>\n")
+
+
+class Face:
+    """One weight of Outfit, with its pair kerning, for outlining text."""
+
+    def __init__(self, weight):
+        self.font = instantiateVariableFont(TTFont(FONT), {"wght": weight})
+        self.glyphs = self.font.getGlyphSet()
+        self.cmap = self.font.getBestCmap()
+        self.upm = self.font["head"].unitsPerEm
+        self.hmtx = self.font["hmtx"]
+        self.kerning = self._pairs()
+        # The ink extent of everything outlined so far, as (left, top, right, bottom) in SVG coordinates.
+        self.bounds = None
+
+    def _pairs(self):
+        """Pair adjustments from GPOS lookup type 2, flattened to a dict; the first value found wins."""
+        pairs = {}
+        if "GPOS" not in self.font:
+            return pairs
+        for lookup in self.font["GPOS"].table.LookupList.Lookup:
+            for sub in lookup.SubTable:
+                if lookup.LookupType == 9:
+                    sub = sub.ExtSubTable
+                if getattr(sub, "LookupType", lookup.LookupType) != 2:
+                    continue
+                first = sub.Coverage.glyphs
+                if sub.Format == 1:
+                    for left, pairset in zip(first, sub.PairSet):
+                        for rec in pairset.PairValueRecord:
+                            pairs.setdefault((left, rec.SecondGlyph), getattr(rec.Value1, "XAdvance", 0) or 0)
+                elif sub.Format == 2:
+                    c1, c2 = sub.ClassDef1.classDefs, sub.ClassDef2.classDefs
+                    seconds = {}
+                    for glyph, cls in c2.items():
+                        seconds.setdefault(cls, []).append(glyph)
+                    for left in first:
+                        row = sub.Class1Record[c1.get(left, 0)]
+                        for cls, rec in enumerate(row.Class2Record):
+                            value = getattr(rec.Value1, "XAdvance", 0) or 0
+                            if value and cls in seconds:
+                                for right in seconds[cls]:
+                                    pairs.setdefault((left, right), value)
+        return pairs
+
+    def outline(self, text, x, baseline, size, tracking=0.0):
+        """Path data for `text` starting at x on the baseline, and the x where it ends."""
+        scale = size / self.upm
+        parts = []
+        names = [self.cmap[ord(ch)] for ch in text]
+        for index, name in enumerate(names):
+            pen = SVGPathPen(self.glyphs)
+            self.glyphs[name].draw(TransformPen(pen, (scale, 0, 0, -scale, x, baseline)))
+            parts.append(pen.getCommands())
+            box = BoundsPen(self.glyphs)
+            self.glyphs[name].draw(TransformPen(box, (scale, 0, 0, -scale, x, baseline)))
+            if box.bounds:
+                l, t, r, b = box.bounds
+                self.bounds = (l, t, r, b) if self.bounds is None else (
+                    min(self.bounds[0], l), min(self.bounds[1], t), max(self.bounds[2], r), max(self.bounds[3], b))
+            x += self.hmtx[name][0] * scale + tracking * size
+            if index + 1 < len(names):
+                x += self.kerning.get((name, names[index + 1]), 0) * scale
+        return " ".join(p for p in parts if p), x
+
+
+def words(x, baseline, size=60):
+    """'agent' in Outfit Light and 'roost' in SemiBold, as one path, with the faces used (for their bounds)."""
+    light, semibold = Face(300), Face(600)
+    agent, end = light.outline("agent", x, baseline, size, -0.01)
+    space = light.hmtx[light.cmap[ord(" ")]][0] * size / light.upm
+    roost, end = semibold.outline("roost", end + space * 0.9, baseline, size, -0.01)
+    return f"{agent} {roost}", end, (light, semibold)
+
+
+def lockup_svg(text_colour, background=None, edge=False):
+    """Icon, then 'agent roost' with its lowercase letters centred on the icon. Transparent by default; with a
+    background it sits centred on a padded panel, the icon lifted by a soft shadow."""
+    icon, gap = 96, 24
+    # Outfit's x-height is about half its size: centre that band on the icon's middle.
+    path, end, _ = words(icon + gap, icon / 2 + 15)
+    content_width = math.ceil(end)
+    pad_x, pad_y = (64, 40) if background else (0, 0)
+    width, height = content_width + pad_x * 2, icon + pad_y * 2
+    panel, shadow, lift = "", "", ""
+    if background:
+        panel = f'<rect width="{width}" height="{height}" fill="{background}"/>'
+        shadow = ('<filter id="lift" x="-30%" y="-30%" width="160%" height="170%">'
+                  '<feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000" flood-opacity="0.3"/></filter>')
+        lift = ' filter="url(#lift)"'
+    # on light grounds the cream tile needs a hairline to keep its edge
+    rim = (f'<rect x="2" y="2" width="{TILE - 4}" height="{TILE - 4}" rx="{CORNER - 2}" fill="none" '
+           f'stroke="{NAVY}" stroke-opacity="0.12" stroke-width="4"/>') if edge else ""
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+            f"<title>{TITLE}</title><defs>{shadow}</defs>{panel}"
+            f'<g transform="translate({pad_x} {pad_y})">'
+            f'<g{lift}><g transform="scale({icon / TILE})">{icon_body(True, "i")}{rim}</g></g>'
+            f'<path d="{path}" fill="{text_colour}"/>'
+            "</g></svg>\n")
+
+
+def wordmark_svg(text_colour):
+    """The lockup's words without the icon, cropped to the letters, for places that already show the icon."""
+    path, _, faces = words(0, 50)
+    left, top = min(f.bounds[0] for f in faces), min(f.bounds[1] for f in faces)
+    right, bottom = max(f.bounds[2] for f in faces), max(f.bounds[3] for f in faces)
+    width, height = math.ceil(right - left), math.ceil(bottom - top)
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+            f'viewBox="{left:.2f} {top:.2f} {width} {height}"><title>{TITLE}</title>'
+            f'<path d="{path}" fill="{text_colour}"/></svg>\n')
+
+
+def render(svg_path, png_path, scale):
+    """Screenshot an SVG at its own size times scale, on a transparent page, with headless Chrome."""
+    w, h = (int(float(v)) for v in re.search(r'width="([\d.]+)" height="([\d.]+)"', svg_path.read_text()).groups())
+    with tempfile.TemporaryDirectory() as profile:
+        subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", f"--user-data-dir={profile}",
+                        f"--window-size={w},{h}", f"--force-device-scale-factor={scale}",
+                        "--default-background-color=00000000", f"--screenshot={png_path}", svg_path.as_uri()],
+                       check=True, capture_output=True)
+
+
+def main():
+    SVG.mkdir(parents=True, exist_ok=True)
+    files = {
+        "agent-roost-icon.svg": icon_svg(1024),
+        "agent-roost-icon-rounded.svg": icon_svg(512, rounded=True),
+        "agent-roost-lockup-on-dark.svg": lockup_svg(CREAM),
+        "agent-roost-lockup-on-light.svg": lockup_svg(NAVY, edge=True),
+        "agent-roost-lockup-dark.svg": lockup_svg(CREAM, background=NAVY),
+        "agent-roost-lockup-light.svg": lockup_svg(NAVY, background=CREAM, edge=True),
+        "agent-roost-wordmark-on-dark.svg": wordmark_svg(CREAM),
+        "agent-roost-wordmark-on-light.svg": wordmark_svg(NAVY),
+    }
+    for name, svg in files.items():
+        (SVG / name).write_text(svg)
+    print(f"[brand] Wrote {len(files)} SVGs to {SVG}")
+    if "--png" in sys.argv:
+        PNG.mkdir(parents=True, exist_ok=True)
+        renders = [("agent-roost-icon.svg", "agent-roost-icon-1024.png", 1),
+                   ("agent-roost-icon-rounded.svg", "agent-roost-icon-rounded-512.png", 1)]
+        renders += [(f"agent-roost-lockup-{v}.svg", f"agent-roost-lockup-{v}@2x.png", 2)
+                    for v in ("dark", "light", "on-dark", "on-light")]
+        for svg, png, scale in renders:
+            render(SVG / svg, PNG / png, scale)
+        print(f"[brand] Rendered {len(renders)} PNGs to {PNG}")
+
+
+if __name__ == "__main__":
+    main()
