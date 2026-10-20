@@ -29,6 +29,7 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 NAVY, CREAM = "#14213D", "#F6F0E4"
 TILE, CORNER = 512, 113  # the source tile and its corner radius
+LOCKUP_W = 361  # the lockup without a panel: duoTemp's, 96 px icon and the wordmark
 TITLE = "Agent Roost"
 
 
@@ -130,9 +131,12 @@ def lockup_svg(text_colour, background=None, edge=False):
     """Icon, then 'Agent Roost' with its capitals centred on the icon. Transparent by default; with a
     background it sits centred on a padded panel, the icon lifted by a soft shadow."""
     icon, gap = 96, 24
-    # the capitals are about 0.7 of the size: centre them on the icon's middle.
-    path, end, _ = words(icon + gap, icon / 2 + 21)
-    content_width = math.ceil(end)
+    # The wordmark is sized so the lockup is LOCKUP_W wide, duoTemp's width, so the two line up side by side;
+    # its capitals (about 0.7 of the size) are centred on the icon's middle.
+    _, end, _ = words(0, 0)
+    size = 60 * (LOCKUP_W - icon - gap) / end
+    path, end, _ = words(icon + gap, icon / 2 + size * 0.35, size)
+    content_width = LOCKUP_W
     pad_x, pad_y = (64, 40) if background else (0, 0)
     width, height = content_width + pad_x * 2, icon + pad_y * 2
     panel, shadow, lift = "", "", ""
