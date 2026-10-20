@@ -76,10 +76,32 @@ class TextualScreens(unittest.TestCase):
     def test_it_draws_the_same_frame_and_tab_switches_tabs(self):
         app = self.run_app([self.keys("tab")])
         lines = self.screen(app)
-        self.assertTrue(lines[0].startswith(" 🐓 roost   Projects   Sessions   Notes"))
+        self.assertTrue(lines[0].startswith(" Agent Roost   Projects   Sessions   Notes"), lines[0])
         self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
         self.assertIn("Printer fix", "\n".join(lines))
         self.assertIn("ctrl+q quit", lines[-1])
+
+    def test_the_top_bar_names_agent_roost_without_an_emoji_and_a_click_on_each_label_opens_its_tab(self):
+        """The tabs sit after the name, wherever its length puts them, and a click where a tab's label is
+        drawn opens that tab: the hit areas follow the labels."""
+        seen, order = [], []
+
+        async def click_each(pilot):
+            order.extend(tab.name for tab in reversed(pilot.app.ui.TABS))  # every tab, from the last
+            for name in order:
+                bar = screen_text(pilot.app)[0]  # no wide characters, so a string index is a column
+                first = bar.index(f" {name} ") + 1
+                for x in (first, first + len(name) - 1):  # the label's first and last letters
+                    await pilot.click(offset=(x, 0))
+                    await pilot.pause()
+                    seen.append((name, pilot.app.ui.TABS[pilot.app.ui.tab].name))
+                    await pilot.press("tab")  # move off it, so the next click has to switch
+                    await pilot.pause()
+        app = self.run_app([click_each])
+        bar = self.screen(app)[0]
+        self.assertNotIn("\U0001f413", bar)
+        self.assertTrue(bar.startswith(" Agent Roost "), bar)
+        self.assertEqual(seen, [(name, name) for name in order for _ in range(2)])
 
     def test_a_confirmation_is_a_box_with_its_keys(self):
         p = {"id": "2026-10-a-project-with-a-long-enough-name-to-crowd-the-row", "path": "/nowhere/x"}
