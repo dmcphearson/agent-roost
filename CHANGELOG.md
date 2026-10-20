@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Agent Roost:** the product's name everywhere it's named: the README (its title loses the rooster emoji), NOTICE, TRADEMARKS.md, and the top bar, which now reads "Agent Roost". The command stays `roost`
+- **Logo:** a low-poly wren, with lockups, wordmarks, and PNGs in `brand/`
+- **The wren in the terminal:** `roost --version`, `roost --help`, and `roost setup` show the wren in color above their text in a 24-bit color terminal (not when piped, or with `NO_COLOR` set), and an empty Projects or Sessions tab shows it under its note when the window has room for all of it
+
 ## 2026.10.23
 
 - **License:** Apache License 2.0, with NOTICE and TRADEMARKS.md. Releases up to 2026.10.22 stay MIT

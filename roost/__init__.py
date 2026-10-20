@@ -5,7 +5,7 @@ Textual front end; tabs/ has one module per tab. bin/roost starts roost.cli."""
 import importlib
 
 # every module, lowest first: a module imports names only from the ones before it
-MODULES = ["core.config", "core.github", "core.formatting", "core.mdfiles", "core.pricing", "core.sessiondata",
+MODULES = ["core.config", "core.wren", "core.github", "core.formatting", "core.mdfiles", "core.pricing", "core.sessiondata",
            "core.notedata", "core.projectdata", "core.statsdata", "core.plugin", "core.handoffs", "core.summaries", "core.advice",
            "core.adopt", "core.terminals", "core.install", "app.shell", "app.widgets", "tabs.sessions", "tabs.projects",
            "tabs.notes", "tabs.stats", "app.ui", "app.screen", "demo", "cli"]

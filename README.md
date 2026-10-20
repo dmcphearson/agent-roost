@@ -1,8 +1,8 @@
-# 🐓 Agent Roost
+# Agent Roost
 
 A terminal session manager for Claude Code. When you have a dozen or more Claude sessions running, roost shows them all in one table: what each is doing, when you last used it, how much context it holds, and whether it's open, pinned, or about to be closed for being idle. From there you can open, pin, stop, revive, or delete them.
 
-Roost is a session manager, not an orchestrator. It never sends work to a session on its own.
+Agent Roost is a session manager, not an orchestrator. It never sends work to a session on its own.
 
 ![The Projects tab: projects by section, each with its status, running Sessions, category, and tags](assets/projects.png)
 
@@ -21,7 +21,7 @@ Roost is a session manager, not an orchestrator. It never sends work to a sessio
 
 ## Install
 
-Requires macOS, Python 3.9 or later (the system one is fine), and Claude Code with background sessions (`claude agents`). Roost's screens are drawn by [Textual](https://textual.textualize.io), which Homebrew brings along or the install script puts in its own environment, `~/.roost/venv`, so nothing is added to your system Python.
+Requires macOS, Python 3.9 or later (the system one is fine), and Claude Code with background sessions (`claude agents`). Agent Roost's screens are drawn by [Textual](https://textual.textualize.io), which Homebrew brings along or the install script puts in its own environment, `~/.roost/venv`, so nothing is added to your system Python.
 
 With Homebrew:
 
@@ -39,7 +39,7 @@ roost setup   # once: checks prerequisites, installs Textual, picks the terminal
 
 The script installs the latest release: its program files in `~/.roost/app/<version>` and the `roost` command in `~/.local/bin`. Saving it first means a failed download stops with curl's error instead of running a partial script, and you can read `/tmp/roost-install.sh` before the second half runs it.
 
-**Updating:** with Homebrew, `brew upgrade roost`, then `roost update` to bring the plugin along. Otherwise, `roost update` installs the latest release, keeps the previous version's files and its launcher (as `~/.local/bin/roost.previous`), and brings Textual in `~/.roost/venv` to the version the release asks for (`roost setup textual` does only that). Roost also checks once a day and says in its bottom bar when a new version is out.
+**Updating:** with Homebrew, `brew upgrade roost`, then `roost update` to bring the plugin along. Otherwise, `roost update` installs the latest release, keeps the previous version's files and its launcher (as `~/.local/bin/roost.previous`), and brings Textual in `~/.roost/venv` to the version the release asks for (`roost setup textual` does only that). Agent Roost also checks once a day and says in its bottom bar when a new version is out.
 
 **The plugin:** roost's skills (`/roost:pickup`, `/roost:wrap-up`, `/roost:note`) are a Claude Code plugin that ships in each release. `roost setup` puts it in `~/.roost/plugin` and registers it with Claude Code as `roost@roost`, through `claude plugin`; `roost setup plugin` does only that step. `roost update` swaps in the new release's plugin folder, then runs `claude plugin update` so Claude Code loads it; it changes nothing in Claude Code's settings. Running Sessions keep the old plugin until they're restarted or you run `/reload-plugins` in them.
 
@@ -114,7 +114,7 @@ From the shell, `roost note "Printer driver idea" Push it from the MDM` saves a 
 
 **Session recaps are notes too.** Wrapping up a Session that no project lists writes its Handoff to a note named after the Session and tagged `recap`; later wrap-ups add to the end of the same note. The Session's panel still shows it. Make it a project moves the recap's Handoffs into the new project's `handoffs/`. Recaps from before this release move from `~/.roost/sessions/` into `~/.roost/notes/` the first time roost runs.
 
-Roost opens notes in the `editor` setting in `~/.config/roost/config.json`, else `$VISUAL`, else `$EDITOR`, else [micro](https://micro-editor.github.io) (`brew install micro`). It waits for an editor in the terminal and gets out of the way of one with its own window (VS Code, Zed, and the like); `editor_wait` (true or false) overrides that. Roost never edits a note itself, except for setting its `project:` line when you move it.
+Agent Roost opens notes in the `editor` setting in `~/.config/roost/config.json`, else `$VISUAL`, else `$EDITOR`, else [micro](https://micro-editor.github.io) (`brew install micro`). It waits for an editor in the terminal and gets out of the way of one with its own window (VS Code, Zed, and the like); `editor_wait` (true or false) overrides that. Agent Roost never edits a note itself, except for setting its `project:` line when you move it.
 
 ### Stats
 
@@ -144,7 +144,7 @@ Ghostty, Terminal.app, and iTerm2 can open sessions in new windows. Choose one w
 
 ## How it works
 
-Roost reads Claude Code's local state. It calls a model only when you ask for a Handoff, a Session recap, an adopt plan, or what to do with a Session, shows the estimated cost first, and logs what each call cost in `~/.roost/spend.jsonl`. Everything else comes from:
+Agent Roost reads Claude Code's local state. It calls a model only when you ask for a Handoff, a Session recap, an adopt plan, or what to do with a Session, shows the estimated cost first, and logs what each call cost in `~/.roost/spend.jsonl`. Everything else comes from:
 
 - `claude agents --json` for live sessions and their status
 - `~/.claude/projects/**/*.jsonl` transcripts for names, summaries, files touched, and context size (cached in `~/.cache/`)
@@ -170,7 +170,7 @@ Claude keeps each session's context in the prompt cache after every request. **S
 | `✕ cache expired` (vermillion) | Expired: the next prompt costs about 2×. Its actions can write its Handoff from the transcript instead |
 | `· closed` (grey) | Not running |
 
-On 256-color terminals the colors come from the Okabe-Ito palette, chosen to stay distinguishable with the common kinds of color blindness. While it's warm, the next message reads the context back at about 0.1× the normal input price. Once it's cold, the next message writes the whole context again: about 2× on the 1-hour cache, 1.25× on the 5-minute one. Roost reads which cache a session uses from its transcript. The bottom line of the detail panel shows the exact time left and that cost for the selected session, and it tells you when a big session is a good moment to wrap up or compact: shortly before it goes cold, or once it has gone stale.
+On 256-color terminals the colors come from the Okabe-Ito palette, chosen to stay distinguishable with the common kinds of color blindness. While it's warm, the next message reads the context back at about 0.1× the normal input price. Once it's cold, the next message writes the whole context again: about 2× on the 1-hour cache, 1.25× on the 5-minute one. Agent Roost reads which cache a session uses from its transcript. The bottom line of the detail panel shows the exact time left and that cost for the selected session, and it tells you when a big session is a good moment to wrap up or compact: shortly before it goes cold, or once it has gone stale.
 
 ### Session life
 
@@ -178,7 +178,7 @@ Claude Code deletes a session's history 30 days after it was last used (the `cle
 
 ## When something looks wrong
 
-Roost logs failed actions and compatibility warnings to `~/.cache/roost.log`. At startup it compares the Claude Code version and the fields in `claude agents --json` with what it was tested against, and shows a yellow warning in the bottom bar if they differ.
+Agent Roost logs failed actions and compatibility warnings to `~/.cache/roost.log`. At startup it compares the Claude Code version and the fields in `claude agents --json` with what it was tested against, and shows a yellow warning in the bottom bar if they differ.
 
 ## Tests
 
@@ -191,4 +191,4 @@ Under a Python without Textual, the tests of the Textual screens are skipped. Th
 
 ## License
 
-Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Releases up to 2026.10.22 were published under MIT and stay MIT for anyone who has them. The name "Roost" and its logo and icon are not licensed with the code: see [TRADEMARKS.md](TRADEMARKS.md). Issues are welcome; code pull requests are by arrangement.
+Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Releases up to 2026.10.22 were published under MIT and stay MIT for anyone who has them. The name "Agent Roost" and its logo and icon are not licensed with the code: see [TRADEMARKS.md](TRADEMARKS.md). Issues are welcome; code pull requests are by arrangement.
