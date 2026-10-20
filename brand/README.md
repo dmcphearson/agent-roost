@@ -1,6 +1,6 @@
-# agent roost brand
+# Agent Roost brand
 
-The icon is a low-poly wren, the dreoilín: a small brown bird with its tail cocked up, drawn in flat facets on a cream tile. The logo pairs it with "agent roost" in Outfit, "agent" in Light and "roost" in SemiBold, outlined.
+The icon is a low-poly wren, the dreoilín: a small brown bird with its tail cocked up, drawn in flat facets on a cream tile. The logo pairs it with "Agent Roost" in Outfit, "Agent" in Light and "Roost" in SemiBold, outlined.
 
 | Colour | Hex | Use |
 |---|---|---|

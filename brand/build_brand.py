@@ -1,4 +1,4 @@
-"""Build agent roost brand files: the low-poly wren icon and the logo lockups, wordmark outlined from Outfit.
+"""Build Agent Roost brand files: the low-poly wren icon and the logo lockups, wordmark outlined from Outfit.
 
 The wren is drawn in source/wren.svg (a 512 px tile, edited in Pixelmator); this script takes the bird from it as is.
 python3 brand/build_brand.py           writes the SVGs to brand/svg
@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from fontTools.pens.boundsPen import BoundsPen
@@ -21,20 +22,21 @@ HERE = Path(__file__).parent
 FONT = HERE / "fonts/Outfit-Variable.ttf"
 SOURCE = HERE / "source/wren.svg"
 SVG, PNG = HERE / "svg", HERE / "png"
+SVGNS = "http://www.w3.org/2000/svg"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 NAVY, CREAM = "#14213D", "#F6F0E4"
 TILE, CORNER = 512, 113  # the source tile and its corner radius
-TITLE = "agent roost"
+TITLE = "Agent Roost"
 
 
 def bird():
-    """The wren's paths from the source tile, without the tile's own background."""
-    text = SOURCE.read_text()
-    group = re.search(r'<g id="Group">(.*?)</g>', text, re.S)
-    if not group:
-        sys.exit(f"[brand] No <g id=\"Group\"> in {SOURCE}")
-    return f"<g>{group.group(1).strip()}</g>"
+    """The wren from the source tile (its <g id="Group">, nested groups and all), without the tile's background."""
+    ET.register_namespace("", SVGNS)
+    group = ET.parse(SOURCE).getroot().find(f".//{{{SVGNS}}}g[@id='Group']")
+    if group is None:
+        sys.exit(f'[brand] No <g id="Group"> in {SOURCE}')
+    return ET.tostring(group, encoding="unicode").replace(f' xmlns="{SVGNS}"', "")
 
 
 def icon_body(rounded, prefix=""):
@@ -116,20 +118,20 @@ class Face:
 
 
 def words(x, baseline, size=60):
-    """'agent' in Outfit Light and 'roost' in SemiBold, as one path, with the faces used (for their bounds)."""
+    """'Agent' in Outfit Light and 'Roost' in SemiBold, as one path, with the faces used (for their bounds)."""
     light, semibold = Face(300), Face(600)
-    agent, end = light.outline("agent", x, baseline, size, -0.01)
+    agent, end = light.outline("Agent", x, baseline, size, -0.01)
     space = light.hmtx[light.cmap[ord(" ")]][0] * size / light.upm
-    roost, end = semibold.outline("roost", end + space * 0.9, baseline, size, -0.01)
+    roost, end = semibold.outline("Roost", end + space * 0.9, baseline, size, -0.01)
     return f"{agent} {roost}", end, (light, semibold)
 
 
 def lockup_svg(text_colour, background=None, edge=False):
-    """Icon, then 'agent roost' with its lowercase letters centred on the icon. Transparent by default; with a
+    """Icon, then 'Agent Roost' with its capitals centred on the icon. Transparent by default; with a
     background it sits centred on a padded panel, the icon lifted by a soft shadow."""
     icon, gap = 96, 24
-    # Outfit's x-height is about half its size: centre that band on the icon's middle.
-    path, end, _ = words(icon + gap, icon / 2 + 15)
+    # Outfit's capitals are 0.7 of its size: centre them on the icon's middle.
+    path, end, _ = words(icon + gap, icon / 2 + 21)
     content_width = math.ceil(end)
     pad_x, pad_y = (64, 40) if background else (0, 0)
     width, height = content_width + pad_x * 2, icon + pad_y * 2
