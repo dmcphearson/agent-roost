@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.10.24
 
 - **Agent Roost:** the product's name everywhere it's named: the README (its title loses the rooster emoji), NOTICE, TRADEMARKS.md, and the top bar, which now reads "Agent Roost". The command stays `roost`
 - **Logo:** a low-poly wren, with lockups, wordmarks, and PNGs in `brand/`
