@@ -1,6 +1,6 @@
 ---
 name: pickup
-description: Load a roost project (or a Session recap, or a note) into this Session so it catches up on where the work stands. Use when the person runs /pickup, or asks to pick up, continue, or load a project. Roost starts new Sessions with /roost:pickup <project> as their first prompt.
+description: Load a roost project (or a Session recap, or a note) into this Session so it catches up on where the work stands. Use when the person runs /pickup, or asks to pick up, continue, or load a project. Agent Roost starts new Sessions with /roost:pickup <project> as their first prompt.
 argument-hint: "[project]"
 ---
 
