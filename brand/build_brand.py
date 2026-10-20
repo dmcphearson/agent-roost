@@ -10,7 +10,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from fontTools.pens.boundsPen import BoundsPen
@@ -24,7 +23,6 @@ FONT = HERE / "fonts/Quicksand-Variable.ttf"
 WEIGHT = 600  # SemiBold, one weight for both words
 SOURCE = HERE / "source/wren.svg"
 SVG, PNG = HERE / "svg", HERE / "png"
-SVGNS = "http://www.w3.org/2000/svg"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 NAVY, CREAM = "#14213D", "#F6F0E4"
@@ -34,12 +32,19 @@ TITLE = "Agent Roost"
 
 
 def bird():
-    """The wren from the source tile (its <g id="Group">, nested groups and all), without the tile's background."""
-    ET.register_namespace("", SVGNS)
-    group = ET.parse(SOURCE).getroot().find(f".//{{{SVGNS}}}g[@id='Group']")
-    if group is None:
+    """The wren from the source tile: its <g id="Group"> up to the matching </g>, nested groups and all,
+    without the tile's background. Found by counting <g> depth, so no XML parser reads the file."""
+    text = SOURCE.read_text()
+    start = text.find('<g id="Group">')
+    if start < 0:
         sys.exit(f'[brand] No <g id="Group"> in {SOURCE}')
-    return ET.tostring(group, encoding="unicode").replace(f' xmlns="{SVGNS}"', "")
+    depth = 0
+    for tag in re.finditer(r"<(/?)g[\s>]", text[start:]):
+        depth += -1 if tag.group(1) else 1
+        if depth == 0:
+            end = start + text[start:].index(">", tag.start()) + 1
+            return text[start:end]
+    sys.exit(f'[brand] <g id="Group"> in {SOURCE} never closes')
 
 
 def icon_body(rounded, prefix=""):
