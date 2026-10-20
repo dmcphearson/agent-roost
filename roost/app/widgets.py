@@ -153,12 +153,14 @@ if Widget:
             return [row]
 
     class TopBar(Region):
-        """The top row: roost, the tabs (the current one in green), and the tab's own note at the right."""
+        """The top row: Agent Roost, the tabs (the current one in green), and the tab's own note at the right."""
+        NAME = "Agent Roost"
+
         def lines(self):
             ui, w = self.ui, self.size.width
             row = self.line()
-            row.put(1, "🐓 roost", curses.A_BOLD | ui.ACCENT)
-            x, ui.tab_x = 11, []  # the logo's emoji is two columns wide
+            row.put(1, self.NAME, curses.A_BOLD | ui.ACCENT)
+            x, ui.tab_x = len(self.NAME) + 3, []
             for i, tab in enumerate(ui.TABS):
                 label = f" {tab.name} "
                 ui.tab_x.append((x, x + len(label), i))

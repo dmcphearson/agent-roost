@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Agent Roost:** the product's name everywhere it's named: the README (its title loses the rooster emoji), NOTICE, TRADEMARKS.md, and the top bar, which now reads "Agent Roost". The command stays `roost`
+- **Logo:** a low-poly wren, with lockups, wordmarks, and PNGs in `brand/`
+
 ## 2026.10.23
 
 - **License:** Apache License 2.0, with NOTICE and TRADEMARKS.md. Releases up to 2026.10.22 stay MIT
