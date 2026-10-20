@@ -21,13 +21,13 @@ class TextualScreens(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.sessions = [session("Printer fix", mins=5, tokens=41000), session("Laptop refresh", state="waiting")]
 
-    def run_app(self, steps):
-        """Run the app at 120×30, do each step with the pilot, and return the app."""
+    def run_app(self, steps, size=(120, 30)):
+        """Run the app at size (120×30 unless asked), do each step with the pilot, and return the app."""
         import asyncio
         app = roost.RoostApp(self.sessions, "")
 
         async def go():
-            async with app.run_test(size=(120, 30)) as pilot:
+            async with app.run_test(size=size) as pilot:
                 await pilot.pause()
                 for step in steps:
                     await step(pilot)
@@ -840,10 +840,11 @@ class TextualScreens(unittest.TestCase):
         seen = self.stop_one(self.Slow(error=RuntimeError("no such job")))
         self.assertEqual(seen["after"], "Couldn't stop it: no such job")
 
-    def assert_wren_below_the_note(self, lines):
-        """The empty note, then every row of the wren's cells on the lines below it, in order."""
-        note = next((i for i, l in enumerate(lines) if "Nothing here." in l), None)
-        self.assertIsNotNone(note, "no Nothing here. note:\n" + "\n".join(lines))
+    def assert_wren_below_the_note(self, lines, anchor="Nothing here."):
+        """The empty note (or the line anchor names), then every row of the wren's cells on the lines
+        below it, in order."""
+        note = next((i for i, l in enumerate(lines) if anchor in l), None)
+        self.assertIsNotNone(note, f"no {anchor} line:\n" + "\n".join(lines))
         below = lines[note + 1:]
         self.assertTrue(any(b in l for l in below for b in "▀▄"), "no half blocks below the note:\n" + "\n".join(lines))
         art = ["".join(cell[0] for cell in row).strip() for row in roost.wren_rows()]
@@ -865,6 +866,36 @@ class TextualScreens(unittest.TestCase):
         app = self.run_app([self.keys("tab")])
         self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
         self.assert_wren_below_the_note(self.screen(app))
+
+    def test_a_projects_tab_with_no_projects_draws_the_wren_below_new_project(self):
+        app = self.run_app([])  # read_projects returns no projects; no search, so + New project is the only row
+        lines = self.screen(app)
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Projects")
+        self.assertFalse(any("Nothing here." in l for l in lines))
+        self.assert_wren_below_the_note(lines, anchor="+ New project")
+
+    def test_the_wren_is_drawn_whole_or_not_at_all(self):
+        """A wren taller than the room under the note isn't drawn, not even its top rows. A made-up
+        20-cell-tall art stands in for the wren: a tall window shows all of it (so the stand-in reaches
+        the screen), a window of the minimum size has no room and shows no half block."""
+        import unittest.mock
+        wren = importlib.import_module("roost.core.wren")
+        tall = ["......" + "5a3a1e" * 4 + "......"] * 40  # 40 pixel rows: 20 cell rows of ▀
+        cases = [("Projects", [], []), ("Projects", [], [self.keys("/", *"zzqx", "enter")]),
+                 ("Sessions", [], [self.keys("tab")])]
+        for tab, sessions, steps in cases:
+            with self.subTest(tab=tab, search=bool(steps) and tab == "Projects"), \
+                    unittest.mock.patch.object(wren, "WREN", tall):
+                self.sessions = sessions
+                anchor = "Nothing here." if steps else "+ New project"
+                big = self.run_app(steps, size=(120, 60))
+                self.assertEqual(big.ui.TABS[big.ui.tab].name, tab)
+                self.assert_wren_below_the_note(self.screen(big), anchor=anchor)
+                small = self.run_app(steps, size=roost.MIN_SIZE)
+                lines = self.screen(small)
+                self.assertTrue(any(anchor in l for l in lines), "\n".join(lines))
+                self.assertFalse(any(b in l for l in lines for b in "▀▄"),
+                                 "a clipped wren in a short window:\n" + "\n".join(lines))
 
     def test_a_projects_tab_with_rows_has_no_wren(self):
         import unittest.mock
