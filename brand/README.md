@@ -1,6 +1,6 @@
 # Agent Roost brand
 
-The icon is a low-poly wren, the dreoilín: a small brown bird with its tail cocked up, drawn in flat facets on a cream tile. The logo pairs it with "Agent Roost" in Outfit, "Agent" in Light and "Roost" in SemiBold, outlined.
+The icon is a low-poly wren, the dreoilín: a small brown bird with its tail cocked up, drawn in flat facets on a cream tile. The logo pairs it with "Agent Roost" in Quicksand SemiBold, one rounded weight for both words, outlined.
 
 | Colour | Hex | Use |
 |---|---|---|
@@ -13,6 +13,6 @@ The icon is a low-poly wren, the dreoilín: a small brown bird with its tail coc
 - `svg/`: the icon (square) and a rounded preview, for press and social posts. Lockups come two ways: `agent-roost-lockup-dark` and `-light` sit on a navy or cream panel, ready to use as they are; `-on-dark` and `-on-light` are transparent, for placing on your own background. `agent-roost-wordmark-on-dark` and `-on-light` are the words alone, for places that already show the icon. Text is outlined, so no font is needed.
 - `png/`: the icon at 1024 px, the rounded preview at 512 px, and each lockup at twice its SVG size.
 
-Regenerate the SVGs with `python3 brand/build_brand.py` (needs fontTools; Outfit is in `fonts/`, SIL OFL), and the PNGs too with `--png` (renders with headless Google Chrome).
+Regenerate the SVGs with `python3 brand/build_brand.py` (needs fontTools; Quicksand is in `fonts/`, SIL OFL), and the PNGs too with `--png` (renders with headless Google Chrome).
 
-These files are © David McPhearson, all rights reserved, and are not covered by the repository's Apache License (see [TRADEMARKS.md](../TRADEMARKS.md)). The Outfit font keeps its own SIL Open Font License.
+These files are © David McPhearson, all rights reserved, and are not covered by the repository's Apache License (see [TRADEMARKS.md](../TRADEMARKS.md)). The Quicksand font keeps its own SIL Open Font License.

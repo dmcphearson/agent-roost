@@ -1,4 +1,4 @@
-"""Build Agent Roost brand files: the low-poly wren icon and the logo lockups, wordmark outlined from Outfit.
+"""Build Agent Roost brand files: the low-poly wren icon and the logo lockups, wordmark outlined from Quicksand.
 
 The wren is drawn in source/wren.svg (a 512 px tile, edited in Pixelmator); this script takes the bird from it as is.
 python3 brand/build_brand.py           writes the SVGs to brand/svg
@@ -19,7 +19,8 @@ from fontTools.ttLib import TTFont
 from fontTools.varLib.instancer import instantiateVariableFont
 
 HERE = Path(__file__).parent
-FONT = HERE / "fonts/Outfit-Variable.ttf"
+FONT = HERE / "fonts/Quicksand-Variable.ttf"
+WEIGHT = 600  # SemiBold, one weight for both words
 SOURCE = HERE / "source/wren.svg"
 SVG, PNG = HERE / "svg", HERE / "png"
 SVGNS = "http://www.w3.org/2000/svg"
@@ -54,7 +55,7 @@ def icon_svg(size, rounded=False):
 
 
 class Face:
-    """One weight of Outfit, with its pair kerning, for outlining text."""
+    """One weight of the wordmark font, with its pair kerning, for outlining text."""
 
     def __init__(self, weight):
         self.font = instantiateVariableFont(TTFont(FONT), {"wght": weight})
@@ -118,19 +119,17 @@ class Face:
 
 
 def words(x, baseline, size=60):
-    """'Agent' in Outfit Light and 'Roost' in SemiBold, as one path, with the faces used (for their bounds)."""
-    light, semibold = Face(300), Face(600)
-    agent, end = light.outline("Agent", x, baseline, size, -0.01)
-    space = light.hmtx[light.cmap[ord(" ")]][0] * size / light.upm
-    roost, end = semibold.outline("Roost", end + space * 0.9, baseline, size, -0.01)
-    return f"{agent} {roost}", end, (light, semibold)
+    """'Agent Roost' in one weight, as one path, with the face used (for its bounds)."""
+    face = Face(WEIGHT)
+    path, end = face.outline("Agent Roost", x, baseline, size, -0.005)
+    return path, end, (face,)
 
 
 def lockup_svg(text_colour, background=None, edge=False):
     """Icon, then 'Agent Roost' with its capitals centred on the icon. Transparent by default; with a
     background it sits centred on a padded panel, the icon lifted by a soft shadow."""
     icon, gap = 96, 24
-    # Outfit's capitals are 0.7 of its size: centre them on the icon's middle.
+    # the capitals are about 0.7 of the size: centre them on the icon's middle.
     path, end, _ = words(icon + gap, icon / 2 + 21)
     content_width = math.ceil(end)
     pad_x, pad_y = (64, 40) if background else (0, 0)
