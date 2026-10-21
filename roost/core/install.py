@@ -7,6 +7,7 @@ from roost.core.plugin import install_plugin, setup_plugin
 from roost.core.formatting import short
 from roost.core.terminals import TERMINALS, app_installed
 from roost.core import config
+from roost.core import wren
 from roost.core import plugin
 from roost.core import github
 from roost.core import terminals
@@ -187,7 +188,9 @@ def setup(only=None):
         return setup_textual()
     ok = lambda m: print(f"  \033[32m✓\033[0m {m}")
     bad = lambda m: print(f"  \033[33m!\033[0m {m}")
-    print("\n\033[1mAgent Roost setup\033[0m\n")
+    print()
+    wren.print_wren()
+    print("\033[1mAgent Roost setup\033[0m\n")
 
     claude = shutil.which("claude")
     if not claude:

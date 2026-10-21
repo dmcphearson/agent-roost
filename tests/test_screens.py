@@ -21,13 +21,13 @@ class TextualScreens(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.sessions = [session("Printer fix", mins=5, tokens=41000), session("Laptop refresh", state="waiting")]
 
-    def run_app(self, steps):
-        """Run the app at 120×30, do each step with the pilot, and return the app."""
+    def run_app(self, steps, size=(120, 30)):
+        """Run the app at size (120×30 unless asked), do each step with the pilot, and return the app."""
         import asyncio
         app = roost.RoostApp(self.sessions, "")
 
         async def go():
-            async with app.run_test(size=(120, 30)) as pilot:
+            async with app.run_test(size=size) as pilot:
                 await pilot.pause()
                 for step in steps:
                     await step(pilot)
@@ -76,10 +76,32 @@ class TextualScreens(unittest.TestCase):
     def test_it_draws_the_same_frame_and_tab_switches_tabs(self):
         app = self.run_app([self.keys("tab")])
         lines = self.screen(app)
-        self.assertTrue(lines[0].startswith(" 🐓 roost   Projects   Sessions   Notes"))
+        self.assertTrue(lines[0].startswith(" Agent Roost   Projects   Sessions   Notes"), lines[0])
         self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
         self.assertIn("Printer fix", "\n".join(lines))
         self.assertIn("ctrl+q quit", lines[-1])
+
+    def test_the_top_bar_names_agent_roost_without_an_emoji_and_a_click_on_each_label_opens_its_tab(self):
+        """The tabs sit after the name, wherever its length puts them, and a click where a tab's label is
+        drawn opens that tab: the hit areas follow the labels."""
+        seen, order = [], []
+
+        async def click_each(pilot):
+            order.extend(tab.name for tab in reversed(pilot.app.ui.TABS))  # every tab, from the last
+            for name in order:
+                bar = screen_text(pilot.app)[0]  # no wide characters, so a string index is a column
+                first = bar.index(f" {name} ") + 1
+                for x in (first, first + len(name) - 1):  # the label's first and last letters
+                    await pilot.click(offset=(x, 0))
+                    await pilot.pause()
+                    seen.append((name, pilot.app.ui.TABS[pilot.app.ui.tab].name))
+                    await pilot.press("tab")  # move off it, so the next click has to switch
+                    await pilot.pause()
+        app = self.run_app([click_each])
+        bar = self.screen(app)[0]
+        self.assertNotIn("\U0001f413", bar)
+        self.assertTrue(bar.startswith(" Agent Roost "), bar)
+        self.assertEqual(seen, [(name, name) for name in order for _ in range(2)])
 
     def test_a_confirmation_is_a_box_with_its_keys(self):
         p = {"id": "2026-10-a-project-with-a-long-enough-name-to-crowd-the-row", "path": "/nowhere/x"}
@@ -142,7 +164,10 @@ class TextualScreens(unittest.TestCase):
 
         async def scroll(pilot):
             pilot.app.query_one(roost.SessionList).on_mouse_scroll_down(wheel)
-        app = self.run_app([lambda pilot: pilot.click(offset=(24, 0)), scroll])
+
+        async def click_sessions(pilot):  # the middle of "Sessions", wherever the top bar draws it
+            await pilot.click(offset=(screen_text(pilot.app)[0].index(" Sessions ") + 5, 0))
+        app = self.run_app([click_sessions, scroll])
         self.assertEqual((app.ui.TABS[app.ui.tab].name, app.ui.sel), ("Sessions", 1))
 
     def test_a_triple_click_acts_once(self):
@@ -814,6 +839,86 @@ class TextualScreens(unittest.TestCase):
     def test_a_stop_that_fails_says_why(self):
         seen = self.stop_one(self.Slow(error=RuntimeError("no such job")))
         self.assertEqual(seen["after"], "Couldn't stop it: no such job")
+
+    def assert_wren_below_the_note(self, lines, anchor="Nothing here."):
+        """The empty note (or the line anchor names), then every row of the wren's cells on the lines
+        below it, in order."""
+        note = next((i for i, l in enumerate(lines) if anchor in l), None)
+        self.assertIsNotNone(note, f"no {anchor} line:\n" + "\n".join(lines))
+        below = lines[note + 1:]
+        self.assertTrue(any(b in l for l in below for b in "▀▄"), "no half blocks below the note:\n" + "\n".join(lines))
+        art = ["".join(cell[0] for cell in row).strip() for row in roost.wren_rows()]
+        art = art[next(i for i, a in enumerate(art) if a):len(art) - next(i for i, a in enumerate(reversed(art)) if a)]
+        start = next((i for i in range(len(below)) if art[0] in below[i]), None)
+        self.assertIsNotNone(start, "the wren's top row isn't below the note:\n" + "\n".join(lines))
+        for k, row in enumerate(art):
+            self.assertIn(row, below[start + k], f"wren row {k} isn't drawn under the one above it:\n" + "\n".join(lines))
+
+    def test_an_empty_projects_tab_draws_the_wren_below_its_note(self):
+        # no projects (read_projects returns none) and a search that matches nothing: no rows at all,
+        # not even + New project, so the Nothing here. note shows
+        app = self.run_app([self.keys("/", *"zzqx", "enter")])
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Projects")
+        self.assert_wren_below_the_note(self.screen(app))
+
+    def test_an_empty_sessions_tab_draws_the_wren_below_its_note(self):
+        self.sessions = []
+        # 120x40: at 120x30 the detail panel and views row leave too little room for the whole wren,
+        # and a wren that doesn't fit isn't drawn
+        app = self.run_app([self.keys("tab")], size=(120, 40))
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
+        self.assert_wren_below_the_note(self.screen(app))
+
+    def test_a_projects_tab_with_no_projects_draws_the_wren_below_new_project(self):
+        app = self.run_app([])  # read_projects returns no projects; no search, so + New project is the only row
+        lines = self.screen(app)
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Projects")
+        self.assertFalse(any("Nothing here." in l for l in lines))
+        self.assert_wren_below_the_note(lines, anchor="+ New project")
+
+    def test_the_wren_is_drawn_whole_or_not_at_all(self):
+        """A wren taller than the room under the note isn't drawn, not even its top rows. A made-up
+        20-cell-tall art stands in for the wren: a tall window shows all of it (so the stand-in reaches
+        the screen), a window of the minimum size has no room and shows no half block."""
+        import unittest.mock
+        wren = importlib.import_module("roost.core.wren")
+        tall = ["......" + "5a3a1e" * 4 + "......"] * 40  # 40 pixel rows: 20 cell rows of ▀
+        cases = [("Projects", [], []), ("Projects", [], [self.keys("/", *"zzqx", "enter")]),
+                 ("Sessions", [], [self.keys("tab")])]
+        for tab, sessions, steps in cases:
+            with self.subTest(tab=tab, search=bool(steps) and tab == "Projects"), \
+                    unittest.mock.patch.object(wren, "WREN", tall):
+                self.sessions = sessions
+                anchor = "Nothing here." if steps else "+ New project"
+                big = self.run_app(steps, size=(120, 60))
+                self.assertEqual(big.ui.TABS[big.ui.tab].name, tab)
+                self.assert_wren_below_the_note(self.screen(big), anchor=anchor)
+                small = self.run_app(steps, size=roost.MIN_SIZE)
+                lines = self.screen(small)
+                self.assertTrue(any(anchor in l for l in lines), "\n".join(lines))
+                self.assertFalse(any(b in l for l in lines for b in "▀▄"),
+                                 "a clipped wren in a short window:\n" + "\n".join(lines))
+
+    def test_a_projects_tab_with_rows_has_no_wren(self):
+        import unittest.mock
+        pid = "2026-10-printer-fleet"
+        proj = {"id": pid, "path": "/nowhere/" + pid, "sessions": [], "summary": "", "status": "active",
+                "category": "", "tags": [], "last": time.time(), "closed": False, "readme": True}
+        with unittest.mock.patch.object(roost, "read_projects", lambda sessions: [proj]):
+            app = self.run_app([])
+        lines = self.screen(app)
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Projects")
+        self.assertTrue(any(pid in l for l in lines), "\n".join(lines))
+        self.assertFalse(any("Nothing here." in l for l in lines))
+        self.assertFalse(any(b in l for l in lines for b in "▀▄"), "\n".join(lines))
+
+    def test_a_sessions_tab_with_rows_has_no_wren(self):
+        app = self.run_app([self.keys("tab")])
+        lines = self.screen(app)
+        self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
+        self.assertTrue(any("Printer fix" in l for l in lines), "\n".join(lines))
+        self.assertFalse(any("Nothing here." in l for l in lines))
+        self.assertFalse(any(b in l for l in lines for b in "▀▄"), "\n".join(lines))
 
 
 if __name__ == "__main__":
