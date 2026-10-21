@@ -140,7 +140,7 @@ Click a column header to sort by it, and click again to reverse.
 
 ## Terminals
 
-Ghostty, Terminal.app, and iTerm2 can open sessions in new windows. Choose one with `roost setup`; the choice is saved in `~/.config/roost/config.json`. With no terminal configured, Enter opens the session in the current terminal.
+Ghostty, Terminal.app, and iTerm2 can open sessions in new windows. Choose one with `roost setup`; the choice is saved in `~/.config/roost/config.json`. With no terminal configured, Enter opens the session in the current terminal. In an IDE's terminal (IntelliJ and the other JetBrains IDEs, VS Code, Cursor), which roost can't open a tab in, it copies the command that runs the session instead and says how to open a new tab to paste it in; roost keeps running.
 
 ## How it works
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026.10.25
+
+- **IDE terminals:** in IntelliJ (and the other JetBrains IDEs), VS Code, or Cursor, with no `terminal` in config.json, Open and Start copy the command that runs the Session (`cd <folder> && claude …`) instead of replacing roost in that tab, and say how to open a new tab to paste it in
+
 ## 2026.10.24
 
 - **Agent Roost:** the product's name everywhere it's named: the README (its title loses the rooster emoji), NOTICE, TRADEMARKS.md, and the top bar, which now reads "Agent Roost". The command stays `roost`

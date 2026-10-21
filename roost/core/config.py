@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-VERSION = "2026.10.24"
+VERSION = "2026.10.25"
 TESTED_CLAUDE = "2.1.291"  # newest Claude Code release roost has been checked against
 AGENT_KEYS = {"id", "kind", "name", "pid", "sessionId", "state", "status"}  # fields roost reads
 LOG = Path.home() / ".cache" / "roost.log"
