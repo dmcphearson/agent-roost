@@ -305,6 +305,42 @@ class Osa(unittest.TestCase):
             self.assertIsNone(roost.osa("tell application \"Ghostty\" to activate"))
 
 
+class RunHereInAnIDE(unittest.TestCase):
+    """An IDE's terminal (IntelliJ, VS Code, Cursor) can't be scripted to open a tab, so roost copies
+    the one line that runs a Session there: which IDE it is, and that line."""
+    def test_the_ide_is_read_from_the_terminals_environment(self):
+        self.assertEqual(roost.ide_terminal({"TERMINAL_EMULATOR": "JetBrains-JediTerm"}), "jetbrains")
+        self.assertEqual(roost.ide_terminal({"TERM_PROGRAM": "vscode"}), "vscode")  # VS Code and Cursor
+        self.assertIsNone(roost.ide_terminal({"TERM_PROGRAM": "ghostty"}))
+        self.assertIsNone(roost.ide_terminal({}))
+
+    def test_the_ide_defaults_to_this_processs_environment(self):
+        import unittest.mock
+        with unittest.mock.patch.dict(os.environ, {"TERMINAL_EMULATOR": "JetBrains-JediTerm"}, clear=True):
+            self.assertEqual(roost.ide_terminal(), "jetbrains")
+        with unittest.mock.patch.dict(os.environ, {"TERM_PROGRAM": "vscode"}, clear=True):
+            self.assertEqual(roost.ide_terminal(), "vscode")
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(roost.ide_terminal())
+
+    def test_the_line_for_a_fresh_session_changes_folder_then_starts_it(self):
+        run = {"start": ["claude", "-n", "My task", "/roost:pickup p"], "cwd": "/tmp/my repo"}
+        self.assertEqual(roost.run_line(run), "cd '/tmp/my repo' && claude -n 'My task' '/roost:pickup p'")
+
+    def test_the_line_for_a_background_session_attaches_to_it(self):
+        s = dict(session("Live"), attach="abcd1234")
+        self.assertEqual(roost.run_line(s), "claude attach abcd1234")
+
+    def test_the_line_for_a_closed_session_resumes_it_in_its_launch_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            home, cwd = Path(d) / "my home", Path(d) / "later"
+            home.mkdir(), cwd.mkdir()
+            s = dict(session("Old", state="closed", kind=None), id="bb2c0000-0000", home=str(home), cwd=str(cwd))
+            self.assertEqual(roost.run_line(s), f"cd '{home}' && claude --resume bb2c0000-0000")
+            s["home"] = str(Path(d) / "gone")  # where it started is gone: where it last was
+            self.assertEqual(roost.run_line(s), f"cd {cwd} && claude --resume bb2c0000-0000")
+
+
 class Commands(unittest.TestCase):
     def setUp(self):
         self.saved = dict(roost.COMMANDS)

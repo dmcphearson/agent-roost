@@ -175,6 +175,32 @@ def detect_terminal():
     return next((k for k, v in TERMINALS.items() if v["term_program"] == tp), None)
 
 
+# An IDE's terminal can't be scripted to open a tab, so there roost copies the line that runs a
+# Session, and says how to open a tab to paste it in.
+IDE_NOTES = {
+    "jetbrains": "Copied the command: press ⌘T and paste it to open it in a new tab",
+    "vscode": "Copied the command: open a new terminal (⌃⇧`) and paste it",
+}
+
+
+def ide_terminal(env=None):
+    """The IDE whose terminal roost runs in: "jetbrains" (IntelliJ and the rest), "vscode" (VS Code
+    and Cursor), or None."""
+    env = os.environ if env is None else env
+    if env.get("TERMINAL_EMULATOR", "").startswith("JetBrains"):
+        return "jetbrains"
+    return "vscode" if env.get("TERM_PROGRAM") == "vscode" else None
+
+
+def run_line(s):
+    """The shell line that runs s the way open_session would, to paste in another tab."""
+    if s.get("start"):
+        return f"cd {shlex.quote(s['cwd'])} && {shlex.join(s['start'])}"
+    if s.get("attach"):
+        return shlex.join(["claude", "attach", s["attach"]])
+    return f"cd {shlex.quote(launch_dir(s))} && {shlex.join(['claude', '--resume', s['id']])}"
+
+
 def chosen_terminal():
     """The terminal roost opens sessions in: config file first, then auto-detect.
     None means open in the current terminal."""

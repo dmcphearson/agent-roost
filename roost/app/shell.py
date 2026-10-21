@@ -405,6 +405,16 @@ class Shell:
                     "\b": "backspace", "\x0e": "ctrl+n", "\x11": "ctrl+q", "\x15": "ctrl+u"}
 
     def dispatch(self, k, drawn):
+        """Handle one key (see handle). In an IDE's terminal, a session to open here is copied
+        instead, to paste in a new tab, and roost keeps running."""
+        result = self.handle(k, drawn)
+        ide = None if result is None or result is QUIT or self.term else terminals.ide_terminal()
+        if not ide:
+            return result
+        self.copy_text(terminals.run_line(result), terminals.IDE_NOTES[ide])
+        return None
+
+    def handle(self, k, drawn):
         """Handle one key: an open menu or prompt first, then the keys every tab shares, then the
         current tab's. A mouse event arrives as ("mouse", x, y, buttons). Returns None to keep
         going, QUIT, or a session to open here."""
