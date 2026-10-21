@@ -448,6 +448,88 @@ class StartingSessions(unittest.TestCase):
         self.assertEqual((run["cwd"], run["start"][0], run["start"][-1]), (str(folder), "claude", "/roost:pickup p"))
         self.assertEqual(len(roost.frontmatter((folder / "README.md").read_text())["sessions"]), 3)
 
+    # In an IDE's terminal, what would run here is copied instead, to paste in a new tab
+
+    JETBRAINS_NOTE = "Copied the command: press ⌘T and paste it to open it in a new tab"
+    VSCODE_NOTE = "Copied the command: open a new terminal (⌃⇧`) and paste it"
+
+    def in_ide(self, ide, clipboard=None):
+        """Patches for a test in an IDE's terminal (None: in no IDE), with the clipboard captured in
+        self.copied, or clipboard in its place."""
+        import unittest.mock
+        self.copied = []
+        return (unittest.mock.patch.object(roost.terminals, "ide_terminal", lambda env=None: ide),
+                unittest.mock.patch.object(roost.UI, "clipboard", staticmethod(clipboard or self.copied.append)))
+
+    def open_here(self, ui):
+        """Enter on the Sessions tab's only Session, then enter on Open here, through dispatch."""
+        ui.tab, ui.view, ui.top, ui.quit_anyway = 1, 0, 0, False
+        ui.dispatch("enter", ui.sessions)
+        opts = ui.choosing["options"]
+        ui.choosing["sel"] = next(i for i, (l, _) in enumerate(opts) if l == "Open here")
+        return ui.dispatch("enter", None)
+
+    def test_in_jetbrains_open_here_copies_the_attach_line_and_keeps_roost_running(self):
+        ui = self.ui(term=None)
+        ui.sessions = [dict(session("Live"), attach="abcd1234")]
+        ide, clip = self.in_ide("jetbrains")
+        with ide, clip:
+            self.assertIsNone(self.open_here(ui))
+        self.assertEqual((self.copied, ui.msg), (["claude attach abcd1234"], self.JETBRAINS_NOTE))
+
+    def test_in_vscode_start_a_session_copies_the_line_that_starts_it(self):
+        self.project("p", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        repo = Path(self.tmp.name) / "my repo"  # a space: the folder comes out quoted
+        repo.mkdir()
+        ui = self.ui(term=None)
+        ui.quit_anyway, ui.psel = False, 1
+        ui.sessions = [dict(session("Mine", cwd=str(repo)), id="aa1b9a71-0000", home=str(repo))]
+        ui.load_projects()
+        ide, clip = self.in_ide("vscode")
+        with ide, clip:
+            ui.dispatch("enter", ui.project_rows())
+            opts = ui.choosing["options"]
+            ui.choosing["sel"] = next(i for i, (l, _) in enumerate(opts) if l.startswith("Start a Session"))
+            ui.dispatch("enter", None)  # which folder: the project's, then the Session's
+            ui.dispatch("down", None)
+            self.assertIsNone(ui.dispatch("enter", None))
+        self.assertEqual(ui.msg, self.VSCODE_NOTE)
+        self.assertEqual(len(self.copied), 1)
+        self.assertTrue(self.copied[0].startswith(f"cd '{repo}' && claude --session-id "), self.copied[0])
+        self.assertTrue(self.copied[0].endswith(" '/roost:pickup p'"), self.copied[0])
+
+    def test_in_an_ide_ctrl_n_new_session_copies_the_line_that_starts_it(self):
+        import unittest.mock
+        folder = Path(self.tmp.name) / "a repo"
+        folder.mkdir()
+        ui = self.ui(term=None)
+        ui.quit_anyway = False
+        ide, clip = self.in_ide("jetbrains")
+        with ide, clip, unittest.mock.patch.object(roost, "plugin_args", lambda: []):
+            ui.dispatch("ctrl+n", None)
+            ui.dispatch("s", None)
+            ui.asking["text"] = str(folder)
+            self.assertIsNone(ui.dispatch("enter", None))
+        self.assertEqual((self.copied, ui.msg), ([f"cd '{os.path.realpath(folder)}' && claude"], self.JETBRAINS_NOTE))
+
+    def test_in_an_ide_a_failed_copy_says_so_and_keeps_roost_running(self):
+        def broken(text):
+            raise OSError("pbcopy is missing")
+        ui = self.ui(term=None)
+        ui.sessions = [dict(session("Live"), attach="abcd1234")]
+        ide, clip = self.in_ide("vscode", clipboard=broken)
+        with ide, clip:
+            self.assertIsNone(self.open_here(ui))
+        self.assertTrue(ui.msg.startswith("Couldn't copy"), ui.msg)
+
+    def test_in_no_ide_open_here_hands_back_the_session_to_run_here(self):
+        ui = self.ui(term=None)
+        ui.sessions = [dict(session("Live"), attach="abcd1234")]
+        ide, clip = self.in_ide(None)
+        with ide, clip:
+            self.assertIs(self.open_here(ui), ui.sessions[0])
+        self.assertEqual(self.copied, [])
+
     def test_no_plugin_means_no_start(self):
         (roost.PLUGIN / ".claude-plugin" / "plugin.json").unlink()
         with self.assertRaises(ValueError):
