@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.10.25
 
 - **IDE terminals:** in IntelliJ (and the other JetBrains IDEs), VS Code, or Cursor, with no `terminal` in config.json, Open and Start copy the command that runs the Session (`cd <folder> && claude …`) instead of replacing roost in that tab, and say how to open a new tab to paste it in
 
