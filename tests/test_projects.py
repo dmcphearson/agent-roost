@@ -1096,5 +1096,176 @@ class SubProjects(unittest.TestCase):
                 self.assertNotIn("rollout/beta", out)
 
 
+class SubProjectRows(unittest.TestCase):
+    """Sub-projects on the Projects tab: rows under their project, folded until opened, with a panel,
+    actions, a New sub-project flow, and search."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    shown = Projects.shown
+
+    def ui(self):
+        ui = Projects.ui(self)
+        ui.term = "ghostty"
+        return ui
+
+    def fixture(self):
+        """Project rollout (worked on today) with open alpha and beta, and done gamma; project other with none."""
+        self.project("rollout", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n",
+                     handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-bbbbbbbb.md"])
+        self.sub("rollout", "beta", "bugfix", "blocked", "Toner alerts.")
+        self.sub("rollout", "alpha", "feature", "active", "Badge printers.")
+        self.sub("rollout", "gamma", "research", "done", "Old survey.")
+        ui = self.ui()
+        return ui
+
+    def select(self, ui, kind, rid):
+        rows = ui.project_rows()
+        at = [i for i, r in enumerate(rows) if r.kind == kind and r.item["id"] == rid]
+        self.assertTrue(at, f"no {kind} row {rid} in {self.shown(ui)}")
+        ui.psel = at[0]
+        return rows
+
+    def after(self, ui, rid):
+        """The (kind, id) rows right after project rid, up to the next project, header, or + New project."""
+        rows = self.shown(ui)
+        at = rows.index(("project", rid))
+        out = []
+        for kind, i in rows[at + 1:]:
+            if kind in ("project", "head", "new"):
+                break
+            out.append((kind, i))
+        return out
+
+    def capture_start(self):
+        """Patch terminals.start_session; returns the list of the args each call got."""
+        import unittest.mock
+        calls = []
+        patcher = unittest.mock.patch.object(importlib.import_module("roost.core.terminals"), "start_session",
+                                             lambda *a, **kw: calls.append(a) or "Started it")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def test_sub_projects_are_folded_until_right_and_left_folds_them_again(self):
+        ui = self.fixture()
+        self.assertEqual(self.after(ui, "rollout"), [])  # folded by default
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        self.assertEqual(self.after(ui, "rollout"), [("sub", "rollout/alpha"), ("sub", "rollout/beta")])  # slug order, no done one
+        sub_rows = [r for r in ui.project_rows() if r.kind == "sub"]
+        self.assertEqual([(r.item["slug"], r.item["type"]) for r in sub_rows], [("alpha", "feature"), ("beta", "bugfix")])
+        ui.keys_projects("left", ui.project_rows())  # on the project
+        self.assertEqual(self.after(ui, "rollout"), [])
+        self.assertEqual(ui.project_rows()[ui.psel].item["id"], "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        self.select(ui, "sub", "rollout/beta")
+        ui.keys_projects("left", ui.project_rows())  # on one of its sub rows
+        self.assertEqual(self.after(ui, "rollout"), [])
+        r = ui.project_rows()[ui.psel]
+        self.assertEqual((r.kind, r.item["id"]), ("project", "rollout"))
+
+    def test_a_projects_panel_counts_its_open_sub_projects(self):
+        ui = self.fixture()
+        rows = self.select(ui, "project", "rollout")
+        _, fields = ui.project_panel(rows, 40, 120)
+        subs = [str(v) for label, v in fields if label == "Sub-projects"]
+        self.assertEqual(len(subs), 1, fields)
+        self.assertIn("2 open", subs[0])
+        rows = self.select(ui, "project", "other")
+        _, fields = ui.project_panel(rows, 40, 120)
+        self.assertNotIn("Sub-projects", [label for label, _ in fields])
+
+    def test_a_sub_rows_panel_names_its_id_type_and_status(self):
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        rows = self.select(ui, "sub", "rollout/beta")
+        name, fields = ui.project_panel(rows, 40, 120)
+        self.assertEqual(name, "rollout/beta")
+        got = {label: str(v) for label, v in fields}
+        self.assertIn("bugfix", got.get("Type", ""), fields)
+        self.assertIn("blocked", got.get("Status", ""), fields)
+
+    def test_a_sub_rows_actions_start_a_session_in_it(self):
+        calls = self.capture_start()
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        rows = self.select(ui, "sub", "rollout/alpha")
+        acts = labels(ui, ui.keys_projects, rows)
+        for want in ("Start a Session", "Show its folder in Finder", "New sub-project…"):
+            self.assertTrue([l for l in acts if l.startswith(want)], (want, acts))
+        act(ui, ui.keys_projects, ui.project_rows(), "Start a Session")
+        self.assertEqual([c[0] for c in calls], ["rollout/alpha"])
+
+    def test_a_projects_actions_offer_new_sub_project_and_start_one_in_a_sub_project(self):
+        calls = self.capture_start()
+        ui = self.fixture()
+        rows = self.select(ui, "project", "other")
+        acts = labels(ui, ui.keys_projects, rows)
+        self.assertIn("New sub-project…", acts)
+        self.assertFalse([l for l in acts if l.startswith("Start a Session in a sub-project")], acts)  # none open
+        rows = self.select(ui, "project", "rollout")
+        acts = labels(ui, ui.keys_projects, rows)
+        self.assertIn("New sub-project…", acts)
+        self.assertIn("Start a Session in a sub-project…", acts)
+        act(ui, ui.keys_projects, rows, "Start a Session in a sub-project")
+        opts = [l for l, _ in ui.choice_options()]
+        for slug in ("alpha", "beta"):
+            self.assertEqual(len([l for l in opts if slug in l]), 1, (slug, opts))
+        self.assertFalse([l for l in opts if "gamma" in l], opts)  # done: not offered
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "beta" in l)
+        ui.keys_choice("enter")
+        self.assertEqual([c[0] for c in calls], ["rollout/beta"])
+
+    def test_new_sub_project_picks_a_type_then_asks_its_slug_and_summary(self):
+        ui = self.fixture()
+        self.assertIn("New sub-project…", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "New sub-project")
+        self.assertIsNotNone(ui.choosing)
+        opts = [l for l, _ in ui.choice_options()]
+        self.assertEqual(len(opts), 4, opts)
+        for kind in roost.SUB_TYPES:
+            self.assertEqual(len([l for l in opts if kind in l]), 1, (kind, opts))
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "chore" in l)
+        ui.keys_choice("enter")
+        self.assertIsNone(ui.choosing)
+        self.assertIsNotNone(ui.asking)  # its slug
+        typed(ui, "\x15tidy-cables\n")
+        self.assertIsNotNone(ui.asking)  # its summary
+        typed(ui, "\x15Tidy the cables.\n")
+        self.assertIsNone(ui.asking)
+        readme = self.root / "rollout" / "sub" / "tidy-cables" / "README.md"
+        self.assertTrue(readme.is_file())
+        meta = roost.frontmatter(readme.read_text())
+        self.assertEqual((meta.get("type"), meta.get("summary")), ("chore", "Tidy the cables."))
+        self.assertTrue(ui.msg.startswith("Created"), ui.msg)
+        self.assertIn(("sub", "rollout/tidy-cables"), self.after(ui, "rollout"))  # its parent is unfolded
+        r = ui.project_rows()[ui.psel]
+        self.assertEqual((r.kind, r.item["id"]), ("sub", "rollout/tidy-cables"))
+
+    def test_new_sub_project_with_a_bad_slug_creates_nothing(self):
+        ui = self.fixture()
+        before = sorted(p.name for p in (self.root / "rollout" / "sub").iterdir())
+        self.assertIn("New sub-project…", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "New sub-project")
+        opts = [l for l, _ in ui.choice_options()]
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "feature" in l)
+        ui.keys_choice("enter")
+        typed(ui, "\x15Bad Slug\n")
+        if ui.asking:  # refused at the slug or after the summary: either way, nothing is made
+            typed(ui, "\x15A summary.\n")
+        self.assertEqual(sorted(p.name for p in (self.root / "rollout" / "sub").iterdir()), before)
+        self.assertTrue(ui.msg.startswith("Couldn't create it"), ui.msg)
+
+    def test_search_shows_a_matching_sub_project_under_its_parent(self):
+        ui = self.fixture()
+        ui.notes = []
+        for q, want in [("alpha", "rollout/alpha"), ("TONER", "rollout/beta"), ("type:bugfix", "rollout/beta")]:
+            ui.pquery = q
+            rows = [x for x in self.shown(ui) if x[0] != "head"]
+            self.assertEqual(rows, [("project", "rollout"), ("sub", want)], q)
+
+
 if __name__ == "__main__":
     unittest.main()
