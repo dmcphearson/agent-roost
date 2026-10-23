@@ -92,7 +92,8 @@ class SessionsTab:
             p = self.project_of(x)
             x["proj"] = projectdata.label_of(p) if p else ""
             ids = set(x.get("ids") or [x["id"]])
-            x["projids"] = [q["id"] for q in self.projects or [] if ids & set(q["sessions"])]  # what project:<id> matches
+            # what project:<id> matches: the project or sub-project that lists it, and a sub-project's parent
+            x["projids"] = [i for q in self.all_projects() if ids & set(q["sessions"]) for i in (q["id"], q.get("parent")) if i]
             x["dismissed"] = x["id"] in dismissed and x["state"] == "closed"
         self.wrapping = self.summarizing()  # the Wrapping up section, fixed for this draw
         rows = self.srows = visible(self.sessions, self.view, self.query, self.sort, self.wrapping)
@@ -325,9 +326,9 @@ class SessionsTab:
     ]
 
     def project_of(self, s):
-        """The project that lists a Session, or None."""
+        """The project or sub-project that lists a Session, or None."""
         ids = set(s.get("ids") or [s["id"]])
-        return next((p for p in self.projects or [] if ids & set(p["sessions"])), None)
+        return next((p for p in self.all_projects() if ids & set(p["sessions"])), None)
 
     def resume_refused(self, s):
         """Roost never resumes project work (claude --resume): a closed Session a project lists is
@@ -380,7 +381,7 @@ class SessionsTab:
             acts.append(("Make it a project… (its recap's Handoffs move in)", lambda: self.new_project(recap)))
         elif not proj:
             acts.append(("New project from this Session…", lambda: self.new_project_from(s)))
-        others = [p for p in self.projects or [] if not p["closed"] and p is not proj]
+        others = [p for p in self.all_projects() if not p["closed"] and p is not proj]
         if others:
             acts.append(("Move to another project…" if proj else "Add to a project…", lambda: self.add_to_project(s)))
         if not in_window:
@@ -472,7 +473,7 @@ class SessionsTab:
 
     def add_to_project(self, s):
         cur = self.project_of(s)
-        ps = [p for p in self.projects or [] if not p["closed"] and p is not cur]
+        ps = [p for p in self.all_projects() if not p["closed"] and p is not cur]
         self.choose(f"{'Move' if cur else 'Add'} {clip(s['name'], 40)} to a project",
                     [(projectdata.label_of(p), p) for p in ps], lambda p: self.link(s, p), filtering=True)
         return None

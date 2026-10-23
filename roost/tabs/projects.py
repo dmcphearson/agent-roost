@@ -274,7 +274,7 @@ class ProjectsTab:
 
     def row_height(self, r):
         """Lines a Projects row takes: two for a project with both running and unwrapped Sessions."""
-        return len(self.sessions_cell(r.item)) if r.kind == "project" else 1
+        return len(self.sessions_cell(r.item)) if r.kind in ("project", "sub") else 1
 
     def project_widths(self, rows, w):
         """Column widths for a window w wide: NAME aims for its longest name + 2 (16 to 48); SESSIONS,
@@ -282,8 +282,8 @@ class ProjectsTab:
         all fit, LAST WORKED gives way first, then SESSIONS, TAGS, CATEGORY, and STATUS; NAME, last.
         Spare width goes to NAME up to its longest name + 2, then to CATEGORY and TAGS until their
         longest values show whole, and what's left is spread evenly over every column, leftmost first."""
-        projects = [r.item for r in rows if r.kind == "project"]
-        names = [len(label_of(p)) for p in projects]
+        projects = [r.item for r in rows if r.kind in ("project", "sub")]
+        names = [len(label_of(r.item)) if r.kind == "project" else len(r.item["slug"]) + 2 for r in rows if r.kind in ("project", "sub")]
         widths = {"NAME": max(16, min(48, max(names, default=0) + 2)),
                   "STATUS": max([len("STATUS")] + [len(self.row_status(r, 0)[0]) for r in rows if r.kind not in ("head", "new")]) + 2,
                   "SESSIONS": 12, "CATEGORY": 14, "TAGS": 14, "LAST WORKED": 12}
@@ -304,7 +304,7 @@ class ProjectsTab:
             widths["NAME"] += max(give, 0)
             spare -= max(give, 0)
             # a cell is clipped to its width - 1, so a value shows whole in its length + 1
-            need_c = max(max([len(p.get("category") or "") for p in projects], default=0) + 1 - widths["CATEGORY"], 0)
+            need_c = max(max([len(p.get("category") or p.get("type") or "") for p in projects], default=0) + 1 - widths["CATEGORY"], 0)
             need_t = max(max([len(", ".join(p.get("tags") or [])) for p in projects], default=0) + 1 - widths["TAGS"], 0)
             give_c = min(need_c, (spare + 1) // 2)  # an odd split's extra column goes to CATEGORY
             give_t = min(need_t, spare - give_c)
@@ -328,17 +328,26 @@ class ProjectsTab:
         it, then (unless the section is folded) its projects. Closed comes last, folded until opened,
         then + New project. Sessions are on the Sessions tab (a project's Show its Sessions filters it),
         and Session recaps on the Notes tab.
-        A search (/) keeps the rows whose name, summary, tags, or folder holds it, unfolded."""
+        A project's open sub-projects follow it once → opens it.
+        A search (/) keeps the rows whose name, summary, tags, or folder holds it, unfolded; a sub-project
+        that matches (or whose type does, type:bugfix) shows under its project. """
         ps, cutoff = self.projects or [], time.time() - RECENT_PROJECT_DAYS * 86400
         q = self.pquery.lower()
 
         def hit(kind, x):
             if not q:
                 return True
+            if q.startswith("type:"):
+                return kind == "sub" and x.get("type", "").lower() == q[5:].strip()
             fields = [x.get("name"), x.get("id"), x.get("label"), x.get("summary"), x.get("category"), " ".join(x.get("tags") or []), x.get("cwd")]
             return any(q in (f or "").lower() for f in fields)
 
-        ps = [p for p in ps if hit("project", p)]
+        def subs(p):
+            """The sub-project rows that follow p: the open ones when it's opened, or the matches in a search."""
+            open_ = [s for s in p.get("subs") or [] if not s["closed"]]
+            return [s for s in open_ if hit("sub", s)] if q else open_ if p["id"] in self.subs_open else []
+
+        ps = [p for p in ps if hit("project", p) or (q and subs(p))]
         sections = [  # one list: Closed comes last, folded until opened
             ("Recent", [("project", p) for p in ps if not p["closed"] and (p["last"] or 0) >= cutoff]),
             ("Inactive", [("project", p) for p in ps if not p["closed"] and (p["last"] or 0) < cutoff]),
@@ -353,6 +362,7 @@ class ProjectsTab:
                 continue
             for kind, item in items:
                 rows.append(Row(sec, kind, item, 0))
+                rows += [Row(sec, "sub", s, 0) for s in subs(item)]
         if not q:
             rows.append(Row("New", "new", {"id": "+ New project"}, 0))
         return rows
@@ -368,6 +378,8 @@ class ProjectsTab:
                 took = self.progress(job).split(" · ")[1]
                 text = f"planning {took}" if job["adopt"] == "plan" else f"Handoffs {self.progress(job)}"
                 return self.mark("opening", text)
+            return r.item.get("status") or "—", dim
+        if r.kind == "sub":
             return r.item.get("status") or "—", dim
         return "recap", self.DIM
 
@@ -424,8 +436,17 @@ class ProjectsTab:
                       ("Folder", short(item["path"]) + f"   Id  {item['id']}")]
             if not item.get("adopted", True) and not item["closed"]:
                 fields.append(("Shape", "not adopted yet (no handoffs/): Adopt it, in its actions (enter), plans its README and files, then its Handoffs"))
+            n_subs = sum(not s["closed"] for s in item.get("subs") or [])
+            if n_subs:
+                fields.append(("Sub-projects", f"{n_subs} open · " + ("← hides them" if item["id"] in self.subs_open else "→ shows them")))
             for folder, days in item.get("archives") or []:
                 fields.append(("Archive", f"_archive/{folder} is {days} days old, from roost adopt: its actions (enter) can move it to the Trash"))
+        elif r.kind == "sub":
+            n = len(item["sessions"])
+            last = short_when(item["last"]) if item["last"] else "never (no Sessions or Handoffs yet)"
+            fields = [("Type", item["type"] or "none"),
+                      ("Status", f"{item['status'] or 'none set'}   Last worked  {last}   Sessions  {n}"),
+                      ("Folder", short(item["path"]))]
         elif r.kind == "session":
             text, _ = self.status_cell(item)
             fields = [("Status", f"{text}   Last active  {short_when(item['last'])}   Session  {item['id'][:8]}"
@@ -468,7 +489,8 @@ class ProjectsTab:
 
     PROJECTS_HELP = [
         ("Sections", f"Recent (active in {RECENT_PROJECT_DAYS} days), Inactive, then Closed, folded until opened"),
-        ("Open", "→ opens a section, ← closes it · enter or a click on a header does too"),
+        ("Open", "→ opens a section, or a project's sub-projects (▸), ← closes it · enter or a click on a header opens a section too"),
+        ("Sub-projects", "pieces of a project's work (feature, bugfix, research, chore), each with its own README and Handoffs; New sub-project… is in a project's actions"),
         ("Columns", "SESSIONS counts the project's running Sessions (◆ need input · ● working · ○ idle), and under them its unwrapped ones: closed, no Handoff covers them, not dismissed · LAST WORKED is a time today, else a date"),
         ("Sessions", "listed on the Sessions tab only: a project's Show its Sessions opens it on just that project's, searching project:<its id>"),
         ("Lists", "your projects (roost setup picks the folder); Sessions no project lists are on the Sessions tab, recaps on Notes"),
@@ -478,6 +500,11 @@ class ProjectsTab:
     def projects_typing(self):
         return bool(self.confirm)
 
+    @property
+    def subs_open(self):
+        """The ids of the projects whose sub-projects show under them: none until → opens one."""
+        return self.__dict__.setdefault("_subs_open", set())
+
     def toggle(self, r, open_=None):
         """Open or close a section header; open_ None flips it."""
         if r.kind == "head":
@@ -485,8 +512,16 @@ class ProjectsTab:
             (self.folded.discard if shut else self.folded.add)(r.sec)
 
     def open_or_close(self, rows, open_):
-        """→ opens the selected section, ← closes it. A project doesn't open: its Sessions are on the Sessions tab."""
-        self.toggle(rows[self.psel], open_)
+        """→ opens the selected section or project's sub-projects, ← closes it; ← on a sub-project closes
+        its project's and selects the project. A project's Sessions are on the Sessions tab."""
+        r = rows[self.psel]
+        if r.kind == "project" and any(not s["closed"] for s in r.item.get("subs") or []):
+            (self.subs_open.add if open_ else self.subs_open.discard)(r.item["id"])
+        elif r.kind == "sub" and not open_:
+            self.subs_open.discard(r.item["parent"])
+            self.select_key(("project", str(Path(r.item["path"]).parent.parent), r.sec))
+        else:
+            self.toggle(r, open_)
 
     def start_folders(self, p):
         """Where a Session for p can start: the project folder, then the folders its Sessions worked in
@@ -528,6 +563,8 @@ class ProjectsTab:
         if not p["closed"]:
             acts.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
                          lambda: self.start_for(p)))
+        if any(not s["closed"] for s in p.get("subs") or []):
+            acts.append(("Start a Session in a sub-project…", lambda: self.start_in_sub(p)))
         if self.linked(p):
             acts.append(("Show its Sessions", lambda: self.show_sessions(p)))
         if p["readme"] and not p["closed"] and not p.get("adopted", True):  # a demo project counts as adopted
@@ -542,8 +579,73 @@ class ProjectsTab:
             path = str(Path(p["path"]) / "_archive" / name)
             acts.append((f"Move _archive/{name} to the Trash…",
                          lambda path=path, name=name: self.ask_confirm("archive", {"name": f"{p['id']}/_archive/{name}", "path": path})))
+        if Path(p["path"]).is_dir():  # a real folder (the demo's aren't)
+            acts.append(("New sub-project…", lambda: self.new_subproject(p)))
         acts.append(("New project…", self.new_project))
         return acts
+
+    def sub_actions(self, s):
+        """What can be done with a sub-project: a project's actions that fit one."""
+        parent = next((p for p in self.projects or [] if p["id"] == s["parent"]), None)
+        acts = []
+        if not s["closed"]:
+            acts.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
+                         lambda: self.start_for(s)))
+        if self.linked(s):
+            acts.append(("Show its Sessions", lambda: self.show_sessions(s)))
+        acts.append(("Edit its tags…", lambda: self.edit_tags(s)))
+        acts.append(("Show its folder in Finder", lambda: self.show_in_finder(s["path"])))
+        if parent:
+            acts.append(("New sub-project…", lambda: self.new_subproject(parent)))
+        return acts
+
+    def start_in_sub(self, p):
+        """Pick one of p's open sub-projects and start a Session in it."""
+        subs = [s for s in p.get("subs") or [] if not s["closed"]]
+        w = max(len(s["slug"]) for s in subs) + 2
+        self.choose(f"Start a Session in a sub-project of {clip(label_of(p), 30)}",
+                    [(f"{s['slug'].ljust(w)}{s['type']}: {clip(plain_text(s['summary']), 50)}", s) for s in subs],
+                    self.start_for)
+        return None
+
+    def new_subproject(self, p):
+        """Make a sub-project of p: its type, then its slug (its folder's name in sub/), then a one-sentence
+        summary. It shows under p, opened, and is selected."""
+        name = clip(label_of(p), 30)
+
+        def made(kind, slug_, text):
+            try:
+                folder = projectdata.create_subproject(f"{p['id']}/{slug_}", kind, text)
+            except (ValueError, OSError) as e:
+                self.msg = f"Couldn't create it: {e}"
+                return None
+            self.msg = f"Created {short(str(folder))}"
+            self.load_projects()
+            self.subs_open.add(p["id"])
+            for sec in [None] + sorted(self.folded):  # its project's section may be folded
+                if sec:
+                    self.folded.discard(sec)
+                at = next((i for i, r in enumerate(self.project_rows()) if r.kind == "sub" and r.item["path"] == str(folder)), None)
+                if at is not None:
+                    self.psel = at
+                    break
+            return None
+
+        def got_slug(kind, text):
+            slug_ = text.strip()
+            if not projectdata.SLUG.fullmatch(slug_):
+                self.msg = "Couldn't create it: a sub-project's slug is lowercase letters, digits, and hyphens, like badge-printers"
+                return None
+            self.ask("", "", lambda summary: made(kind, slug_, summary), "create", title=f"{slug_}: a one-sentence summary")
+            return None
+
+        def got_type(kind):
+            self.ask("", "", lambda text: got_slug(kind, text), "next",
+                     title=f"New {kind} in {name}: its slug (lowercase, like badge-printers)")
+            return None
+
+        self.choose(f"New sub-project of {name}: its type", [(t, t) for t in projectdata.SUB_TYPES], got_type)
+        return None
 
     def recap_of(self, s):
         """The Session recap s wrote, if any: /wrap-up writes one when no project lists the Session."""
@@ -553,6 +655,8 @@ class ProjectsTab:
     def row_actions(self, r):
         if r.kind == "project":
             return self.project_actions(r.item)
+        if r.kind == "sub":
+            return self.sub_actions(r.item)
         return self.session_actions(r.item)
 
     def tags_in_use(self):
@@ -717,23 +821,26 @@ if Region:
                     continue
                 dim = ui.DIM if r.sec == "Closed" else 0
                 if r.kind == "project":
-                    name = "  " + label_of(r.item)
+                    has = any(not s["closed"] for s in r.item.get("subs") or [])
+                    name = ("▾ " if r.item["id"] in ui.subs_open else "▸ " if has else "  ") + label_of(r.item)
+                elif r.kind == "sub":
+                    name = "    " + r.item["slug"]
                 else:
                     name = "  " + (r.item["name"] if r.kind == "session" else r.item["id"])
                 row.put(3, clip(name, name_w), look((curses.A_BOLD if r.sec == "Recent" and r.kind == "project" else 0) | dim))
                 cx = 5 + name_w
                 text, attr = ui.row_status(r, dim)
                 row.put(cx, clip(text, status_w - 1), look(attr)); cx += status_w
-                if r.kind == "project" and cols["SESSIONS"]:
+                if r.kind in ("project", "sub") and cols["SESSIONS"]:
                     sx, end = cx, cx + cols["SESSIONS"] - 1
                     for part, key in ui.sessions_cell(r.item)[0]:
                         part = clip(part, end - sx)
                         row.put(sx, part, look(ui.status[key] if key else ui.DIM | dim))
                         sx += len(part) + 1
                 cx += cols["SESSIONS"]
-                if r.kind == "project":
+                if r.kind in ("project", "sub"):  # a sub-project's type stands in its CATEGORY
                     if cols["CATEGORY"]:
-                        row.put(cx, clip(r.item.get("category") or "", cols["CATEGORY"] - 1), look(ui.DIM | dim))
+                        row.put(cx, clip(r.item.get("category") or r.item.get("type") or "", cols["CATEGORY"] - 1), look(ui.DIM | dim))
                     if cols["TAGS"]:
                         row.put(cx + cols["CATEGORY"], clip(", ".join(r.item.get("tags") or []), cols["TAGS"] - 1), look(ui.DIM | dim))
                 cx += cols["CATEGORY"] + cols["TAGS"]

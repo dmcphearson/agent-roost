@@ -259,8 +259,8 @@ def read_subprojects(folder, sessions=()):
     for f in sorted(root.iterdir()):
         if f.is_dir() and not f.name.startswith(("_", ".")):
             s = read_project(f, sessions)
-            s.update(id=f"{Path(folder).name}/{f.name}", slug=f.name, parent=Path(folder).name,
-                     closed=s["status"].lower() in SUB_DONE)
+            s.update(id=f"{Path(folder).name}/{f.name}", label=f"{Path(folder).name}/{f.name}", slug=f.name,
+                     parent=Path(folder).name, closed=s["status"].lower() in SUB_DONE)
             out.append(s)
     return out
 
@@ -269,7 +269,7 @@ def read_all(sessions=()):
     """Every project, each followed by its sub-projects: what a Session can be listed in."""
     out = []
     for p in read_projects(sessions) or []:
-        out += [p] + read_subprojects(p["path"], sessions)
+        out += [p] + p["subs"]
     return out
 
 
@@ -279,7 +279,7 @@ def read_projects(sessions=()):
     root = config.projects_dir()
     if not root.is_dir():
         return None
-    out = [read_project(p, sessions) for p in root.iterdir()
+    out = [dict(read_project(p, sessions), subs=read_subprojects(p, sessions)) for p in root.iterdir()
            if p.is_dir() and not p.name.startswith(("_", "."))]
     out.sort(key=lambda p: p["id"], reverse=True)  # dated names: newest first among never-worked
     out.sort(key=lambda p: p["last"] or 0, reverse=True)

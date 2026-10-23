@@ -500,6 +500,10 @@ class Shell:
         handler returns; esc cancels."""
         self.asking = {"prompt": prompt, "text": text, "done": done, "verb": verb, "title": title}
 
+    def all_projects(self):
+        """Every project, each followed by its sub-projects: what a Session can belong to."""
+        return [x for p in self.projects or [] for x in [p] + (p.get("subs") or [])]
+
     def ask_project(self, label, summary, made, what="New project"):
         """A new project, in three prompts: its name as people read it (the README's heading), its
         folder (made from the name, editable), then a one-sentence summary. made(pid, label, summary)
