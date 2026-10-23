@@ -903,5 +903,198 @@ class ProjectRows(unittest.TestCase):
         self.assertTrue(last_title.endswith("…") and "LAST WORKED".startswith(last_title[:-1]), last_title)  # 10 of 12: cut
 
 
+
+class SubProjects(unittest.TestCase):
+    """Sub-projects: <project>/sub/<slug>/ with its own README and handoffs/, id <project>/<slug>."""
+    def setUp(self):
+        Projects.setUp(self)
+        self.saved_transcripts = roost.PROJECTS
+        roost.PROJECTS = Path(self.tmp.name) / "transcripts"  # session_name() reads here, never the real ones
+
+    def tearDown(self):
+        roost.PROJECTS = self.saved_transcripts
+        Projects.tearDown(self)
+
+    project = Projects.project
+
+    def sub(self, parent, slug, type="feature", status="active", summary="s", sessions=(), body="", handoffs=()):
+        """A sub-project folder made by hand, in the shape roost project new writes."""
+        folder = self.root / parent / "sub" / slug
+        (folder / "handoffs").mkdir(parents=True)
+        listed = "".join(f"\n  - name: {n}\n    id: {i}" for n, i in sessions) or " []"
+        (folder / "README.md").write_text(f"---\nsummary: {json.dumps(summary)}\ntype: {type}\nstatus: {status}\n"
+                                          f"sessions:{listed}\n---\n\n# {slug}\n\n{body}\n")
+        for name, text in handoffs:
+            (folder / "handoffs" / name).write_text(text)
+        return folder
+
+    def run_cli(self, argv):
+        """(exit code, stdout, stderr) of roost project <argv>; an argparse refusal counts as its exit code."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = roost.run_command("project", argv)
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def tree(self):
+        base = Path(self.tmp.name)
+        return {p: (p.read_bytes() if p.is_file() else None) for p in base.rglob("*") if p.name != "config.json"}
+
+    # roost project new <project>/<slug>
+
+    def test_new_sub_project_writes_its_readme_and_handoffs(self):
+        self.project("rollout")
+        for slug, kind in [("alpha", "feature"), ("fix-1", "bugfix"), ("2nd-look", "research"), ("tidy", "chore")]:
+            code, _, err = self.run_cli(["new", f"rollout/{slug}", "--type", kind, "--summary", f"The {slug}  work."])
+            self.assertEqual(code, 0, err)
+            folder = self.root / "rollout" / "sub" / slug
+            self.assertTrue((folder / "handoffs").is_dir(), slug)
+            meta = roost.frontmatter((folder / "README.md").read_text())
+            self.assertEqual({k: meta.get(k) for k in ("summary", "type", "status", "sessions")},
+                             {"summary": f"The {slug} work.", "type": kind, "status": "active", "sessions": []})
+        self.assertFalse((self.root / "rollout" / "alpha").exists())  # under sub/, not beside it
+
+    def test_new_sub_project_refuses_and_creates_nothing(self):
+        self.project("rollout")
+        self.assertEqual(self.run_cli(["new", "rollout/alpha", "--type", "feature", "--summary", "First."])[0], 0)
+        refused = [
+            (["new", "rollout/beta", "--type", "epic", "--summary", "s"], "unknown type"),
+            (["new", "rollout/beta", "--summary", "s"], "no --type for a sub-project"),
+            (["new", "toplevel", "--type", "feature", "--summary", "s"], "--type for a top-level project"),
+            (["new", "nope/beta", "--type", "feature", "--summary", "s"], "parent doesn't exist"),
+            (["new", "rollout/Beta", "--type", "feature", "--summary", "s"], "uppercase slug"),
+            (["new", "rollout/-beta", "--type", "feature", "--summary", "s"], "slug starting with a hyphen"),
+            (["new", "rollout/be_ta", "--type", "feature", "--summary", "s"], "underscore in slug"),
+            (["new", "rollout/be.ta", "--type", "feature", "--summary", "s"], "dot in slug"),
+            (["new", "rollout/alpha/deeper", "--type", "feature", "--summary", "s"], "sub-project of a sub-project"),
+            (["new", "../beta", "--type", "feature", "--summary", "s"], ".. as the project"),
+            (["new", "rollout/..", "--type", "feature", "--summary", "s"], ".. as the slug"),
+            (["new", "rollout/../beta", "--type", "feature", "--summary", "s"], ".. in the middle"),
+            (["new", "rollout/alpha", "--type", "bugfix", "--summary", "Again."], "already exists"),
+        ]
+        before = self.tree()
+        for argv, why in refused:
+            code, _, err = self.run_cli(argv)
+            self.assertNotIn(code, (0, None), why)
+            self.assertTrue(err.strip(), why)
+            self.assertEqual(self.tree(), before, why)
+        self.assertEqual(roost.frontmatter((self.root / "rollout" / "sub" / "alpha" / "README.md").read_text())["summary"],
+                         "First.")
+
+    def test_a_top_level_project_new_still_needs_no_type(self):
+        self.project("rollout")
+        self.assertEqual(self.run_cli(["new", "rollout/alpha", "--type", "chore", "--summary", "Sub."])[0], 0)
+        code, _, err = self.run_cli(["new", "plain", "--summary", "Top."])
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("type", roost.frontmatter((self.root / "plain" / "README.md").read_text()))
+
+    # finding and reading them
+
+    def test_find_project_finds_a_sub_project_by_its_id(self):
+        self.project("rollout")
+        folder = self.sub("rollout", "alpha")
+        self.assertEqual(roost.find_project("rollout/alpha"), folder)
+        for bad in ["rollout/nope", "rollout/../rollout", "rollout/..", "../rollout/alpha", "rollout/alpha/x", "rollout/sub/alpha"]:
+            with self.assertRaises(ValueError, msg=bad):
+                roost.find_project(bad)
+
+    def test_read_subprojects_lists_each_sub_project_folder(self):
+        parent = self.project("rollout")
+        a = self.sub("rollout", "alpha", "feature", "active", "Badge printers.", [("One", "cc3d0000-1111")])
+        b = self.sub("rollout", "beta", "bugfix", "done", "Toner alerts.")
+        (parent / "sub" / "_draft").mkdir()
+        (parent / "sub" / ".hidden").mkdir()
+        subs = {s["id"]: s for s in roost.read_subprojects(parent)}
+        self.assertEqual(set(subs), {"rollout/alpha", "rollout/beta"})
+        want = {"rollout/alpha": ("alpha", "feature", "active", "Badge printers.", a, ["cc3d0000-1111"]),
+                "rollout/beta": ("beta", "bugfix", "done", "Toner alerts.", b, [])}
+        for sid, (slug, kind, status, summary, folder, sessions) in want.items():
+            s = subs[sid]
+            self.assertEqual((s["slug"], s["type"], s["status"], s["summary"], Path(s["path"]), s["sessions"], s["parent"]),
+                             (slug, kind, status, summary, folder, sessions, "rollout"))
+        self.assertEqual(roost.read_subprojects(self.project("bare")), [])
+
+    def test_sub_projects_never_appear_as_projects(self):
+        self.project("rollout")
+        self.sub("rollout", "alpha", sessions=[("One", "cc3d0000-1111")])
+        self.assertEqual([p["id"] for p in roost.read_projects()], ["rollout"])
+        self.assertNotIn("cc3d0000-1111", roost.read_projects()[0]["sessions"])
+
+    # roost project brief <project>/<slug>
+
+    def brief_fixture(self):
+        self.project("rollout", "---\nsummary: \"PARENTSUM wide rollout.\"\nstatus: active\nsessions: []\n---\n\n"
+                                "# Rollout\n\nPARENTBODY notes.\n")
+        (self.root / "rollout" / "handoffs" / "2026-10-05-0900-aaaaaaaa.md").write_text("PARENTHANDOFF text\n")
+        folder = self.sub("rollout", "alpha", "feature", "active", "SUBSUM badge printers.", body="SUBBODY notes.",
+                          handoffs=[("2026-10-06-0900-bbbbbbbb.md", "SUBHANDOFF text\n")])
+        self.sub("rollout", "beta", "bugfix", "blocked", "BETASUM toner alerts.")
+        self.sub("rollout", "gamma", "research", "done", "GAMMASUM old survey.")
+        return folder
+
+    def test_sub_project_brief_is_parent_then_sub_then_handoffs_then_open_siblings(self):
+        text = roost.brief(self.brief_fixture())
+        context = next((l for l in text.splitlines() if l.startswith("#") and "context" in l.lower() and "rollout" in l), None)
+        self.assertIsNotNone(context, "a heading naming rollout as the wider context")
+        order = [text.index(context), text.index("PARENTSUM"), text.index("PARENTBODY"), text.index("SUBSUM"),
+                 text.index("SUBBODY"), text.index("SUBHANDOFF"), text.index("BETASUM")]
+        self.assertEqual(order, sorted(order))
+        beta = next(l for l in text.splitlines() if "BETASUM" in l)
+        for part in ("beta", "bugfix", "blocked"):
+            self.assertIn(part, beta)
+        self.assertNotIn("PARENTHANDOFF", text)
+        self.assertNotIn("GAMMASUM", text)  # done siblings aren't listed
+        self.assertNotIn("SUBSUM", text[text.index("SUBHANDOFF"):])  # nor the sub-project itself
+
+    def test_sub_project_brief_command(self):
+        self.brief_fixture()
+        code, out, err = self.run_cli(["brief", "rollout/alpha"])
+        self.assertEqual(code, 0, err)
+        self.assertLess(out.index("PARENTSUM"), out.index("SUBSUM"))
+        self.assertLess(out.index("SUBHANDOFF"), out.index("BETASUM"))
+
+    def test_brief_session_lists_it_in_the_sub_project_and_off_the_parent(self):
+        parent = self.project("rollout")  # README lists aa1b9a71-0000 and bb2c0000-0000
+        folder = self.sub("rollout", "alpha")
+        code, _, err = self.run_cli(["brief", "rollout/alpha", "--session", "bb2c0000-0000"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual([x["id"] for x in roost.frontmatter((folder / "README.md").read_text())["sessions"]],
+                         ["bb2c0000-0000"])
+        self.assertEqual((parent / "README.md").read_text(), README.replace("  - name: Second look\n    id: bb2c0000-0000\n", ""))
+
+    # roost project status <project>/<slug>
+
+    def test_status_of_a_sub_project_sets_and_prints_only_its_own(self):
+        parent = self.project("rollout")
+        folder = self.sub("rollout", "alpha")
+        before = (parent / "README.md").read_text()
+        code, _, err = self.run_cli(["status", "rollout/alpha", "done"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.frontmatter((folder / "README.md").read_text())["status"], "done")
+        self.assertEqual((parent / "README.md").read_text(), before)
+        code, out, err = self.run_cli(["status", "rollout/alpha"])
+        self.assertEqual((code, out), (0, "done\n"), err)
+
+    # roost project list
+
+    def test_list_shows_open_sub_projects_indented_under_their_parent(self):
+        self.project("rollout")
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n")
+        self.sub("rollout", "alpha", "feature", "active", "Badge printers.")
+        self.sub("rollout", "beta", "bugfix", "done", "Toner alerts.")
+        for flags, subs in [([], ["rollout/alpha"]), (["--all"], ["rollout/alpha", "rollout/beta"])]:
+            code, out, err = self.run_cli(["list"] + flags)
+            self.assertEqual(code, 0, err)
+            lines = out.splitlines()
+            at = next(i for i, l in enumerate(lines) if l.startswith("rollout "))
+            after = lines[at + 1:at + 1 + len(subs)]
+            self.assertTrue(all(l[:1].isspace() for l in after), after)
+            self.assertEqual(sorted(next(s for s in subs if s in l) for l in after if any(s in l for s in subs)), subs)
+            if not flags:
+                self.assertNotIn("rollout/beta", out)
+
+
 if __name__ == "__main__":
     unittest.main()
