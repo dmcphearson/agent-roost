@@ -59,7 +59,7 @@ Clone this repo and run `./dev-link.sh`. It links `~/.local/bin/roost` and `~/.r
 | `roost --version` | Print the version |
 | `roost setup` | Check prerequisites, choose a terminal and the Projects folder, and install the plugin |
 | `roost update` | Install the latest release and bring the plugin along (Homebrew: `brew upgrade roost` first) |
-| `roost project new <id> --summary "…"` | Make a project folder and its README; `brief`, `list`, and `status` read and set the rest |
+| `roost project new <id> --summary "…"` | Make a project folder and its README (`<project>/<slug> --type <type>` makes a sub-project); `brief`, `list`, and `status` read and set the rest |
 | `roost note "title" [text]` | Save a note to the Notes tab, or pipe its text in |
 | `roost ledger <id>` | Print a project's timeline: every Handoff's facts, oldest first |
 | `roost handoff` | Write a Session's Handoff from a summary on stdin; `/roost:wrap-up` runs it |
@@ -101,6 +101,8 @@ The keys are the same on every tab. Everything you can do to a row is in its act
 **A project's actions:** Start a Session, Show its Sessions (the Sessions tab, on All, searching `project:<its id>`; esc clears it), Adopt it (a folder not yet in roost's layout: plans its README and files, you review the plan, then it writes its Handoffs), Set its category, Edit its tags, Rename (its folder; not while a Session runs in it), Show its folder in Finder, clear an old `_archive/` from roost adopt, and New project. **+ New project**, at the bottom of the list, makes one too.
 
 A project has one category (what kind of work it is), its README's `category:` line, and any number of tags (what it's about), its `tags: [a, b]` list. Set its category lists the categories in `CATEGORIES.md` in your Projects folder, one `- name: what it covers` line each, plus any other a project uses; a new one you type joins the list. Edit its tags ticks tags from every tag already in use, or adds a new one. Sessions are listed only on the Sessions tab. A project's SESSIONS column counts its running ones (◆ need input · ● working · ○ idle) and, on a line under them, its unwrapped ones: closed, with no Handoff covering their last message, and not dismissed. NAME gets the most room; in a wide window, spare room goes to NAME, then CATEGORY and TAGS until their values show whole, then evenly to every column; when the window is narrow, LAST WORKED gives way first, then SESSIONS, TAGS, CATEGORY, and STATUS. Dates in the lists and panels are a time today (2:17 PM) and a date otherwise, month or day first as your locale has it (10/14/26 or 14/10/26). A Session recap (what `/wrap-up` writes for a Session no project lists) shows in its Session's panel, and the Session's actions can read it or make it a project.
+
+**Sub-projects** split a project's work into pieces a Session can start on, finish, and close: a feature, a bugfix, research, or a chore. Each is a folder in the project's `sub/` with its own README and `handoffs/`, and its id is `<project>/<slug>`. Make one with `roost project new <project>/<slug> --type feature --summary "…"`. `/roost:pickup <project>/<slug>` reads the parent project's README first, so the Session keeps the project's goals in view, then the sub-project's README and newest Handoffs, then the project's other open sub-projects; it leaves out the parent's Handoffs. `/wrap-up` writes the Session's Handoff into the sub-project. `roost project list` shows open sub-projects under their project; status `done` hides one. The Projects tab doesn't show them yet.
 
 ### Notes
 

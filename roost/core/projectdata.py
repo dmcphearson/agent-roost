@@ -18,6 +18,13 @@ from roost.core import config
 CLOSED = ("closed",)             # status values that put a project behind the closed toggle
 BRIEF_HANDOFFS = 3               # how many of the newest Handoffs `roost project brief` prints
 
+# A sub-project is one piece of a project's work, in <project>/sub/<slug>/: the same shape as a
+# project, with a `type:` in its frontmatter. Its id is <project>/<slug>. They don't nest.
+SUB = "sub"
+SUB_TYPES = ("feature", "bugfix", "research", "chore")
+SUB_DONE = ("done",) + CLOSED    # status values that hide a sub-project
+SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
+
 
 def handoff_time(path):
     """When a Handoff was written, from its name: YYYY-MM-DD-HHMM-<session8>.md."""
@@ -68,7 +75,8 @@ def read_project(folder, sessions=()):
     status = meta.get("status") if isinstance(meta.get("status"), str) else ""
     category = meta.get("category").strip() if isinstance(meta.get("category"), str) else ""
     tags = tag_list(meta.get("tags"))
-    return {"id": folder.name, "label": heading(text) or folder.name, "path": str(folder), "summary": meta.get("summary") if isinstance(meta.get("summary"), str) else "",
+    kind = meta.get("type").strip() if isinstance(meta.get("type"), str) else ""
+    return {"id": folder.name, "type": kind, "label": heading(text) or folder.name, "path": str(folder), "summary": meta.get("summary") if isinstance(meta.get("summary"), str) else "",
             "status": status, "category": category, "tags": tags, "sessions": linked, "last": max(times) if times else None,
             "closed": status.lower() in CLOSED or (config.DONE / f"{folder.name}.md").exists(),
             "readme": (folder / "README.md").exists(), "archives": archives_due(folder),
@@ -222,13 +230,47 @@ def unlink_session(folder, sid):
 
 def assign_session(sid, name, folder):
     """List a Session in one project, taking it off any other project's list first: a Session belongs
-    to at most one project. Returns (whether it was added, the ids of projects it was moved from)."""
+    to at most one project or sub-project. Returns (whether it was added, the ids of projects it was moved from)."""
     moved = []
-    for p in (read_projects() or []) + read_recaps():
+    for p in read_all() + read_recaps():
         if Path(p["path"]) != Path(folder) and sid in p["sessions"]:
             unlink_session(p["path"], sid)
             moved.append(p["id"])
     return link_session(folder, sid, name), moved
+
+
+def is_subproject(folder):
+    folder = Path(folder)
+    return folder.parent.name == SUB and folder.parent.parent.parent == config.projects_dir()
+
+
+def project_id(folder):
+    """A project's id (its folder's name), or a sub-project's (<project>/<slug>)."""
+    folder = Path(folder)
+    return f"{folder.parent.parent.name}/{folder.name}" if is_subproject(folder) else folder.name
+
+
+def read_subprojects(folder, sessions=()):
+    """A project's sub-projects, each read like a project, plus its slug and parent; closed when done."""
+    root = Path(folder) / SUB
+    if not root.is_dir():
+        return []
+    out = []
+    for f in sorted(root.iterdir()):
+        if f.is_dir() and not f.name.startswith(("_", ".")):
+            s = read_project(f, sessions)
+            s.update(id=f"{Path(folder).name}/{f.name}", slug=f.name, parent=Path(folder).name,
+                     closed=s["status"].lower() in SUB_DONE)
+            out.append(s)
+    return out
+
+
+def read_all(sessions=()):
+    """Every project, each followed by its sub-projects: what a Session can be listed in."""
+    out = []
+    for p in read_projects(sessions) or []:
+        out += [p] + read_subprojects(p["path"], sessions)
+    return out
 
 
 def read_projects(sessions=()):
@@ -323,8 +365,9 @@ def move_recaps():
     return moved
 
 
-def readme(pid, summary, label=None):
-    return (f"---\nsummary: {json.dumps(summary, ensure_ascii=False)}\nstatus: active\nsessions: []\n---\n\n"
+def readme(pid, summary, label=None, kind=None):
+    return (f"---\nsummary: {json.dumps(summary, ensure_ascii=False)}\n" + (f"type: {kind}\n" if kind else "")
+            + "status: active\nsessions: []\n---\n\n"
             f"# {' '.join((label or '').split()) or pid}\n\n## Current state\n\n## Next\n\n## Key decisions\n\n## Files\n")
 
 
@@ -380,6 +423,30 @@ def create_project(pid, summary, label=None):
     return folder
 
 
+def create_subproject(pid, kind, summary):
+    """Make a sub-project <project>/<slug>: sub/<slug>/ in the project, with a README of the given type
+    and handoffs/. Returns its path; raises ValueError with a reason, before anything is made."""
+    parent, _, slug = pid.strip().partition("/")
+    summary = " ".join(summary.split())
+    if kind not in SUB_TYPES:
+        raise ValueError(f"a sub-project's --type is one of {', '.join(SUB_TYPES)}")
+    if "/" in slug:
+        raise ValueError("sub-projects don't nest: an id is <project>/<slug>")
+    if not SLUG.fullmatch(slug):
+        raise ValueError("a sub-project's slug is lowercase letters, digits, and hyphens, like badge-printers")
+    root = config.projects_dir()
+    if not parent or parent.startswith(("_", ".")) or not (root / parent).is_dir():
+        raise ValueError(f"there's no project {parent!r} (roost project list shows them)")
+    if not summary:
+        raise ValueError("give it a one-sentence summary")
+    folder = root / parent / SUB / slug
+    if folder.exists():
+        raise ValueError(f"{parent}/{slug} already exists")
+    (folder / "handoffs").mkdir(parents=True)
+    (folder / "README.md").write_text(readme(slug, summary, kind=kind))
+    return folder
+
+
 def worked(ts):
     """'Oct 7, 4:12 pm'"""
     d = datetime.fromtimestamp(ts)
@@ -388,7 +455,14 @@ def worked(ts):
 
 def project_new(args):
     try:
-        folder = create_project(args.id, args.summary)
+        if "/" in args.id:
+            if not args.type:
+                raise ValueError(f"a sub-project needs --type: {', '.join(SUB_TYPES)}")
+            folder = create_subproject(args.id, args.type, args.summary)
+        elif args.type:
+            raise ValueError("--type is for a sub-project (<project>/<slug>); a project has none")
+        else:
+            folder = create_project(args.id, args.summary)
     except ValueError as e:
         print(f"roost project new: {e}", file=sys.stderr)
         return 1
@@ -402,6 +476,11 @@ def find_project(pid):
     pid = pid.strip().rstrip("/")
     if pid.endswith(".md") and is_note(os.path.expanduser(pid)):  # a note, given its path
         return Path(os.path.expanduser(pid))
+    if pid.count("/") == 1:
+        parent, slug = pid.split("/")
+        folder = config.projects_dir() / parent / SUB / slug
+        if parent and not parent.startswith(("_", ".")) and SLUG.fullmatch(slug) and folder.is_dir():
+            return folder
     if pid and "/" not in pid and not pid.startswith(("_", ".")):
         if (config.projects_dir() / pid).is_dir():
             return config.projects_dir() / pid
@@ -419,8 +498,35 @@ def brief(target):
                 + f"\n\n{target.read_text(errors='replace').rstrip()}\n")
     if target.is_file():
         return f"# Session recap {target.stem}\nFile: {target}\n\n{target.read_text(errors='replace').rstrip()}\n"
+    if is_subproject(target):
+        return subproject_brief(target)
+    return "\n".join(project_lines(target, f"# Project {target.name}")) + "\n"
+
+
+def subproject_brief(target):
+    """A sub-project's brief: its parent's README first, as the wider context (not its Handoffs, which
+    are the parent's history), then the sub-project like a project, then the parent's other open
+    sub-projects, so the Session knows what else is in flight."""
+    parent = target.parent.parent
+    readme = parent / "README.md"
+    kind = read_project(target)["type"]
+    out = [f"# Wider context: project {parent.name}", f"Folder: {parent}", "",
+           f"This sub-project is part of {parent.name}. Keep its goals in view, and keep this Session's work "
+           "inside the sub-project.", "",
+           readme.read_text(errors="replace").rstrip() if readme.exists() else "(This project has no README.md.)", ""]
+    out += project_lines(target, f"# Sub-project {project_id(target)}" + (f" ({kind})" if kind else ""))
+    others = [s for s in read_subprojects(parent) if Path(s["path"]) != target and not s["closed"]]
+    if others:
+        out += ["", f"# Other open sub-projects of {parent.name} (not this Session's work)", ""]
+        out += [f"- {s['slug']} ({s['type'] or 'no type'}, {s['status'] or 'no status'}): {plain_text(s['summary'])}"
+                for s in others]
+    return "\n".join(out) + "\n"
+
+
+def project_lines(target, title):
+    """A project's (or sub-project's) README, then its newest Handoffs, newest first, and its notes."""
     readme = target / "README.md"
-    out = [f"# Project {target.name}", f"Folder: {target}", "",
+    out = [title, f"Folder: {target}", "",
            readme.read_text(errors="replace").rstrip() if readme.exists() else "(This project has no README.md.)"]
     handoffs = sorted(p for p in (target / "handoffs").glob("*.md") if handoff_time(p))
     newest = handoffs[::-1][:BRIEF_HANDOFFS]
@@ -433,7 +539,7 @@ def brief(target):
     if notes:
         out += ["", f"# Notes ({len(notes)}, in {target / 'notes'}; open one only when the work needs it)", ""]
         out += [f"- notes/{p.name}: {read_note(p)['name']}" for p in notes]
-    return "\n".join(out) + "\n"
+    return out
 
 
 def session_name(sid):
@@ -454,9 +560,10 @@ def project_brief(args):
         try:
             added, moved = assign_session(args.session, session_name(args.session), target)
         except (ValueError, OSError) as e:
-            print(f"\nCouldn't record this Session in {target.stem}: {e}", file=sys.stderr)
+            print(f"\nCouldn't record this Session in {project_id(target) if target.is_dir() else target.stem}: {e}", file=sys.stderr)
             return 1
-        print(f"\nThis Session {'is now listed' if added else 'was already listed'} in {target.stem}'s sessions:"
+        print(f"\nThis Session {'is now listed' if added else 'was already listed'} in "
+              f"{project_id(target) if target.is_dir() else target.stem}'s sessions:"
               + (f" (moved from {', '.join(moved)})" if moved else "") + ".")
     return 0
 
@@ -467,11 +574,13 @@ def project_list(args):
         print(f"roost project list: the Projects folder {short(str(config.projects_dir()))} doesn't exist: run roost setup",
               file=sys.stderr)
         return 1
-    shown = [p for p in projects if args.all or not p["closed"]]
-    width = max([len(p["id"]) for p in shown] + [10])
-    for p in shown:
-        last = worked(p["last"]) if p["last"] else "never"
-        print(f"{p['id'].ljust(width)}  {(p['status'] or '—')[:10]:<10}  {last:<16}  {clip(plain_text(p['summary']), 90)}")
+    shown = [(p, [s for s in read_subprojects(p["path"]) if args.all or not s["closed"]])
+             for p in projects if args.all or not p["closed"]]
+    width = max([len(p["id"]) for p, _ in shown] + [len(s["id"]) + 2 for _, subs in shown for s in subs] + [10])
+    for p, subs in shown:
+        for x, name, summary in [(p, p["id"], p["summary"])] + [(s, f"  {s['id']}", f"{s['type']}: {s['summary']}") for s in subs]:
+            last = worked(x["last"]) if x["last"] else "never"
+            print(f"{name.ljust(width)}  {(x['status'] or '—')[:10]:<10}  {last:<16}  {clip(plain_text(summary), 90)}")
     recaps = read_recaps()
     if recaps:
         print("\nSession recaps:")
@@ -494,7 +603,7 @@ def project_status(args):
     except ValueError as e:
         print(f"roost project status: {e}", file=sys.stderr)
         return 1
-    print(f"{folder.name}: status {old or '(none)'} → {read_project(folder)['status']}")
+    print(f"{project_id(folder)}: status {old or '(none)'} → {read_project(folder)['status']}")
     return 0
 
 
@@ -505,11 +614,12 @@ def project_command(args):
 def project_flags(parser):
     sub = parser.add_subparsers(dest="action", metavar="<action>", required=True)
     new = sub.add_parser("new", help="create a project folder and README", description="Create a project folder and README.")
-    new.add_argument("id", help="the folder name, e.g. printer-rollout")
+    new.add_argument("id", help="the folder name, e.g. printer-rollout; <project>/<slug> makes a sub-project")
+    new.add_argument("--type", help=f"a sub-project's type: {', '.join(SUB_TYPES)}")
     new.add_argument("--summary", required=True, help="one sentence saying what the project is")
     b = sub.add_parser("brief", help="print what a Session needs to catch up (/pickup runs this)",
                        description="Print a project's README and its newest Handoffs, or a Session recap.")
-    b.add_argument("id", help="the project's folder name, or a Session recap's name")
+    b.add_argument("id", help="the project's folder name, a sub-project's <project>/<slug>, or a Session recap's name")
     b.add_argument("--session", metavar="ID", help="also list this Session in the project's sessions: "
                    "(taking it off any other project's list)")
     ls = sub.add_parser("list", help="list projects and Session recaps, most recently worked first",
@@ -517,7 +627,7 @@ def project_flags(parser):
     ls.add_argument("--all", action="store_true", help="include closed projects")
     st = sub.add_parser("status", help="print a project's status, or set it (/wrap-up asks first)",
                         description="Print a project's status, or set it. Only the README's status: line changes.")
-    st.add_argument("id", help="the project's folder name")
+    st.add_argument("id", help="the project's folder name, or a sub-project's <project>/<slug>")
     st.add_argument("value", nargs="?", help=f"the new status: active, blocked, {CLOSED[0]} (closed hides it), or a few lowercase words")
 RECAP_MARK = re.compile(r"^<!-- roost handoff ([\w.-]+) session: (\S+) from: (\S*) to: (\S*) -->$", re.M)
 

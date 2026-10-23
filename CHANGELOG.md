@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Sub-projects:** a project's work splits into sub-projects (feature, bugfix, research, chore) in its `sub/` folder, each with its own README and Handoffs. `roost project new <project>/<slug> --type <type>` makes one; picking one up reads the parent project's README first, then the sub-project's own, then the project's other open sub-projects; wrap-up writes into the sub-project; `roost project list` shows them under their project. The Projects tab comes next
+
 ## 2026.10.25
 
 - **IDE terminals:** in IntelliJ (and the other JetBrains IDEs), VS Code, or Cursor, with no `terminal` in config.json, Open and Start copy the command that runs the Session (`cd <folder> && claude …`) instead of replacing roost in that tab, and say how to open a new tab to paste it in

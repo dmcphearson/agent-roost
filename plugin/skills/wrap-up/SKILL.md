@@ -26,7 +26,7 @@ Wrap-up leaves the next Session everything it needs: a Handoff in the project, a
    ROOST_SUMMARY
    ```
 
-   - It prints `Wrote <path>`. The project folder is the folder above `handoffs/`. A path in `~/.roost/notes/` is a Session recap: skip steps 3 and 4, since a recap has no README or status.
+   - It prints `Wrote <path>`. The project folder is the folder above `handoffs/`; in a sub-project (`<project>/sub/<slug>/`) that's the sub-project's folder, and its parent project isn't touched. A path in `~/.roost/notes/` is a Session recap: skip steps 3 and 4, since a recap has no README or status.
    - If it says it redacted secrets, tell the person what kinds, and that they should check the Handoff and rotate anything real.
    - **"no project lists Session …":** this Session has no project or recap. Ask the person which they want:
      - **A Session recap**, for one-off work: suggest it when the work has no finish line. Run the handoff again with `--recap --summary "<one sentence>"` added. The recap is a note in `~/.roost/notes/`, named after the Session and tagged `recap`, so it shows on roost's Notes tab; later wrap-ups add to it, and it can become a project from roost (enter on the recap, then Make it a project).
@@ -37,11 +37,11 @@ Wrap-up leaves the next Session everything it needs: a Handoff in the project, a
 3. **Rewrite the README body** so it describes the project now, not its history. Read `README.md` first.
 
    - Edit only below the frontmatter's closing `---`. Never change the frontmatter (`summary`, `status`, `sessions`, `category`) by hand; roost commands own it.
-   - Keep it under about 100 lines, in these sections: `## Current state`, `## Next`, `## Key decisions` (dated, newest kept; drop ones that no longer matter), and `## Files` (every other file in the folder, one line each saying what it is; skip `handoffs/`).
+   - Keep it under about 100 lines, in these sections: `## Current state`, `## Next`, `## Key decisions` (dated, newest kept; drop ones that no longer matter), and `## Files` (every other file in the folder, one line each saying what it is; skip `handoffs/` and `sub/`).
    - Keep any other section the person wrote that still holds.
    - The Handoff holds the story of this Session. The README holds only where things stand.
 
-4. **Status.** Run `roost project status <id>`. If this Session's work changes it (done, blocked, or back to active), propose the new value and ask. Only after a yes, run `roost project status <id> <value>`. Closing a project (`closed`) hides it on the home screen, so say that when you propose it. If nothing changed, leave it and don't ask.
+4. **Status.** Run `roost project status <id>` (a sub-project's id is `<project>/<slug>`; its statuses are active, blocked, and done). If this Session's work changes it (done, blocked, or back to active), propose the new value and ask. Only after a yes, run `roost project status <id> <value>`. Closing a project (`closed`) hides it on the home screen, so say that when you propose it. If nothing changed, leave it and don't ask.
 
 5. **Finish** with the Handoff's path and this line: "Safe to /clear or exit." Then stop.
 
