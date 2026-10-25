@@ -21,7 +21,7 @@ if Widget:
     from textual.screen import Screen
     from textual.containers import Horizontal, Vertical
     from textual.widgets import Input, Label
-    from roost.app.widgets import AlertBox, ConfirmBox, HelpBox, KeyBar, Menu, Region, TooSmall, TopBar
+    from roost.app.widgets import AlertBox, ConfirmBox, HelpBox, KeyBar, Menu, Region, StatusBar, TooSmall, TopBar
 else:  # the CLI commands need none of it; main() says how to get it
     App = None
 
@@ -210,6 +210,7 @@ if Widget:
             yield TopBar()
             for tab in self.ui.TABS:
                 yield tab.widget()
+            yield StatusBar()
             yield KeyBar()
             yield ConfirmBox()
             yield Prompt()
@@ -250,6 +251,7 @@ if Widget:
                     for part in view.query(Region):
                         part.refresh()
             self.query_one(TopBar).refresh()
+            self.query_one(StatusBar).refresh()
             bar = self.query_one(KeyBar)
             bar.styles.height = max(len(ui.bar[0]) if ui.bar else 1, 1)
             bar.refresh()
