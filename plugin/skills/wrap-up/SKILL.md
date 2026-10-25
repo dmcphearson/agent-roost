@@ -26,7 +26,7 @@ Wrap-up leaves the next Session everything it needs: a Handoff in the project, a
    ROOST_SUMMARY
    ```
 
-   - It prints `Wrote <path>`. The project folder is the folder above `handoffs/`; in a sub-project (`<project>/sub/<slug>/`) that's the sub-project's folder, and its parent project isn't touched. A path in `~/.roost/notes/` is a Session recap: skip steps 3 and 4, since a recap has no README or status.
+   - It prints `Wrote <path>`. The project folder is the folder above `handoffs/`; in a sub-project (`<project>/sub/<slug>/`) that's the sub-project's folder, and its parent project isn't touched until the sub-project is finished (step 4). A path in `~/.roost/notes/` is a Session recap: skip steps 3 and 4, since a recap has no README or status.
    - If it says it redacted secrets, tell the person what kinds, and that they should check the Handoff and rotate anything real.
    - **"no project lists Session …":** this Session has no project or recap. Ask the person which they want:
      - **A Session recap**, for one-off work: suggest it when the work has no finish line. Run the handoff again with `--recap --summary "<one sentence>"` added. The recap is a note in `~/.roost/notes/`, named after the Session and tagged `recap`, so it shows on roost's Notes tab; later wrap-ups add to it, and it can become a project from roost (enter on the recap, then Make it a project).
@@ -43,8 +43,23 @@ Wrap-up leaves the next Session everything it needs: a Handoff in the project, a
 
 4. **Status.** Run `roost project status <id>` (a sub-project's id is `<project>/<slug>`; its statuses are active, blocked, and done). If this Session's work changes it (done, blocked, or back to active), propose the new value and ask. Only after a yes, run `roost project status <id> <value>`. Closing a project (`closed`) hides it on the home screen, so say that when you propose it. If nothing changed, leave it and don't ask.
 
+   **Finishing a sub-project.** When a sub-project's status has just been set to `done`, tell its parent what it did, without its history:
+
+   - Read the sub-project's README and its Handoffs in `handoffs/`, so the roll-up covers the whole sub-project, not only this Session.
+   - Write the roll-up with these headings, short, about 30 lines in all: `### What it set out to do`, `### What shipped` (with PRs and commits by name), `### Decisions to keep` (the ones the parent should know), and `### Left open` ("Nothing" if nothing is). Pipe it in the same way as step 2, with `--roll-up` added:
+
+     ```
+     roost handoff --session ${CLAUDE_SESSION_ID} --roll-up <<'ROOST_SUMMARY'
+     …the roll-up…
+     ROOST_SUMMARY
+     ```
+
+     It prints `Wrote <path>` in the parent's `handoffs/`. An error (not a sub-project, not done, already exists): show it and skip the rest of this step.
+   - Update the parent's `README.md` (the folder above `sub/`) under the same rules as step 3, but only two sections: `## Current state` (what the sub-project's work changed) and `## Key decisions` (the roll-up's Decisions to keep, dated). Leave its other sections alone.
+   - Finishing doesn't remove the sub-project's worktree or branch.
+
 5. **Description.** Run `roost project description <id>`. If it prints `(no description)`, write one sentence saying what the project (or sub-project) is, from this Session's work, and set it with `roost project description <id> "<sentence>"`. If it has one and this Session's work changed what the project is about, propose a new sentence and ask; set it only after a yes. Otherwise leave it.
 
-6. **Finish** with the Handoff's path and this line: "Safe to /clear or exit." Then stop.
+6. **Finish** with the Handoff's path (and the roll-up's, if step 4 wrote one) and this line: "Safe to /clear or exit." Then stop.
 
 For flags, run `roost handoff --help` or `roost project --help`.
