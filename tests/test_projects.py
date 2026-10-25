@@ -1193,8 +1193,9 @@ class SubProjectRows(unittest.TestCase):
         ui.keys_projects("right", ui.project_rows())
         rows = self.select(ui, "sub", "rollout/alpha")
         acts = labels(ui, ui.keys_projects, rows)
-        for want in ("Start a Session", "Show its folder in Finder", "New sub-project…"):
+        for want in ("Start a Session", "Show its folder in Finder"):
             self.assertTrue([l for l in acts if l.startswith(want)], (want, acts))
+        self.assertNotIn("New sub-project…", acts)  # only in its parent's actions
         act(ui, ui.keys_projects, ui.project_rows(), "Start a Session")
         self.assertEqual([c[0] for c in calls], ["rollout/alpha"])
 
@@ -1265,6 +1266,69 @@ class SubProjectRows(unittest.TestCase):
             ui.pquery = q
             rows = [x for x in self.shown(ui) if x[0] != "head"]
             self.assertEqual(rows, [("project", "rollout"), ("sub", want)], q)
+
+
+class ProjectMenuGroups(unittest.TestCase):
+    """A project's and a sub-project's actions, in groups split by dividers (| here): work on it,
+    then (a project's) New sub-project…, then organize it, then delete it."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    ui, select, shown = SubProjectRows.ui, SubProjectRows.select, Projects.shown
+
+    def fixture(self):
+        """Project rollout (listing aa1b9a71-0000, a live Session) with open alpha (listing cc3d0000-1111,
+        another) and beta; project legacy, not in roost's shape yet (no handoffs/) with a due _archive folder."""
+        self.project("rollout", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        self.sub("rollout", "alpha", "feature", "active", "Badge printers.", [("Sub one", "cc3d0000-1111")])
+        self.sub("rollout", "beta", "bugfix", "active", "Toner alerts.")
+        legacy = self.root / "legacy"
+        (legacy / "_archive" / "2020-01-01").mkdir(parents=True)
+        (legacy / "README.md").write_text("---\nsummary: Older work.\nstatus: active\nsessions: []\n---\n\n# Legacy\n")
+        ui = self.ui()
+        ui.sessions = [dict(session("Password Manager Review"), id="aa1b9a71-0000"), dict(session("Sub one"), id="cc3d0000-1111")]
+        ui.load_projects()
+        return ui
+
+    def test_a_projects_actions_in_groups(self):
+        ui = self.fixture()
+        rows = self.select(ui, "project", "rollout")
+        self.assertEqual(labels(ui, ui.keys_projects, rows),
+                         ["Start a Session", "Start a Session in a sub-project…", "Show its Sessions", DIV,
+                          "New sub-project…", DIV,
+                          "Set its category…", "Edit its tags…", "Rename…", "Show its folder in Finder", DIV,
+                          "Delete…"])
+
+    def test_adopt_and_a_due_archive_go_in_the_delete_group(self):
+        ui = self.fixture()
+        ui.folded = set()  # no work on it yet: it's under Inactive
+        rows = self.select(ui, "project", "legacy")
+        self.assertEqual(labels(ui, ui.keys_projects, rows),
+                         ["Start a Session", DIV,
+                          "New sub-project…", DIV,
+                          "Set its category…", "Edit its tags…", "Rename…", "Show its folder in Finder", DIV,
+                          "Adopt it: plan its README and files, then write its Handoffs…",
+                          "Move _archive/2020-01-01 to the Trash…", "Delete…"])
+
+    def test_a_double_click_runs_the_first_real_action_when_the_first_group_is_empty(self):
+        """A closed project with no open sub-projects and no linked Session has nothing to work on, so its
+        actions start with the New sub-project… group: a double-click runs that, never a divider."""
+        self.project("shut", "---\nsummary: Finished work.\nstatus: closed\nsessions: []\n---\n\n# Shut\n")
+        ui = self.ui()
+        ui.folded = set()
+        rows = self.select(ui, "project", "shut")
+        self.assertEqual(labels(ui, ui.keys_projects, rows)[0], "New sub-project…")
+        ui.prow_y = {6: ui.psel}  # the project's row, as draw left it
+        ui.keys_projects(("mouse", 20, 6, roost.curses.BUTTON1_DOUBLE_CLICKED), ui.project_rows())
+        self.assertTrue(ui.choosing and ui.choosing["title"].startswith("New sub-project of"), ui.choosing)
+
+    def test_a_sub_projects_actions_in_groups(self):
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        rows = self.select(ui, "sub", "rollout/alpha")
+        self.assertEqual(labels(ui, ui.keys_projects, rows),
+                         ["Start a Session", "Show its Sessions", DIV,
+                          "Edit its tags…", "Rename…", "Show its folder in Finder", DIV,
+                          "Delete…"])
 
 
 class ProjectDelete(unittest.TestCase):

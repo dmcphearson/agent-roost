@@ -877,6 +877,36 @@ class Dismissing(unittest.TestCase):
         self.assertNotIn("Undismiss", acts)
 
 
+class SessionMenuGroups(unittest.TestCase):
+    """A Session's actions, in groups split by dividers (| here): work on it, organize it, then stop or delete it."""
+    project, ui, fresh, acts = StartingSessions.project, StartingSessions.ui, Dismissing.fresh, Dismissing.acts
+    setUp = Dismissing.setUp
+
+    def fixture(self):
+        """Dismissing's: project p, Live (idle in the background, in p), and Loose (closed, no project);
+        plus project other, so each can go to a project."""
+        Dismissing.fixture(self)
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n")
+        return self.fresh()
+
+    def test_a_live_background_sessions_actions_in_groups(self):
+        ui = self.fixture()
+        self.assertEqual(self.acts(ui, "Live"),
+                         ["Open in a new window", "Write its Handoff from the transcript…", "Ask what to do with it…",
+                          "Pin: keep it running when idle", DIV,
+                          "Move to another project…", "Rename…", "Copy its id", "Show its folder in Finder", DIV,
+                          "Stop…"])
+
+    def test_a_closed_sessions_actions_in_groups(self):
+        ui = self.fixture()
+        self.assertEqual(self.acts(ui, "Loose"),
+                         ["Open in a new window", "Write its Session recap from the transcript…", "Ask what to do with it…",
+                          "Restart in the background, pinned", DIV,
+                          "New project from this Session…", "Add to a project…", "Rename…", "Dismiss", "Copy its id",
+                          "Show its folder in Finder", DIV,
+                          "Delete to the Trash…"])
+
+
 class SessionColumns(unittest.TestCase):
     """The Sessions tab's columns scale with the window, read off the drawn header and rows. NAME
     starts at column 5; then STATUS, LAST ACTIVE, CONTEXT, PROJECT."""

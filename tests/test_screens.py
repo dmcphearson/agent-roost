@@ -308,6 +308,51 @@ class TextualScreens(unittest.TestCase):
         title = self.screen(app)[y0 + 1][x0 + 3:x0 + 3 + len("Printer idea")]
         self.assertEqual(title, "Printer idea")  # nothing of the card is drawn over the menu
 
+    def grouped_menu(self, ran):
+        """A step that puts up a menu of a, b | c, with each action recording its name in ran."""
+        async def step(pilot):
+            act = lambda name: (name, lambda: ran.append(name))
+            pilot.app.ui.menu("Things", [act("a"), act("b"), roost.DIVIDER, act("c")])
+            pilot.app.redraw()
+        return step
+
+    @staticmethod
+    def option_y(ui, i):
+        """The screen row of the menu's option i, where the Menu drew it."""
+        y0, x0, bw, bh = ui.choosing["box"]
+        return y0 + ui.choosing["off"] + i - ui.choosing.get("top", 0)
+
+    def test_a_menus_divider_is_drawn_as_a_rule_not_an_option(self):
+        app = self.run_app([self.grouped_menu([])])
+        ui = app.ui
+        opts = ui.choice_options()
+        i = next(i for i, o in enumerate(opts) if tuple(o) == tuple(roost.DIVIDER))
+        y0, x0, bw, bh = ui.choosing["box"]
+        inside = lambda y: self.screen(app)[y][x0 + 1:x0 + bw - 1]
+        self.assertIn("› a", inside(self.option_y(ui, 0)))  # where options are drawn
+        rule = inside(self.option_y(ui, i))
+        self.assertIn("───", rule, rule)
+        self.assertNotIn("›", rule)
+        self.assertEqual(rule.strip().strip("─"), "", rule)  # a rule and nothing else
+
+    def test_a_click_on_a_menus_divider_does_nothing_and_leaves_it_open(self):
+        ran, seen = [], {}
+
+        async def click_divider(pilot):
+            ui = pilot.app.ui
+            i = next(i for i, o in enumerate(ui.choice_options()) if tuple(o) == tuple(roost.DIVIDER))
+            await pilot.click(offset=(ui.choosing["box"][1] + 4, self.option_y(ui, i)))
+            await pilot.pause()
+            seen["after divider"] = (list(ran), bool(ui.choosing))
+
+        async def click_c(pilot):  # the row under the divider: the clicks land where the rows are
+            ui = pilot.app.ui
+            i = [o[0] for o in ui.choice_options()].index("c")
+            await pilot.click(offset=(ui.choosing["box"][1] + 4, self.option_y(ui, i)))
+        app = self.run_app([self.grouped_menu(ran), click_divider, click_c])
+        self.assertEqual(seen["after divider"], ([], True))
+        self.assertEqual((ran, app.ui.choosing), (["c"], None))
+
     def test_the_frame_is_the_terminals_own_background(self):
         app = self.run_app([])
         self.assertEqual(app.ui.style(0).bgcolor.name, "default")  # so it's as translucent as the window's edges
@@ -458,7 +503,7 @@ class TextualScreens(unittest.TestCase):
             await pilot.press("enter")
             await pilot.pause()
             ui = pilot.app.ui
-            opts = [l for l, _ in ui.choosing["options"]] if ui.choosing else []
+            opts = [l for l, _ in ui.choice_options()] if ui.choosing else []  # as shown: sel indexes these
             assert label in opts, f"{label!r} not in its actions {opts}"
             ui.choosing["sel"] = opts.index(label)
             await pilot.press("enter")
@@ -792,7 +837,7 @@ class TextualScreens(unittest.TestCase):
             app = pilot.app
             app.press("enter")
             ui = app.ui
-            opts = [l for l, _ in ui.choosing["options"]] if ui.choosing else []
+            opts = [l for l, _ in ui.choice_options()] if ui.choosing else []  # as shown: sel indexes these
             assert label in opts, f"{label!r} not in its actions {opts}"
             ui.choosing["sel"] = opts.index(label)
             app.redraw()

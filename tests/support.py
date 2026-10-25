@@ -78,18 +78,28 @@ def session(name, state="idle", kind="background", pinned=False, attached=False,
             "tokens": tokens, "cwd": cwd, "summary": "", "files": []}
 
 
+DIV = "|"  # where labels() puts a divider between an action menu's groups
+
+
+def is_divider(option):
+    """Is this picker row the divider an actions list puts between groups?"""
+    import importlib
+    divider = getattr(importlib.import_module("roost.app.shell"), "DIVIDER", None)
+    return divider is not None and tuple(option) == tuple(divider)
+
+
 def act(ui, keys, rows, label):
     """Open the selected row's actions (enter) and pick the one whose label starts with label."""
     keys("enter", rows)
-    opts = ui.choosing["options"]
-    ui.choosing["sel"] = next(i for i, (l, _) in enumerate(opts) if l.startswith(label))
+    opts = ui.choice_options()  # the rows as shown, so sel indexes what enter picks from
+    ui.choosing["sel"] = next(i for i, o in enumerate(opts) if not is_divider(o) and o[0].startswith(label))
     return ui.keys_choice("enter")
 
 
 def labels(ui, keys, rows):
-    """The selected row's actions, as their labels."""
+    """The selected row's actions, as their labels, with DIV where a divider row falls."""
     keys("enter", rows)
-    out = [l for l, _ in ui.choosing["options"]]
+    out = [DIV if is_divider(o) else o[0] for o in ui.choice_options()]
     ui.choosing = None
     return out
 

@@ -518,6 +518,65 @@ class KeyBar(unittest.TestCase):
         self.assertEqual(self.bar(40, keys, "A message far too long to share a row")[-1], ["", "A message far too long to share a row"])
 
 
+class MenuDividers(unittest.TestCase):
+    """A row's actions in groups: shell.DIVIDER, put between groups in an actions list, is a row of the
+    menu that can't be picked or rested on, and an empty group leaves no extra divider."""
+    def setUp(self):
+        self.ui = object.__new__(roost.UI)
+        self.ui.choosing, self.ui.msg, self.ran = None, "", []
+
+    def opened(self, *groups):
+        """A menu of the named actions, with a divider between each group (an empty group is still
+        separated by its dividers); each action records its name when it runs."""
+        actions = []
+        for i, group in enumerate(groups):
+            if i:
+                actions.append(roost.DIVIDER)
+            actions += [(name, lambda name=name: self.ran.append(name)) for name in group]
+        self.ui.menu("Things", actions)
+        return self.ui
+
+    def shown(self):
+        """The menu's rows as shown, a divider as |."""
+        return ["|" if tuple(o) == tuple(roost.DIVIDER) else o[0] for o in self.ui.choice_options()]
+
+    def selected(self):
+        return self.shown()[self.ui.choosing["sel"]]
+
+    def test_dividers_show_between_groups_but_never_first_last_or_two_in_a_row(self):
+        self.opened([], ["a", "b"], [], [], ["c"], ["d"], [])
+        self.assertEqual(self.shown(), ["a", "b", "|", "c", "|", "d"])
+        self.ui.choosing = None
+        self.ui.menu("Things", [roost.DIVIDER, ("a", lambda: None), roost.DIVIDER, roost.DIVIDER, ("b", lambda: None),
+                                roost.DIVIDER])
+        self.assertEqual(self.shown(), ["a", "|", "b"])
+
+    def test_the_selection_starts_on_the_first_option_and_arrows_skip_dividers_and_wrap(self):
+        self.opened([], ["a"], ["b", "c"], ["d"])
+        self.assertEqual(self.shown(), ["a", "|", "b", "c", "|", "d"])
+        self.assertEqual(self.selected(), "a")
+        seen = []
+        for _ in range(5):
+            self.ui.keys_choice("down")
+            seen.append(self.selected())
+        self.assertEqual(seen, ["b", "c", "d", "a", "b"])
+        seen = []
+        for _ in range(5):
+            self.ui.keys_choice("up")
+            seen.append(self.selected())
+        self.assertEqual(seen, ["a", "d", "c", "b", "a"])
+
+    def test_enter_never_picks_a_divider(self):
+        self.opened(["a"], ["b"], ["c"])
+        for k in ["down", "down", "up", "up", "up", "down"]:
+            self.ui.keys_choice(k)
+            self.assertNotEqual(self.selected(), "|", k)
+        self.ui.keys_choice("down")  # from a, over the divider
+        self.assertEqual(self.selected(), "b")
+        self.ui.keys_choice("enter")
+        self.assertEqual((self.ran, self.ui.choosing), (["b"], None))
+
+
 class ShortWhen(unittest.TestCase):
     """formatting.short_when(ts, now): a time today as "2:17 PM", any other day as two-digit MM/DD/YY or
     DD/MM/YY, in the order formatting.date_order() gives ("MDY" or "DMY")."""
