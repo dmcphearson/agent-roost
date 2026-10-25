@@ -6,6 +6,7 @@
 - **Delete a project or sub-project:** Delete in its actions asks first, then asks you to type its name, then moves its folder to the Trash (a project's sub-projects go with it). Sub-projects can be renamed, like projects.
 - **Grouped action menus:** every row's actions are grouped, a line between them: working on it, organizing it, then removing it (Stop and Delete last). A project's menu no longer offers New project (ctrl+n and + New project do).
 - **Descriptions:** a project's or sub-project's summary is now its description (`description:` in the README; an older `summary:` still reads). It's optional when you make one, Edit its description changes it, `roost project description <id> "…"` sets it, and `/wrap-up` writes it from the Session's work when it's empty. `roost project new --summary` still works.
+- **Finishing a sub-project:** when `/wrap-up` sets a sub-project to `done`, it writes one roll-up Handoff into the parent project (`roost handoff --roll-up`: what it set out to do, what shipped, decisions to keep, what's left open) and updates the parent README's Current state and Key decisions. `roost ledger` names a roll-up
 - **Rename asks for two things:** the label (the name roost shows) and then the folder's name, which follows a new label when it was made from the old one. Sub-project rows show their label.
 
 ## 2026.10.25
