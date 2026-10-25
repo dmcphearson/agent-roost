@@ -233,7 +233,7 @@ class ProjectsTab:
         return None
 
     def delete_project_ui(self, p):
-        """Delete… on a project or sub-project: a confirm box, then its id typed exactly, then its folder
+        """Delete on a project or sub-project: a confirm box, then its id typed exactly, then its folder
         (with a project's sub-projects) goes to the Trash. Its Sessions keep running."""
         self.ask_confirm("project-delete", p)
 
@@ -517,7 +517,7 @@ class ProjectsTab:
     PROJECTS_HELP = [
         ("Sections", f"Recent (active in {RECENT_PROJECT_DAYS} days), Inactive, then Closed, folded until opened"),
         ("Open", "→ opens a section, or a project's sub-projects (▸), ← closes it · enter or a click on a header opens a section too"),
-        ("Sub-projects", "pieces of a project's work (feature, bugfix, research, chore), each with its own README and Handoffs; New sub-project… is in a project's actions"),
+        ("Sub-projects", "pieces of a project's work (feature, bugfix, research, chore), each with its own README and Handoffs; New sub-project is in a project's actions"),
         ("Columns", "SESSIONS counts the project's running Sessions (◆ need input · ● working · ○ idle), and under them its unwrapped ones: closed, no Handoff covers them, not dismissed · LAST WORKED is a time today, else a date"),
         ("Sessions", "listed on the Sessions tab only: a project's Show its Sessions opens it on just that project's, searching project:<its id>"),
         ("Lists", "your projects (roost setup picks the folder); Sessions no project lists are on the Sessions tab, recaps on Notes"),
@@ -594,40 +594,40 @@ class ProjectsTab:
             work.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
                          lambda: self.start_for(p)))
         if any(not s["closed"] for s in p.get("subs") or []):
-            work.append(("Start a Session in a sub-project…", lambda: self.start_in_sub(p)))
+            work.append(("Start a Session in a sub-project", lambda: self.start_in_sub(p)))
         if self.linked(p):
             work.append(("Show its Sessions", lambda: self.show_sessions(p)))
         if real:
-            subs.append(("New sub-project…", lambda: self.new_subproject(p)))
+            subs.append(("New sub-project", lambda: self.new_subproject(p)))
         if p["readme"]:
-            organize.append(("Set its category…", lambda: self.edit_category(p)))
-            organize.append(("Edit its tags…", lambda: self.edit_tags(p)))
+            organize.append(("Set its category", lambda: self.edit_category(p)))
+            organize.append(("Edit its tags", lambda: self.edit_tags(p)))
         if p.get("readme") and real:
-            organize.append(("Rename…", lambda: self.rename_project_ui(p)))
+            organize.append(("Rename", lambda: self.rename_project_ui(p)))
         organize.append(("Show its folder in Finder", lambda: self.show_in_finder(p["path"])))
         if p["readme"] and not p["closed"] and not p.get("adopted", True):  # a demo project counts as adopted
-            remove.append(("Adopt it: plan its README and files, then write its Handoffs…", lambda: self.ask_adopt(p)))
+            remove.append(("Adopt it: plan its README and files, then write its Handoffs", lambda: self.ask_adopt(p)))
         for name, _ in p.get("archives") or []:
             path = str(Path(p["path"]) / "_archive" / name)
-            remove.append((f"Move _archive/{name} to the Trash…",
+            remove.append((f"Move _archive/{name} to the Trash",
                            lambda path=path, name=name: self.ask_confirm("archive", {"name": f"{p['id']}/_archive/{name}", "path": path})))
         if real:
-            remove.append(("Delete…", lambda: self.delete_project_ui(p)))
+            remove.append(("Delete", lambda: self.delete_project_ui(p)))
         return grouped(work, subs, organize, remove)
 
     def sub_actions(self, s):
         """What can be done with a sub-project: a project's actions that fit one, in the same groups."""
         real = Path(s["path"]).is_dir()  # a real folder (the demo's aren't)
-        work, organize = [], [("Edit its tags…", lambda: self.edit_tags(s))]
+        work, organize = [], [("Edit its tags", lambda: self.edit_tags(s))]
         if not s["closed"]:
             work.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
                          lambda: self.start_for(s)))
         if self.linked(s):
             work.append(("Show its Sessions", lambda: self.show_sessions(s)))
         if real:
-            organize.append(("Rename…", lambda: self.rename_project_ui(s)))
+            organize.append(("Rename", lambda: self.rename_project_ui(s)))
         organize.append(("Show its folder in Finder", lambda: self.show_in_finder(s["path"])))
-        return grouped(work, organize, [("Delete…", lambda: self.delete_project_ui(s))] if real else [])
+        return grouped(work, organize, [("Delete", lambda: self.delete_project_ui(s))] if real else [])
 
     def start_in_sub(self, p):
         """Pick one of p's open sub-projects and start a Session in it."""

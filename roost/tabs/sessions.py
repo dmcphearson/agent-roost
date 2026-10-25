@@ -378,30 +378,30 @@ class SessionsTab:
             work.append((label, lambda: self.open_one(s)))
         if recap:
             work.append((f"Read its Session recap in {self.editor_name().split()[0]}", lambda: self.edit(recap["path"])))
-            organize.append(("Make it a project… (its recap's Handoffs move in)", lambda: self.new_project(recap)))
+            organize.append(("Make it a project (its recap's Handoffs move in)", lambda: self.new_project(recap)))
         elif not proj:
-            organize.append(("New project from this Session…", lambda: self.new_project_from(s)))
+            organize.append(("New project from this Session", lambda: self.new_project_from(s)))
         others = [p for p in self.all_projects() if not p["closed"] and p is not proj]
         if others:
-            organize.append(("Move to another project…" if proj else "Add to a project…", lambda: self.add_to_project(s)))
+            organize.append(("Move to another project" if proj else "Add to a project", lambda: self.add_to_project(s)))
         if not in_window:
-            work.append((f"Write its {'Handoff' if proj else 'Session recap'} from the transcript…", lambda: self.ask_summary(s)))
+            work.append((f"Write its {'Handoff' if proj else 'Session recap'} from the transcript", lambda: self.ask_summary(s)))
             if s["state"] not in ("busy", "opening"):
-                work.append(("Ask what to do with it…", lambda: self.ask_advice(s)))
+                work.append(("Ask what to do with it", lambda: self.ask_advice(s)))
         if s.get("attach") and s["kind"] != "interactive":
             work.append(("Unpin" if s.get("pinned") else "Pin: keep it running when idle", lambda: self.pin(s)))
         elif closed and not proj and not done:
             work.append(("Restart in the background, pinned", lambda: self.pin(s)))
         if not in_window:
-            organize.append(("Rename…", lambda: self.rename(s)))
+            organize.append(("Rename", lambda: self.rename(s)))
         if s.get("attach"):
-            remove.append(("Stop…", lambda: self.ask_confirm("stop", s)))
+            remove.append(("Stop", lambda: self.ask_confirm("stop", s)))
         elif closed:
             if s["id"] in sessiondata.read_dismissed():
                 organize.append(("Undismiss", lambda: self.dismiss(s, False)))
             else:
                 organize.append(("Dismiss", lambda: self.dismiss(s)))
-            remove.append(("Delete to the Trash…", lambda: self.ask_confirm("delete", s)))
+            remove.append(("Delete to the Trash", lambda: self.ask_confirm("delete", s)))
         organize.append(("Copy its id", lambda: self.copy_id(s)))
         if s.get("cwd") and os.path.isdir(s["cwd"]):
             organize.append(("Show its folder in Finder", lambda: self.show_in_finder(s["cwd"])))

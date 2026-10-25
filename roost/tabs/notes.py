@@ -210,12 +210,12 @@ class NotesTab:
                  lambda: self.start_from_note(n))]
         organize = []
         if any(not p["closed"] and p["id"] != n["project"] for p in self.projects or []):
-            organize.append(("Move to another project…" if n["project"] else "Move to a project…", lambda: self.move_note(n)))
+            organize.append(("Move to another project" if n["project"] else "Move to a project", lambda: self.move_note(n)))
         if not n["project"]:
-            organize.append(("Make it a project…", lambda: self.note_to_project(n)))
-        organize.append(("Edit its tags…", lambda: self.edit_tags(n)))
+            organize.append(("Make it a project", lambda: self.note_to_project(n)))
+        organize.append(("Edit its tags", lambda: self.edit_tags(n)))
         organize.append(("Show it in Finder", lambda: self.show_in_finder(n["path"], reveal=True)))
-        return grouped(work, organize, [("Delete to the Trash…", lambda: self.ask_confirm("note", n))])
+        return grouped(work, organize, [("Delete to the Trash", lambda: self.ask_confirm("note", n))])
 
     def keys_notes(self, k, rows):
         r = rows[self.nsel] if rows else None
