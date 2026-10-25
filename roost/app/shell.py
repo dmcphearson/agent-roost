@@ -243,6 +243,11 @@ class Shell:
         self.corner, self.bar = None, None
         return self.TABS[self.tab].draw(self)
 
+    def status_line(self):
+        """The status bar's two sides: the left kept for Sessions waiting on you, the right how many run."""
+        n = sum(s["state"] != "closed" for s in self.sessions)
+        return "", f"{n} running" if n else "nothing running"
+
     def key_bar(self, keys, note="", note_attr=0):
         """The tab's key bar: its keys (or the search's while typing one) and a note at the right. A
         prompt or a confirmation takes its place."""

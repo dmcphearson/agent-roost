@@ -71,6 +71,19 @@ def screen_text(app):
     return ["".join(seg.text for seg in strip).rstrip() for strip in app.screen._compositor.render_strips()]
 
 
+def bold_text(app):
+    """Where the screen draws bold text: (row, column, text) for each bold run."""
+    from rich.cells import cell_len
+    out = []
+    for y, strip in enumerate(app.screen._compositor.render_strips()):
+        x = 0
+        for seg in strip:
+            if seg.style and seg.style.bold and seg.text.strip():
+                out.append((y, x + len(seg.text) - len(seg.text.lstrip()), seg.text.strip()))
+            x += cell_len(seg.text)
+    return out
+
+
 def session(name, state="idle", kind="background", pinned=False, attached=False, mins=0, tokens=0, cwd="/tmp"):
     sid = f"{abs(hash(name)) % 16**8:08x}-test"
     return {"id": sid, "name": name, "state": state, "kind": kind, "pinned": pinned, "attached": attached,

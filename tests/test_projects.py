@@ -100,7 +100,6 @@ class Projects(unittest.TestCase):
         ui.psel, ui.ptop, ui.prow_y, ui.asking = 0, 0, {}, None
         ui.pquery, ui.searching = "", False
         ui.folded, ui.expanded = {"Inactive", "Closed"}, set()
-        ui.unwrapped = set()
         ui.choosing = ui.confirm = ui.term = None
         ui.summaries, ui.plugin_ok = {}, True
         ui.load_projects()
@@ -466,14 +465,12 @@ class ProjectArrows(unittest.TestCase):
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class ProjectRows(unittest.TestCase):
-    """The Projects tab with the NAME as its most readable part, on a real Textual screen."""
+    """The Projects tab's rows and dates, on a real Textual screen."""
     setUp = TextualScreens.setUp
     closed = staticmethod(TextualScreens.closed)
     proj = staticmethod(TextualScreens.proj)
     select = staticmethod(TextualScreens.select)
     keys = staticmethod(TextualScreens.keys)
-    TITLES = [("NAME", "NAME"), ("STATUS", "STAT"), ("SESSIONS", "SESS"), ("CATEGORY", "CATE"), ("TAGS", "TAGS"),
-              ("LAST WORKED", "LAST")]
     PAST = datetime(2025, 1, 5, 9, 30).timestamp()  # MDY 01/05/25, DMY 05/01/25
 
     def run_on(self, projects, steps=(), size=(160, 30), tab="Projects", config=None):
@@ -502,28 +499,9 @@ class ProjectRows(unittest.TestCase):
         return r.item["id"] if r.kind == "project" else r.kind
 
     @staticmethod
-    def head_index(lines):
-        return next(i for i, l in enumerate(lines) if "NAME" in l and "STAT" in l)
-
-    def columns(self, header):
-        """Where each column's title starts, for the titles drawn, in order."""
-        x, at = {}, 0
-        for title, prefix in self.TITLES:
-            i = header.find(prefix, at)
-            if i >= 0:
-                x[title], at = i, i + 1
-        return x
-
-    def widths(self, x):
-        """Each column's width, from its title to the next column's, when both are drawn."""
-        names = [t for t, _ in self.TITLES]
-        return {t: x[n] - x[t] for t, n in zip(names, names[1:]) if t in x and n in x}
-
-    def listing(self, lines):
-        """The list's lines: under the column titles, above the panel's rule."""
-        h = self.head_index(lines)
-        edge = next(i for i in range(h + 1, len(lines)) if lines[i].strip() and set(lines[i].strip()) == {"─"})
-        return lines[h + 1:edge]
+    def sidebar(lines):
+        """The sidebar's part of each line: its first SIDEBAR_W columns."""
+        return [l[:roost.SIDEBAR_W] for l in lines]
 
     @staticmethod
     def row_of(lines, text):
@@ -537,16 +515,16 @@ class ProjectRows(unittest.TestCase):
     # 1. Dates
 
     def test_last_worked_is_a_time_today_and_a_short_date_otherwise(self):
+        """The selected project's Last worked, in the detail pane: a time today, else a short date in the
+        person's date order."""
         import unittest.mock
         now = time.time()
         projects = [self.project("today-one", status="active", last=now), self.project("older-one", status="active", last=self.PAST)]
         for order, shown in (("MDY", "01/05/25"), ("DMY", "05/01/25")):
-            with unittest.mock.patch.object(FMT, "date_order", lambda o=order: o):
-                lines = self.run_on(projects).lines
-            x = self.columns(lines[self.head_index(lines)])
-            today, older = (lines[self.row_of(lines[:-10], pid)] for pid in ("today-one", "older-one"))
-            self.assertEqual(today[x["LAST WORKED"]:].strip(), clock(now), order)
-            self.assertEqual(older[x["LAST WORKED"]:].strip(), shown, order)
+            for pid, want in (("today-one", clock(now)), ("older-one", shown)):
+                with unittest.mock.patch.object(FMT, "date_order", lambda o=order: o):
+                    lines = self.run_on(projects, [self.on_project(pid)]).lines
+                self.assertTrue([l for l in lines if re.search(rf"Last worked +{re.escape(want)}(\s|$)", l)], (order, pid, lines))
 
     def test_the_projects_card_dates_are_short(self):
         import unittest.mock
@@ -562,7 +540,7 @@ class ProjectRows(unittest.TestCase):
                 seen[kind] = dict(ui.project_panel([roost.Row("Recent", kind, item, 0)], 30, 160)[1])["Status"]
         with unittest.mock.patch.object(FMT, "date_order", lambda: "DMY"):
             app = self.run_on([p], [self.on_project("older-one"), panels])
-        status = next(l for l in app.lines[-10:] if "Last worked" in l)
+        status = next(l for l in app.lines if "Last worked" in l)
         self.assertRegex(status, r"Last worked +05/01/25(\s|$)")
         self.assertRegex(seen["session"], r"Last active +05/01/25(\s|$)")
         self.assertRegex(seen["recap"], r"Last worked +05/01/25(\s|$)")
@@ -587,323 +565,242 @@ class ProjectRows(unittest.TestCase):
         self.assertIn("5m ago", line)
         self.assertNotRegex(line, r"\d:\d\d (AM|PM)")
 
-    # 2. SESSIONS on two lines
+    # 2. The sidebar
 
-    def two_line_fleet(self):
-        """alpha: idle Printer fix and closed Toner order (○1, then 1 unwrapped); bravo: waiting Laptop
-        refresh (◆1, nothing unwrapped); charlie: no Sessions; delta: closed Desk order only (1 unwrapped,
-        nothing running); echo: no Sessions."""
-        toner, desk = self.closed("Toner order", 30), self.closed("Desk order", 40)
-        self.sessions = self.sessions + [toner, desk]
-        now = time.time()
-        return [self.project("alpha", [self.sessions[0], toner], last=now),
-                self.project("bravo", [self.sessions[1]], last=now - 60),
-                self.project("charlie", [], last=now - 120),
-                self.project("delta", [desk], last=now - 180),
-                self.project("echo", [], last=now - 240)]
-
-    def test_unwrapped_is_on_a_second_line_under_the_running_counts(self):
-        lines = self.run_on(self.two_line_fleet()).lines
-        x = self.columns(lines[self.head_index(lines)])
-        a, b, c = (self.row_of(lines[:-10], pid) for pid in ("alpha", "bravo", "charlie"))
-        self.assertTrue(lines[a][x["SESSIONS"]:].startswith("○1"), lines[a])
-        self.assertNotIn("unwrapped", lines[a])
-        self.assertEqual(lines[a + 1].strip(), "1 unwrapped")
-        self.assertEqual(lines[a + 1].index("1 unwrapped"), x["SESSIONS"])
-        self.assertEqual(b, a + 2)  # alpha takes two lines
-        self.assertTrue(lines[b][x["SESSIONS"]:].startswith("◆1"), lines[b])
-        self.assertEqual(c, b + 1)  # bravo takes one
-        d, e = (self.row_of(lines[:-10], pid) for pid in ("delta", "echo"))
-        self.assertEqual(lines[d][x["SESSIONS"]:x["CATEGORY"]].strip(), "1 unwrapped")  # nothing running: first line
-        self.assertEqual(e, d + 1)  # so delta takes one line too
-
-    def test_a_click_on_either_line_selects_the_project(self):
-        projects = self.two_line_fleet()
-        lines = self.run_on(projects).lines
-        a = self.row_of(lines[:-10], "alpha")
-        sx = self.columns(lines[self.head_index(lines)])["SESSIONS"]
-        for y in (a, a + 1):
-            app = self.run_on(projects, [self.on_project("charlie"), lambda pilot, y=y: pilot.click(offset=(sx + 2, y))])
-            self.assertEqual(self.chosen(app), "alpha", y)
-
-    def test_down_from_a_two_line_row_selects_the_next_row(self):
-        app = self.run_on(self.two_line_fleet(), [self.on_project("alpha"), self.keys("down")])
-        self.assertEqual(self.chosen(app), "bravo")
-
-    def test_scrolling_down_shows_both_lines_of_the_selected_row(self):
+    def test_moving_down_a_long_list_keeps_the_selected_row_in_the_sidebar(self):
+        """More projects than the sidebar has rows: as down moves through them, the selected project's
+        name is always in the sidebar, and the list scrolls to show it."""
         now, projects = time.time(), []
-        self.sessions = []
-        for i in range(14):
-            live, gone = session(f"Live {i:02d}", mins=i), self.closed(f"Gone {i:02d}", 30 + i)
-            self.sessions += [live, gone]
-            projects.append(self.project(f"proj-{i:02d}", [live, gone], label=f"Project {i:02d}", last=now - i * 60))
+        for i in range(40):
+            projects.append(self.project(f"proj-{i:02d}", label=f"Project {i:02d}", last=now - i * 60))
         seen = []
 
         async def look(pilot):
             pilot.app.redraw()
             await pilot.pause()
-            seen.append((self.chosen(pilot.app), screen_text(pilot.app)))
-        steps = []
-        for _ in range(15):
+            seen.append((self.chosen(pilot.app), self.sidebar(screen_text(pilot.app))))
+        steps = [self.on_project("proj-00"), look]
+        for _ in range(40):
             steps += [self.keys("down"), look]
-        self.run_on(projects, steps)
+        self.run_on(projects, steps, size=(120, 30))
         scrolled = False
-        for pid, lines in seen:
+        for pid, side in seen:
             if not pid.startswith("proj-"):
                 continue
-            listed = self.listing(lines)
-            label = f"Project {pid[-2:]}"
-            i = next((i for i, l in enumerate(listed) if label in l), None)
-            self.assertIsNotNone(i, (pid, listed))
-            self.assertLess(i + 1, len(listed), (pid, listed))
-            self.assertEqual(listed[i + 1].strip(), "1 unwrapped", (pid, listed))
-            scrolled = scrolled or not any("Project 00" in l for l in listed)
+            self.assertTrue([l for l in side if f"Project {pid[-2:]}" in l], (pid, side))
+            scrolled = scrolled or not any("Project 00" in l for l in side)
         self.assertTrue(scrolled, "the list never scrolled: the fixture needs more projects")
+        self.assertEqual(seen[-1][0], "new")  # down reached + New project, at the bottom
 
-    # 3. Widths
-
-    def drawn_widths(self, projects, w):
-        """The Projects tab in a window w wide: each column's start, the five widths read off the column
-        titles, LAST WORKED's width (it has no column after it, so it is read from the list's own
-        widths), the list's width, and the drawn lines."""
-        seen = {}
-
-        async def last(pilot):
-            region = pilot.app.query_one(roost.ProjectList)
-            seen["list"] = region.size.width
-            seen["LAST WORKED"] = pilot.app.ui.project_widths(pilot.app.ui.prows, region.size.width)["LAST WORKED"]
-        lines = self.run_on(projects, [last], size=(w, 30)).lines
-        x = self.columns(lines[self.head_index(lines)])
-        wd = dict(self.widths(x), **{"LAST WORKED": seen["LAST WORKED"]})
-        return x, wd, seen["list"], lines
-
-    SIX = ("NAME", "STATUS", "SESSIONS", "CATEGORY", "TAGS", "LAST WORKED")
-
-    def six(self, wd):
-        return tuple(wd.get(t) for t in self.SIX)
-
-    def test_in_a_wide_window_name_is_its_target_and_the_rest_is_spread(self):
-        """160 and 170 columns, one name of 79: NAME grows past 48 to its longest + 2 (81) and the rest
-        of the spare width is spread across all six columns, leftmost first. Before spare width:
-        NAME 48, STATUS 8, SESSIONS 12, CATEGORY 14, TAGS 14, LAST WORKED 12 = 108, + 6 for the
-        offset and margin. 160: 46 spare, 33 to NAME, 13 = 2 each + 1 to NAME. 170: 56 spare, 33 to
-        NAME, 23 = 3 each + 1 to NAME through TAGS."""
-        long_name = "Quarterly laptop refresh, printer fleet consolidation, and badge reader rollout"
-        p = self.project("wide", label=long_name, status="active", category="ops", tags=["q4"], last=self.PAST)
-        for w, want in ((160, (84, 10, 14, 16, 16, 14)), (170, (85, 12, 16, 18, 18, 15))):
-            x, wd, width, lines = self.drawn_widths([p], w)
-            header = lines[self.head_index(lines)]
-            self.assertEqual([t for t, _ in self.TITLES], list(x), (w, header))
-            self.assertIn("LAST WORKED", header)
-            self.assertEqual(self.six(wd), want, w)
-            self.assertEqual(5 + sum(wd.values()) + 1, width, w)  # the columns fill the window
-            row = lines[self.row_of(lines[:-10], long_name[:20])]
-            self.assertIn(long_name, row)
-            self.assertTrue(SHORT_DATE.fullmatch(row[x["LAST WORKED"]:].strip()), row)
-
-    def test_name_is_its_longest_name_plus_two_with_no_cap(self):
-        """Before spare width NAME is its longest name + 2 (29 here); with STATUS 8 and 12, 14, 14, 12 that
-        is 89, + 6 = 95: at 101 the 6 spare are one each (roost draws nothing under 100). At 250, 155 spare: NAME is already whole and nothing
-        needs CATEGORY or TAGS to grow, so it is 25 each + 1 to NAME through TAGS. A name of 65 has no
-        cap: NAME 67 once there is room (114 + 19 = 133), and at 250 the 117 left after NAME's 19 is 19
-        each + 1 to NAME, STATUS, SESSIONS."""
-        names = ["Printer fleet consolidation", "Laptop refresh"]  # the longest is 27
-        projects = [self.project(f"p{i}", label=n, last=time.time() - i) for i, n in enumerate(names)]
-        for w, want in ((101, (30, 9, 13, 15, 15, 13)), (250, (55, 34, 38, 40, 40, 37))):
-            self.assertEqual(self.six(self.drawn_widths(projects, w)[1]), want, w)
-        longer = projects + [self.project("p9", label="x" * 47 + " and a little more")]  # 65
-        for w, want in ((133, (67, 8, 12, 14, 14, 12)), (250, (87, 28, 32, 33, 33, 31))):
-            self.assertEqual(self.six(self.drawn_widths(longer, w)[1]), want, w)
-
-    def test_projects_name_ignores_the_name_width_setting(self):
-        names = ["Printer fleet consolidation", "Laptop refresh"]
+    def test_the_name_width_setting_doesnt_change_the_sidebar(self):
+        names = ["Printer fleet consolidation for every office", "Laptop refresh"]
         projects = [self.project(f"p{i}", label=n, last=time.time() - i) for i, n in enumerate(names)]
         drawn = {}
         for setting in (None, 16, 60):
             lines = self.run_on(projects, config={} if setting is None else {"name_width": setting}).lines
-            drawn[setting] = self.widths(self.columns(lines[self.head_index(lines)]))["NAME"]
-        self.assertEqual(drawn[16], drawn[None], drawn)
-        self.assertEqual(drawn[60], drawn[None], drawn)
+            drawn[setting] = self.sidebar(lines)
+        self.assertEqual(drawn[16], drawn[None])
+        self.assertEqual(drawn[60], drawn[None])
 
-    LONG_NAME = "Laptop refresh and printer fleet consolidation for two office"  # 61: NAME 63 whole
-    LONG_CAT = "vendor-evaluation-and-procureme"  # 31: CATEGORY 32 whole
-    LONG_TAGS = ["alpha", "bravo", "charlie", "delta"]  # "alpha, bravo, charlie, delta", 28: TAGS 29 whole
 
-    def long_values(self):
-        return [self.project("long-values", label=self.LONG_NAME, status="active", category=self.LONG_CAT,
-                             tags=self.LONG_TAGS, last=self.PAST)]
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class TwoPanes(unittest.TestCase):
+    """The Projects tab in two panes, under the search row: the sidebar on the left, SIDEBAR_W columns
+    wide, listing project_rows() with a marker at a row's right end, and the selected row's detail pane
+    on the right, taking the rest of the width."""
+    run_on, on_project, chosen = ProjectRows.run_on, ProjectRows.on_project, staticmethod(ProjectRows.chosen)
+    select, keys, sidebar = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(ProjectRows.sidebar)
+    SIZE = (120, 40)
+    DESCRIPTION = ("Consolidate the office printers onto one driver, retire the two oldest models, and move toner "
+                   "orders to the new supplier before the quarter closes.")
 
-    def test_a_window_exactly_wide_enough_leaves_nothing_spare(self):
-        """Before spare width: NAME 48 (a name of 61, capped until there is spare), STATUS 8, SESSIONS 12,
-        CATEGORY 14, TAGS 14, LAST WORKED 12 = 108; with the offset and margin, 114 columns. At 114
-        those are the widths drawn and LAST WORKED's title is whole; one column fewer narrows LAST
-        WORKED (as today); one column more goes to NAME."""
-        p = self.long_values()
-        x, wd, width, lines = self.drawn_widths(p, 114)
-        self.assertEqual(self.six(wd), (48, 8, 12, 14, 14, 12))
-        self.assertIn("LAST WORKED", lines[self.head_index(lines)])
-        x, wd, width, lines = self.drawn_widths(p, 113)
-        self.assertEqual(self.six(wd), (48, 8, 12, 14, 14, 11))
-        x, wd, width, lines = self.drawn_widths(p, 115)
-        self.assertEqual(self.six(wd), (49, 8, 12, 14, 14, 12))
+    def setUp(self):
+        """Read from a temp Projects folder: Printer fleet (a running Session and a Handoff: ●), Restore
+        drill (a Handoff, no Sessions: ◆), Quiet one (neither), Badge rollout (a Handoff, so ◆ itself, with
+        sub-projects Badge Printers, running, and beta, ready: ● ◆ while folded), and Old network, closed."""
+        Projects.setUp(self)  # temp Projects folder, read here before the screens' stand-ins replace the readers
+        self.addCleanup(Projects.tearDown, self)
+        fix, laptop = session("Printer fix", mins=5, tokens=41000), session("Laptop refresh", state="waiting")
 
-    def test_name_grows_past_48_before_any_other_column_grows(self):
-        """A name of 61 (NAME whole at 63), with long CATEGORY and TAGS waiting: the first 15 spare
-        columns all go to NAME, and CATEGORY and TAGS stay 14 and cut until NAME is whole."""
-        p = self.long_values()
-        for w, name_w in ((114 + 7, 55), (114 + 15, 63)):
-            x, wd, width, lines = self.drawn_widths(p, w)
-            self.assertEqual(self.six(wd), (name_w, 8, 12, 14, 14, 12), w)
-            row = lines[self.row_of(lines[:-10], self.LONG_NAME[:20])]
-            self.assertTrue(row[x["CATEGORY"]:x["TAGS"]].rstrip().endswith("…"), (w, row))
-            self.assertTrue(row[x["TAGS"]:x["LAST WORKED"]].rstrip().endswith("…"), (w, row))
-            if name_w == 63:
-                self.assertIn(self.LONG_NAME, row)
+        def readme(label, ids=(), status="active", category="", tags=(), description="s"):
+            listed = "".join(f"\n  - name: x\n    id: {i}" for i in ids) or " []"
+            return (f"---\ndescription: {json.dumps(description)}\nstatus: {status}\n"
+                    + (f"category: {category}\n" if category else "") + (f"tags: [{', '.join(tags)}]\n" if tags else "")
+                    + f"sessions:{listed}\n---\n\n# {label}\n")
+        Projects.project(self, "fleet", readme("Printer fleet", [fix["id"]], "awaiting-vendor", "procurement", ["zq-tag"],
+                                               self.DESCRIPTION), handoffs=[TODAY()])
+        Projects.project(self, "drill", readme("Restore drill", category="drills"), handoffs=[TODAY()])
+        Projects.project(self, "quiet", readme("Quiet one"))
+        Projects.project(self, "old", readme("Old network", status="closed"), handoffs=[TODAY()])
+        Projects.project(self, "rollout", readme("Badge rollout"), handoffs=[TODAY()])
+        alpha = SubProjects.sub(self, "rollout", "alpha", sessions=[("Laptop refresh", laptop["id"])])
+        (alpha / "README.md").write_text((alpha / "README.md").read_text().replace("\n# alpha\n", "\n# Badge Printers\n"))
+        SubProjects.sub(self, "rollout", "beta", handoffs=[(TODAY(), "x")])
+        self.projects = roost.read_projects([fix, laptop])
+        TextualScreens.setUp(self)  # self.sessions: Printer fix (idle) and Laptop refresh (waiting), the same ids
 
-    def test_category_and_tags_grow_to_show_long_values_once_name_is_whole(self):
-        """NAME is whole at 129 columns. The next spare columns go to CATEGORY and TAGS, split evenly while
-        both need more (10 spare: 5 each, 19 and 19), until each shows its longest value whole: CATEGORY
-        its 31 + 1, TAGS its 28 + 1 (129 + 18 + 15 = 162). Nothing else grows meanwhile."""
-        p = self.long_values()
-        x, wd, width, lines = self.drawn_widths(p, 129 + 10)
-        self.assertEqual(self.six(wd), (63, 8, 12, 19, 19, 12))
-        x, wd, width, lines = self.drawn_widths(p, 162)
-        self.assertEqual(self.six(wd), (63, 8, 12, 32, 29, 12))
-        row = lines[self.row_of(lines[:-10], self.LONG_NAME[:20])]
-        self.assertEqual(row[x["CATEGORY"]:x["TAGS"]].rstrip(), self.LONG_CAT)
-        self.assertEqual(row[x["TAGS"]:x["LAST WORKED"]].rstrip(), ", ".join(self.LONG_TAGS))
-        self.assertEqual(5 + sum(wd.values()) + 1, width)  # every column whole: they fill the window exactly
+    @staticmethod
+    def at(lines, text):
+        return next((i for i, l in enumerate(lines) if text in l), None)
 
-    def test_an_odd_category_and_tags_split_gives_the_extra_column_to_category(self):
-        """NAME is whole at 129; 11 spare after that, both still needing more: CATEGORY 6, TAGS 5."""
-        x, wd, width, lines = self.drawn_widths(self.long_values(), 129 + 11)
-        self.assertEqual(self.six(wd), (63, 8, 12, 20, 19, 12))
+    @staticmethod
+    def grab(seen, label):
+        """A step that keeps the screen's lines and its bold runs under label."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            seen[label] = (screen_text(pilot.app), bold_text(pilot.app))
+        return step
 
-    def test_once_category_or_tags_is_whole_the_other_takes_the_rest_before_the_even_spread(self):
-        """NAME is whole at 129. CATEGORY of 17 needs 18 (4 more), TAGS of 28 needs 29 (15 more): with 12
-        spare, CATEGORY stops at 18 and TAGS takes the other 8; with 19 both are whole and nothing is
-        spread; 6 more is then one each. The other way round, TAGS "alpha, bravo, q4" (16) needs 17 (3
-        more): with 10 spare TAGS stops at 17 and CATEGORY of 31 takes the other 7."""
-        def one(category, tags):
-            return [self.project("long-values", label=self.LONG_NAME, status="active", category=category,
-                                 tags=tags, last=self.PAST)]
-        short_cat = one("vendor-evaluation", self.LONG_TAGS)
-        for w, want in ((129 + 12, (63, 8, 12, 18, 22, 12)), (129 + 19, (63, 8, 12, 18, 29, 12)),
-                        (129 + 19 + 6, (64, 9, 13, 19, 30, 13))):
-            self.assertEqual(self.six(self.drawn_widths(short_cat, w)[1]), want, w)
-        short_tags = one(self.LONG_CAT, ["alpha", "bravo", "q4"])
-        self.assertEqual(self.six(self.drawn_widths(short_tags, 129 + 10)[1]), (63, 8, 12, 21, 17, 12))
+    @staticmethod
+    def detail_name(bold):
+        """The bold text the detail pane draws (right of the sidebar): the selected row's name first."""
+        return [t for y, x, t in sorted(bold) if x >= roost.SIDEBAR_W]
 
-    def test_what_is_left_is_spread_evenly_across_all_six_columns_leftmost_first(self):
-        """Once NAME, CATEGORY, and TAGS are whole (162 columns), what is left goes to all six evenly; a
-        remainder goes one each to the leftmost columns. Short values that never needed to grow (CATEGORY
-        and TAGS of a few letters) get the same share from 14."""
-        p = self.long_values()
-        for w, want in ((162 + 6, (64, 9, 13, 33, 30, 13)),
-                        (162 + 6 * 3 + 5, (67, 12, 16, 36, 33, 15)),  # 3 each, then NAME to TAGS 1 more
-                        (162 + 1, (64, 8, 12, 32, 29, 12))):  # a single column: NAME's
-            x, wd, width, lines = self.drawn_widths(p, w)
-            self.assertEqual(self.six(wd), want, w)
-            self.assertEqual(5 + sum(wd.values()) + 1, width, w)
-        short = [self.project("short-values", label="Short", status="active", category="ops", tags=["q4"], last=self.PAST)]
-        # before spare: NAME 16, STATUS 8, 12, 14, 14, 12 = 76, + 6 = 82; 82 + 6 * 5 + 3 = 115
-        x, wd, width, lines = self.drawn_widths(short, 115)
-        self.assertEqual(self.six(wd), (22, 14, 18, 19, 19, 17))
+    @staticmethod
+    def row_name(r):
+        """The name the detail pane gives a row."""
+        return {"project": lambda: roost.label_of(r.item), "sub": lambda: r.item["id"], "head": lambda: r.sec,
+                "new": lambda: "+ New project"}[r.kind]()
 
-    def test_long_category_and_tags_are_cut_with_an_ellipsis(self):
-        """In a window with no spare width: a name of 40 (NAME 42), STATUS 8, 12, 14, 14, 12, + 6 = 108."""
-        cat, tags = "vendor-evaluation-and-procurement", ["alpha", "bravo", "charlie", "delta"]
-        label = "Vendor evaluation and procurement review"  # 40: long enough that the exact fit is over 100
-        projects = [self.project("long-one", label=label, category=cat, tags=tags),
-                    self.project("short-one", category="ops", tags=["q4"])]
-        lines = self.run_on(projects, size=(108, 30)).lines
-        x = self.columns(lines[self.head_index(lines)])
-        long_row, short_row = (lines[self.row_of(lines[:-10], text)] for text in (label, "short-one"))
-        for value, start, end in ((cat, x["CATEGORY"], x["TAGS"]), (", ".join(tags), x["TAGS"], x["LAST WORKED"])):
-            cell = long_row[start:end].rstrip()
-            self.assertTrue(cell.endswith("…"), cell)
-            self.assertTrue(value.startswith(cell[:-1]) and len(cell) > 1, cell)
-            self.assertLessEqual(len(cell), 14)
-        self.assertEqual(short_row[x["CATEGORY"]:x["TAGS"]].strip(), "ops")
-        self.assertEqual(short_row[x["TAGS"]:x["LAST WORKED"]].strip(), "q4")
+    def test_the_sidebar_is_on_the_left_and_the_detail_pane_beside_it_under_the_search_row(self):
+        W = roost.SIDEBAR_W
+        self.assertEqual(W, 34)
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet")], size=self.SIZE)
+        lines, bold = seen["fleet"]
+        search = self.at(lines, "folder ")  # the search row: the folder the tab lists from, at its right
+        self.assertIsNotNone(search, lines)
+        side = self.sidebar(lines)
+        ys = {}
+        for label in ("Printer fleet", "Restore drill", "Badge rollout", "+ New project"):
+            ys[label] = self.at(side, label)
+            self.assertIsNotNone(ys[label], (label, side))
+            self.assertGreater(ys[label], search, label)
+            self.assertLess(side[ys[label]].index(label), 8, (label, side[ys[label]]))  # from the left edge
+        named = [(y, x) for y, x, t in bold if "Printer fleet" in t and x >= W]
+        self.assertTrue(named, f"no bold Printer fleet right of the sidebar: {bold}")
+        y, x = named[0]
+        self.assertGreater(y, search)
+        self.assertLess(y, ys["+ New project"], "the detail pane is beside the sidebar, not under it")
+        for label, value in (("Category", "procurement"), ("Tags", "zq-tag"), ("Description", self.DESCRIPTION[:30])):
+            i = next((i for i, l in enumerate(lines) if value in l[W:]), None)
+            self.assertIsNotNone(i, (value, lines))
+            self.assertIn(label, lines[i][W:], lines[i])
+            self.assertGreater(i, search)
+        line = next(l for l in lines if self.DESCRIPTION[:30] in l)
+        self.assertGreater(len(line), 100, "the detail pane takes the rest of the width: " + line)
 
-    def test_the_column_titles_line_up_with_their_columns(self):
-        import unittest.mock
-        p = self.project("lined-up", [self.sessions[1]], label="Lined up", status="active", category="ops", tags=["q4"],
-                         last=self.PAST)
-        with unittest.mock.patch.object(FMT, "date_order", lambda: "MDY"):
-            lines = self.run_on([p]).lines
-        x = self.columns(lines[self.head_index(lines)])
-        row = lines[self.row_of(lines[:-10], "Lined up")]
-        for title, text in (("NAME", "Lined up"), ("STATUS", "active"), ("SESSIONS", "◆1"), ("CATEGORY", "ops"),
-                            ("TAGS", "q4"), ("LAST WORKED", "01/05/25")):
-            self.assertEqual(row[x[title]:x[title] + len(text)], text, (title, row))
-
-    def test_columns_give_up_width_in_order_as_the_window_narrows(self):
-        """From the window exactly wide enough for every column (NAME 48 + STATUS 61 + 12 + 14 + 14 + 12,
-        + 6 = 167: no spare width) down to 100, one long name and a long status: LAST WORKED goes first
-        (and isn't drawn), then SESSIONS, then TAGS, then CATEGORY, then STATUS; NAME holds its target
-        (48) throughout. A narrowed column's title is cut with "…". LAST WORKED is 12 wide: once SESSIONS
-        is whole, 12 columns more fit everything."""
-        name = "Quarterly laptop refresh and printer fleet consolidation for every office"
-        status = "waiting on the vendor's revised quote for the second office"
-        cat, tags = "vendor-evaluation", ["alpha", "bravo", "charlie"]
-        p = self.project("narrowing", label=name, status=status, category=cat, tags=tags, last=self.PAST)
-        frames = {}
-
-        async def sweep(pilot):
-            for w in range(EXACT, 99, -1):
-                await pilot.resize_terminal(w, 30)
-                await pilot.pause()
-                frames[w] = screen_text(pilot.app)
-        S = len(status) + 2
-        EXACT = 48 + S + 12 + 14 + 14 + 12 + 6
-        self.run_on([p], [sweep], size=(EXACT, 30))
-
-        def frame(w):
-            lines = frames[w]
-            x = self.columns(lines[self.head_index(lines)])
-            row = lines[self.row_of(lines[:-10], name[:12])]
-            return x, self.widths(x), row
-        x, wd, row = frame(EXACT)
-        self.assertEqual(wd["STATUS"], S)
-        cat_full, tags_full = row[x["CATEGORY"]:x["CATEGORY"] + 14].rstrip(), row[x["TAGS"]:x["TAGS"] + 14].rstrip()
-        phases, cut_sessions = set(), []
-        for w in sorted(frames, reverse=True):
-            x, wd, row = frame(w)
-            lw, ses, tg, ct = ("LAST WORKED" in x), ("SESSIONS" in x), ("TAGS" in x), ("CATEGORY" in x)
-            cat_ok = ct and row[x["CATEGORY"]:x["CATEGORY"] + 14].rstrip() == cat_full
-            tags_ok = tg and row[x["TAGS"]:x["TAGS"] + 14].rstrip() == tags_full
-            status_ok = status in row
-            name_w = wd["NAME"]
-            if lw:  # LAST WORKED still has width: every other column is whole
-                self.assertEqual((wd.get("SESSIONS"), wd.get("CATEGORY"), wd.get("TAGS")), (12, 14, 14), w)
-                self.assertTrue(status_ok, w)
+    def test_the_sidebar_lists_the_rows_with_no_column_titles_or_cells(self):
+        W = roost.SIDEBAR_W
+        seen = {}
+        app = self.run_on(self.projects, [self.on_project("drill"), self.grab(seen, "drill")], size=self.SIZE)
+        lines, _ = seen["drill"]
+        side = self.sidebar(lines)
+        for title in ("NAME", "STATUS", "SESSIONS", "CATEGORY", "TAGS", "LAST WORKED"):
+            self.assertFalse([l for l in lines if re.search(rf"\b{title}\b", l)], title)
+        for cell in ("awaiting-vendor", "procurement", "zq-tag"):  # Printer fleet's status, category, and tag
+            self.assertFalse([l for l in lines if cell in l], cell)
+        for l in side:
+            self.assertNotRegex(l, r"[○◆●]\d", "no running counts in the sidebar")
+            self.assertNotRegex(l, SHORT_DATE)
+            self.assertNotRegex(l, r"\d:\d\d (AM|PM)")
+        ui, last = app.ui, -1
+        rows = ui.project_rows()
+        self.assertEqual([r.kind for r in rows if r.kind in ("head", "new")], ["head", "head", "head", "new"])
+        for r in rows:  # top to bottom, as project_rows() lists them
+            if r.kind == "head":
+                want = f"{'▸' if r.sec in ui.folded else '▾'} {r.sec} ({r.item['count']})"
+            elif r.kind == "project":
+                want = ("▸ " if any(not s["closed"] for s in r.item.get("subs") or []) else "") + roost.label_of(r.item)
             else:
-                self.assertNotRegex(row, SHORT_DATE, w)
-                self.assertNotRegex(row, r"\d:\d\d (AM|PM)", w)
-            if ses:  # SESSIONS has width: TAGS, CATEGORY, STATUS are whole
-                self.assertTrue(tags_ok and cat_ok and status_ok, (w, row))
-            if tg:  # TAGS has width: CATEGORY and STATUS are whole
-                self.assertTrue(cat_ok and status_ok, (w, row))
-            if ct:  # CATEGORY has width: STATUS is whole
-                self.assertTrue(status_ok, (w, row))
-            self.assertEqual(name_w, 48, w)  # others are still there: NAME holds its target
-            header = frames[w][self.head_index(frames[w])]
-            for title, _ in self.TITLES:
-                if title in wd and wd[title] < len(title):  # a narrowed title is cut with …
-                    cell = header[x[title]:x[title] + wd[title]].rstrip()
-                    self.assertTrue(cell.endswith("…") and title.startswith(cell[:-1]), (w, title, cell))
-            if ses and wd.get("SESSIONS", 12) < 12:
-                cut_sessions.append(w)
-            phases.add("all" if lw else "sessions" if ses else "tags" if tg else "category" if ct else "status")
-        self.assertEqual(phases, {"all", "sessions", "tags", "category", "status"})
-        whole = max(cut_sessions) + 1  # the narrowest window with SESSIONS whole: LAST WORKED has nothing
-        look = lambda w: (frames[w][self.head_index(frames[w])].rstrip(), frame(w)[2].rstrip())
-        self.assertEqual(look(whole + 12), look(EXACT))  # LAST WORKED's 12 columns fit everything
-        last_title = look(whole + 10)[0][x_lw:] if (x_lw := self.columns(look(whole + 10)[0]).get("LAST WORKED")) else ""
-        self.assertTrue(last_title.endswith("…") and "LAST WORKED".startswith(last_title[:-1]), last_title)  # 10 of 12: cut
+                want = "+ New project"
+            y = next((i for i, l in enumerate(side) if i > last and want in l), None)
+            self.assertIsNotNone(y, (want, side))
+            last = y
 
+    def test_sub_project_rows_show_their_label_indented_under_their_project(self):
+        seen = {}
+        self.run_on(self.projects, [self.select(lambda ui: ui.subs_open.add("rollout")), self.grab(seen, "open")],
+                    size=self.SIZE)
+        side = self.sidebar(seen["open"][0])
+        p = self.at(side, "▾ Badge rollout")
+        self.assertIsNotNone(p, side)
+        self.assertTrue(side[p + 1].strip().startswith("Badge Printers"), side[p + 1])
+        self.assertTrue(side[p + 2].strip().startswith("beta"), side[p + 2])
+        name_x = side[p].index("Badge rollout")
+        self.assertGreater(side[p + 1].index("Badge Printers"), name_x)
+        self.assertGreater(side[p + 2].index("beta"), name_x)
+
+    def test_a_marker_sits_at_the_right_end_of_its_sidebar_row(self):
+        W = roost.SIDEBAR_W
+        seen = {}
+        app = self.run_on(self.projects, [self.on_project("quiet"), self.grab(seen, "folded"),
+                                          self.select(lambda ui: ui.subs_open.add("rollout")), self.grab(seen, "open")],
+                          size=self.SIZE)
+        cases = {"folded": [("Printer fleet", "●"), ("Restore drill", "◆"), ("Badge rollout", "● ◆"), ("Quiet one", "")],
+                 "open": [("Badge rollout", "◆"), ("Badge Printers", "●")]}
+        for when, marks in cases.items():
+            side = self.sidebar(seen[when][0])
+            for label, mark in marks:
+                y = self.at(side, label)
+                self.assertIsNotNone(y, (label, side))
+                row = side[y]
+                end = row.rstrip(" │┃▏▕")
+                if mark:
+                    self.assertTrue(end.endswith(mark), (when, label, row))
+                    self.assertFalse(set("●◆") & set(end[:-len(mark)]), (when, label, row))  # only the marker
+                    self.assertGreaterEqual(len(end), W - 4, (when, label, row))  # at the right end, not after the name
+                else:
+                    self.assertFalse(set("●◆") & set(row), (when, label, row))
+        beta = next(r for r in app.ui.project_rows() if r.kind == "sub" and r.item["slug"] == "beta")
+        self.assertEqual(app.ui.markers(beta), "◆")
+
+    def test_up_and_down_move_the_selection_and_the_detail_pane_shows_the_selected_row(self):
+        seen, at = {}, {}
+
+        async def where(pilot):
+            at["rows"] = pilot.app.ui.project_rows()
+            at["start"] = pilot.app.ui.psel
+        self.run_on(self.projects, [self.on_project("fleet"), where, self.grab(seen, "at"), self.keys("down"),
+                                    self.grab(seen, "down"), self.keys("up"), self.grab(seen, "up")], size=self.SIZE)
+        rows, i = at["rows"], at["start"]
+        self.assertEqual(self.detail_name(seen["at"][1])[0], "Printer fleet")
+        self.assertEqual(self.detail_name(seen["down"][1])[0], self.row_name(rows[i + 1]))
+        self.assertEqual(self.detail_name(seen["up"][1])[0], "Printer fleet")
+
+    def test_right_and_left_open_and_close_a_projects_sub_projects_in_the_sidebar(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("rollout"), self.keys("right"), self.grab(seen, "right"),
+                                    self.keys("left"), self.grab(seen, "left")], size=self.SIZE)
+        self.assertIsNotNone(self.at(self.sidebar(seen["right"][0]), "Badge Printers"))
+        self.assertIsNone(self.at(self.sidebar(seen["left"][0]), "Badge Printers"))
+
+    def test_enter_opens_the_selected_rows_menu(self):
+        app = self.run_on(self.projects, [self.on_project("drill"), self.keys("enter")], size=self.SIZE)
+        self.assertTrue(app.ui.choosing)
+        self.assertEqual(app.ui.choosing["title"], "Restore drill")
+
+    def test_a_click_selects_a_sidebar_row_a_double_click_runs_its_first_action_and_a_right_click_opens_its_menu(self):
+        import unittest.mock
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "before")], size=self.SIZE)
+        y = self.at(self.sidebar(seen["before"][0]), "Restore drill")
+        self.assertIsNotNone(y)
+        app = self.run_on(self.projects, [self.on_project("fleet"), lambda pilot: pilot.click(offset=(6, y)),
+                                          self.grab(seen, "clicked")], size=self.SIZE)
+        self.assertEqual(self.chosen(app), "drill")
+        self.assertIsNone(app.ui.choosing)
+        self.assertEqual(self.detail_name(seen["clicked"][1])[0], "Restore drill")
+        ran = []
+        with unittest.mock.patch.object(roost.UI, "row_actions", lambda ui, r: [("First", lambda: ran.append(r.item["id"]))]):
+            self.run_on(self.projects, [self.on_project("fleet"), lambda pilot: pilot.click(offset=(6, y), times=2)],
+                        size=self.SIZE)
+        self.assertEqual(ran, ["drill"])
+        app = self.run_on(self.projects, [self.on_project("fleet"), lambda pilot: pilot.click(offset=(6, y), button=3)],
+                          size=self.SIZE)
+        self.assertTrue(app.ui.choosing)
+        self.assertEqual(app.ui.choosing["title"], "Restore drill")
 
 
 class SubProjects(unittest.TestCase):
@@ -1935,7 +1832,7 @@ class ProjectRename(unittest.TestCase):
 class SubProjectLabels(unittest.TestCase):
     """A sub-project's row on the Projects tab shows its label (its README heading); its id stays
     <project>/<slug>, and the Sessions tab's PROJECT column shows that id."""
-    run_on, listing, head_index = ProjectRows.run_on, ProjectRows.listing, staticmethod(ProjectRows.head_index)
+    run_on, sidebar = ProjectRows.run_on, staticmethod(ProjectRows.sidebar)
     select = staticmethod(TextualScreens.select)
 
     def setUp(self):
@@ -1952,7 +1849,7 @@ class SubProjectLabels(unittest.TestCase):
     def test_a_sub_row_shows_its_label(self):
         app = self.run_on(self.projects, [self.select(lambda ui: ui.subs_open.add("rollout"))])
         self.assertEqual([r.item["id"] for r in app.ui.project_rows() if r.kind == "sub"], ["rollout/alpha"])
-        rows = self.listing(app.lines)
+        rows = self.sidebar(app.lines)
         self.assertTrue([l for l in rows if "Badge Printers" in l], rows)
 
     def test_the_sessions_tab_names_a_sub_project_by_its_id(self):
@@ -1965,6 +1862,187 @@ class SubProjectLabels(unittest.TestCase):
         row = next(l for l in app.lines if "Badge work" in l)
         self.assertIn("rollout/alpha", row)
         self.assertNotIn("Badge Printers", row)
+
+
+class ProjectMarkers(unittest.TestCase):
+    """markers(r), the marker at a sidebar row's right end: ● when a Session it lists is running; ◆ when
+    it's ready to pick up (open, nothing it lists running, a Handoff, and its newest Session, if any,
+    wrapped up); a folded project adds its open sub-projects' markers, ● first."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    wrapped_project = Projects.wrapped_project
+
+    def ui(self, sessions=()):
+        ui = Projects.ui(self)
+        ui.folded = set()
+        ui.sessions = list(sessions)
+        ui.load_projects()
+        return ui
+
+    @staticmethod
+    def marks(ui):
+        """{(kind, id): its markers} for every row the tab lists."""
+        return {(r.kind, r.item["id"]): ui.markers(r) for r in ui.project_rows()}
+
+    @staticmethod
+    def readme(ids=(), status="active"):
+        listed = "".join(f"\n  - name: {i}\n    id: {i}" for i in ids) or " []"
+        return f"---\nsummary: s\nstatus: {status}\nsessions:{listed}\n---\n\n# Title\n"
+
+    def test_a_project_with_a_running_session_shows_a_dot(self):
+        """Any state but closed is running; with something running, a Handoff doesn't add ◆."""
+        self.project("b", self.readme(["aa1b9a71-0000", "bb2c0000-0000"]), handoffs=[TODAY()])
+        for state in ("idle", "busy", "waiting", "blocked"):
+            ui = self.ui([dict(session("Live", state=state), id="aa1b9a71-0000"),
+                          dict(session("Gone", state="closed", kind=None, mins=90), id="bb2c0000-0000")])
+            self.assertEqual(self.marks(ui)[("project", "b")], "●", state)
+
+    def test_a_project_with_handoffs_and_no_sessions_is_ready(self):
+        self.project("b", self.readme(), handoffs=[TODAY()])
+        self.project("c", self.readme())  # no Handoff: nothing to pick up
+        m = self.marks(self.ui())
+        self.assertEqual((m[("project", "b")], m[("project", "c")]), ("◆", ""))
+
+    def test_a_project_is_ready_only_when_its_newest_session_is_wrapped_up(self):
+        end = self.wrapped_project(["aa1b9a71-0000", "bb2c0000-0000"])
+        wrapped = dict(session("Wrapped", state="closed", kind=None, mins=60), id="aa1b9a71-0000", active=end)
+        # bb2c0000-0000's Handoff stops three hours ago, so it covers neither closed Session below
+        ui = self.ui([wrapped, dict(session("Older", state="closed", kind=None, mins=90), id="bb2c0000-0000")])
+        self.assertEqual([ui.wrapped_up(ui.projects[0], s) for s in ui.sessions], [True, False])  # the fixture
+        self.assertEqual(self.marks(ui)[("project", "b")], "◆")  # the newest is wrapped up; an older one isn't
+        ui = self.ui([wrapped, dict(session("Newer", state="closed", kind=None, mins=30), id="bb2c0000-0000")])
+        self.assertEqual(self.marks(ui)[("project", "b")], "")  # the newest isn't wrapped up
+
+    def test_a_closed_project_is_never_ready(self):
+        self.project("b", self.readme(status="closed"), handoffs=[TODAY()])
+        self.project("c", self.readme(["cc3d0000-0000"], status="closed"), handoffs=[TODAY()])
+        m = self.marks(self.ui([dict(session("Live"), id="cc3d0000-0000")]))
+        self.assertEqual((m[("project", "b")], m[("project", "c")]), ("", "●"))
+
+    def test_headers_and_new_project_have_no_marker(self):
+        self.project("b", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        rows = [r for r in ui.project_rows() if r.kind in ("head", "new")]
+        self.assertEqual([r.kind for r in rows], ["head", "new"])
+        self.assertEqual([ui.markers(r) for r in rows], ["", ""])
+
+    def test_a_sub_project_row_has_its_own_marker_and_an_opened_project_only_its_own(self):
+        self.project("rollout", self.readme())  # no Handoff, no Sessions: nothing of its own
+        self.sub("rollout", "alpha", sessions=[("Live", "cc3d0000-0000")])
+        self.sub("rollout", "beta", status="blocked", handoffs=[(TODAY(), "x")])  # open, though blocked
+        self.sub("rollout", "delta")
+        ui = self.ui([dict(session("Live"), id="cc3d0000-0000")])
+        ui.subs_open.add("rollout")
+        m = self.marks(ui)
+        self.assertEqual([m[("sub", f"rollout/{s}")] for s in ("alpha", "beta", "delta")], ["●", "◆", ""])
+        self.assertEqual(m[("project", "rollout")], "")
+
+    def test_a_folded_project_shows_its_open_sub_projects_markers(self):
+        self.project("rollout", self.readme())
+        self.sub("rollout", "alpha", sessions=[("Live", "cc3d0000-0000")])
+        self.sub("rollout", "beta", handoffs=[(TODAY(), "x")])
+        self.project("other", self.readme())
+        self.sub("other", "gamma", status="done", sessions=[("Busy", "dd4e0000-0000")], handoffs=[(TODAY(), "x")])  # done: not counted
+        self.sub("other", "delta", sessions=[("Gone", "ee5f0000-0000")])  # closed, not wrapped up, no Handoff
+        ui = self.ui([dict(session("Live"), id="cc3d0000-0000"), dict(session("Busy", state="busy"), id="dd4e0000-0000"),
+                      dict(session("Gone", state="closed", kind=None), id="ee5f0000-0000")])
+        m = self.marks(ui)
+        self.assertEqual((m[("project", "rollout")], m[("project", "other")]), ("● ◆", ""))
+        ui.subs_open.add("rollout")
+        self.assertEqual(self.marks(ui)[("project", "rollout")], "")
+
+    def test_a_folded_projects_own_marker_and_its_sub_projects_combine_dot_first(self):
+        self.project("ready", self.readme(), handoffs=[TODAY()])  # ready itself, a running sub-project
+        self.sub("ready", "alpha", sessions=[("Live", "cc3d0000-0000")])
+        self.project("live", self.readme(["dd4e0000-0000"]))  # running itself, a ready sub-project
+        self.sub("live", "beta", handoffs=[(TODAY(), "x")])
+        self.project("both", self.readme(["ee5f0000-0000"]))  # running itself and in a sub-project: one ●
+        self.sub("both", "gamma", sessions=[("Third", "ff600000-0000")])
+        ui = self.ui([dict(session("Live"), id="cc3d0000-0000"), dict(session("Own"), id="dd4e0000-0000"),
+                      dict(session("Mine"), id="ee5f0000-0000"), dict(session("Third"), id="ff600000-0000")])
+        m = self.marks(ui)
+        self.assertEqual([m[("project", p)] for p in ("ready", "live", "both")], ["● ◆", "● ◆", "●"])
+        ui.subs_open.update({"ready", "live", "both"})
+        m = self.marks(ui)
+        self.assertEqual([m[("project", p)] for p in ("ready", "live", "both")], ["◆", "●", "●"])
+
+    def test_the_demo_has_a_running_project_and_a_ready_one(self):
+        ui = Projects.ui(self)
+        ui.folded = set()
+        ui.sessions = roost.demo_sessions()
+        ui.projects = roost.demo_projects(ui.sessions)
+        shown = {r.item["id"]: ui.markers(r) for r in ui.project_rows() if r.kind == "project"}
+        self.assertTrue([p for p, m in shown.items() if "●" in m], shown)
+        self.assertTrue([p for p, m in shown.items() if "◆" in m], shown)
+
+
+class SessionsField(unittest.TestCase):
+    """The detail pane's Sessions field for a project or sub-project: its running counts (◆ need input,
+    ● working, ○ idle), then N unwrapped when there are any; none running when neither."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    ui, readme, wrapped_project = ProjectMarkers.ui, staticmethod(ProjectMarkers.readme), Projects.wrapped_project
+
+    def fields(self, ui, kind, rid):
+        rows = ui.project_rows()
+        ui.psel = next(i for i, r in enumerate(rows) if r.kind == kind and r.item["id"] == rid)
+        return ui.project_panel(rows, 40, 120)[1]
+
+    def field(self, ui, kind, rid):
+        fields = self.fields(ui, kind, rid)
+        got = [str(v) for label, v in fields if label == "Sessions"]
+        self.assertEqual(len(got), 1, fields)
+        return got[0].strip()
+
+    def test_running_counts_then_unwrapped(self):
+        ids = ["aa1b9a71-0000", "bb2c0000-0000", "cc3d0000-0000", "dd4e0000-0000", "ee5f0000-0000"]
+        self.project("b", self.readme(ids), handoffs=[TODAY()])
+        ui = self.ui([dict(session("Asks", state="waiting"), id=ids[0]), dict(session("Works", state="busy"), id=ids[1]),
+                      dict(session("Sits"), id=ids[2]), dict(session("Sits too"), id=ids[3]),
+                      dict(session("Gone", state="closed", kind=None, mins=30), id=ids[4])])
+        self.assertRegex(self.field(ui, "project", "b"), r"^◆1\W+●1\W+○2\W+1 unwrapped$")
+
+    def test_only_unwrapped_sessions(self):
+        self.project("b", self.readme(["aa1b9a71-0000", "bb2c0000-0000"]), handoffs=[TODAY()])
+        ui = self.ui([dict(session("Gone", state="closed", kind=None, mins=30), id="aa1b9a71-0000"),
+                      dict(session("Gone too", state="closed", kind=None, mins=40), id="bb2c0000-0000")])
+        self.assertEqual(self.field(ui, "project", "b"), "2 unwrapped")
+
+    def test_none_running_when_nothing_runs_and_nothing_is_unwrapped(self):
+        self.project("c", self.readme())
+        end = self.wrapped_project(["aa1b9a71-0000"])
+        ui = self.ui([dict(session("Wrapped", state="closed", kind=None, mins=60), id="aa1b9a71-0000", active=end)])
+        self.assertTrue(ui.wrapped_up(next(p for p in ui.projects if p["id"] == "b"), ui.sessions[0]))  # the fixture
+        self.assertEqual(self.field(ui, "project", "b"), "none running")  # only a wrapped-up Session
+        self.assertEqual(self.field(ui, "project", "c"), "none running")  # no Sessions at all
+
+    def test_a_sub_projects_field_counts_its_own_sessions(self):
+        self.project("rollout", self.readme(), handoffs=[TODAY()])
+        self.sub("rollout", "alpha", sessions=[("Sits", "cc3d0000-0000")])
+        self.sub("rollout", "beta")
+        ui = self.ui([dict(session("Sits"), id="cc3d0000-0000")])
+        ui.subs_open.add("rollout")
+        self.assertEqual(self.field(ui, "sub", "rollout/alpha"), "○1")
+        self.assertEqual(self.field(ui, "sub", "rollout/beta"), "none running")
+        self.assertEqual(self.field(ui, "project", "rollout"), "none running")  # a sub-project's Sessions are its own
+
+    def test_a_header_has_no_sessions_field(self):
+        self.project("b", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        self.assertNotIn("Sessions", [label for label, _ in self.fields(ui, "head", "Recent")])
+
+
+class StatusLine(unittest.TestCase):
+    """status_line(): (left, right) for the line above the key bar; the right says how many Sessions are running."""
+    setUp, tearDown = Projects.setUp, Projects.tearDown
+
+    def test_it_counts_the_sessions_that_arent_closed(self):
+        ui = Projects.ui(self)
+        ui.sessions = [session("A", state="busy"), session("B", state="waiting"), session("C"),
+                       session("D", state="closed", kind=None)]
+        self.assertEqual(ui.status_line(), ("", "3 running"))
+        ui.sessions = [session("D", state="closed", kind=None)]
+        self.assertEqual(ui.status_line(), ("", "nothing running"))
+        ui.sessions = []
+        self.assertEqual(ui.status_line(), ("", "nothing running"))
 
 
 if __name__ == "__main__":

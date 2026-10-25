@@ -61,8 +61,8 @@ def read_project(folder, sessions=()):
         text = ""
     meta = frontmatter(text)
     linked = [x.get("id") for x in meta.get("sessions") or [] if isinstance(x, dict) and x.get("id")]
-    times = [t for t in map(handoff_time, sorted((folder / "handoffs").glob("*.md"))) if t]
-    times += [s["last"] for s in sessions if set(s.get("ids") or [s["id"]]) & set(linked)]
+    handed = [t for t in map(handoff_time, sorted((folder / "handoffs").glob("*.md"))) if t]
+    times = handed + [s["last"] for s in sessions if set(s.get("ids") or [s["id"]]) & set(linked)]
     covered = {}  # Session id -> where its newest Handoff stopped (its to:)
     for h in (folder / "handoffs").glob("*.md"):
         try:
@@ -80,6 +80,7 @@ def read_project(folder, sessions=()):
     return {"id": folder.name, "type": kind, "label": heading(text) or folder.name, "path": str(folder),
             "summary": described if isinstance(described, str) else "",  # its description
             "status": status, "category": category, "tags": tags, "sessions": linked, "last": max(times) if times else None,
+            "handed": max(handed) if handed else None,  # its newest Handoff
             "closed": status.lower() in CLOSED or (config.DONE / f"{folder.name}.md").exists(),
             "readme": (folder / "README.md").exists(), "archives": archives_due(folder),
             "adopted": (folder / "handoffs").is_dir(),  # in roost's shape; roost adopt (or Adopt it) brings it there

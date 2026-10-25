@@ -128,7 +128,7 @@ DEMO_LABELS = {  # each README's heading: the name the screens show
     "2026-10-network-hardening": "Network hardening", "2026-09-password-manager": "Password manager",
     "2026-10-asset-inventory": "Asset inventory", "2026-09-data-sharing-cleanup": "Shared link cleanup",
     "2026-07-endpoint-encryption": "Laptop encryption"}
-DEMO_WRAPPED = {10, 19, 20, 21, 22}  # closed Sessions whose project's newest Handoff covers their last message
+DEMO_WRAPPED = {10, 16, 19, 20, 21, 22}  # closed Sessions whose project's newest Handoff covers their last message
 DEMO_NOT_ADOPTED = {"2026-09-data-sharing-cleanup"}  # no handoffs/ yet: its actions offer Adopt it
 DEMO_CATEGORIES = {"2026-10-access-review-q4": "access", "2026-09-vendor-security-reviews": "vendors",
                    "2026-09-backup-restore-drill": "hardening", "2026-08-network-refresh": "infrastructure",
@@ -195,6 +195,7 @@ def demo_projects(sessions):
                     "summary": summary, "status": status,
                     "category": DEMO_CATEGORIES.get(pid, ""), "tags": DEMO_TAGS.get(pid, []),
                     "sessions": sids, "last": max(times) if times else None, "closed": status == "closed",
+                    "handed": now - hours * 3600 if hours is not None else None,
                     "readme": True, "adopted": pid not in DEMO_NOT_ADOPTED,
                     "covered": {ids[i]: last_of.get(ids[i], 0) + 60 for i in linked if i in DEMO_WRAPPED}})
     return out

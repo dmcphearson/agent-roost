@@ -191,6 +191,19 @@ if Widget:
                 row.put(w - len(text) - 2, text, attr)
             return [row]
 
+    class StatusBar(Region):
+        """The row above the key bar, on every tab: Sessions waiting on you at the left, how many run at the right."""
+        DEFAULT_CSS = "StatusBar { height: 1; }"
+
+        def lines(self):
+            ui, w = self.ui, self.size.width
+            left, right = ui.status_line()
+            row = self.line()
+            if left:
+                row.put(2, clip(left, w - len(right) - 6), ui.YELLOW | curses.A_BOLD)
+            row.put(w - len(right) - 3, right, ui.DIM)
+            return [row]
+
     class KeyBar(Region):
         """The bottom rows: each key in green, what it does in grey, and the message or warning at the
         right. A prompt or a confirmation takes its place."""

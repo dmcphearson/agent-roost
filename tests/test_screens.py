@@ -426,16 +426,22 @@ class TextualScreens(unittest.TestCase):
         self.assertNotIn("▸", line)
         self.assertNotIn("▾", line)
 
-    def test_a_project_with_a_running_session_has_no_marker_and_the_same_sessions_cell(self):
+    def test_a_project_with_a_running_session_has_no_open_marker_and_the_same_sessions_field(self):
         """Spec 1 and 2: a project with a running Session has no ▸ either, and a wrapped-up Session linked
-        beside the running one doesn't change its line (it isn't counted as unwrapped)."""
-        _, without = self.with_wrapped("Projects", [1])
+        beside the running one changes neither its sidebar row nor its Sessions field (it isn't counted
+        as unwrapped)."""
+        row = lambda lines: next(l[:roost.SIDEBAR_W] for l in lines if self.pid in l[:roost.SIDEBAR_W])
+        app, _ = self.with_wrapped("Projects", [1], [self.on_project("printer-fleet")])
+        without = self.screen(app)
         self.sessions = self.sessions[:2]
-        _, with_it = self.with_wrapped("Projects", [1, "wrapped"])
-        self.assertNotIn("▸", without)
-        self.assertNotIn("▾", without)
-        self.assertIn("◆1", without)
-        self.assertEqual(with_it, without)
+        app, _ = self.with_wrapped("Projects", [1, "wrapped"], [self.on_project("printer-fleet")])
+        with_it = self.screen(app)
+        self.assertNotIn("▸", row(without))
+        self.assertNotIn("▾", row(without))
+        self.assertIn("◆1", self.sessions_field(without))
+        self.assertNotIn("unwrapped", self.sessions_field(without))
+        self.assertEqual(row(with_it), row(without))
+        self.assertEqual(self.sessions_field(with_it), self.sessions_field(without))
 
     # Spec 2, 3, 4: the SESSIONS cell's unwrapped count, Show its Sessions, and Dismiss, on a real screen.
 
@@ -462,7 +468,7 @@ class TextualScreens(unittest.TestCase):
              "covered": {s["id"]: s["last"] for s in covered}}
         return dict(p, label=label) if label else p
 
-    def run_with(self, tab, projects, steps):
+    def run_with(self, tab, projects, steps, size=(120, 30)):
         """roost on tab with these projects and a temp config.DISMISSED, shared by every roost this test runs."""
         import unittest.mock
         if not hasattr(self, "persisted"):
@@ -471,7 +477,7 @@ class TextualScreens(unittest.TestCase):
             patcher, self.persisted = dismissed_file(Path(tmp.name) / "dismissed.json")
             self.addCleanup(patcher.stop)
         with unittest.mock.patch.multiple(roost, read_projects=lambda sessions: projects, read_config=lambda: {"tab": tab}):
-            return self.run_app(list(steps))
+            return self.run_app(list(steps), size=size)
 
     @staticmethod
     def look(seen, label, get):
@@ -516,27 +522,35 @@ class TextualScreens(unittest.TestCase):
 
     ALL_VIEW = ("right",) * 4  # from Running, the view roost opens on with a running Session, to All
 
-    def test_the_sessions_cell_counts_unwrapped_sessions_after_the_running_ones(self):
-        """Spec 2: the running marks, then "N unwrapped" for linked closed Sessions no Handoff covers, on a
-        second line under the marks; with only unwrapped ones, "N unwrapped"; with only wrapped-up ones,
-        nothing. Spec 1: no ▸."""
+    @staticmethod
+    def sessions_field(lines):
+        """The value of the detail pane's Sessions field (right of the sidebar), or None."""
+        for l in lines:
+            m = re.match(r"\s*Sessions\s{2,}(\S.*)$", l[roost.SIDEBAR_W:])
+            if m:
+                return m.group(1).strip()
+        return None
+
+    def test_the_sessions_field_counts_unwrapped_sessions_after_the_running_ones(self):
+        """Spec 2: the selected project's Sessions field has its running marks, then "N unwrapped" for
+        linked closed Sessions no Handoff covers; with only unwrapped ones, "N unwrapped"; with only
+        wrapped-up ones, none running. Spec 1: no ▸ in the sidebar."""
         p, _, _ = self.fleet()
         desks = [self.closed("Desk order", 35), self.closed("Desk survey", 45)]
         vpn = self.closed("VPN audit", 150)
         self.sessions = self.sessions + desks + [vpn]
         projects = [p, self.proj("bravo-desks", desks), self.proj("charlie-vpn", [vpn], covered=[vpn])]
-        lines = self.screen(self.run_with("Projects", projects, []))
-        both, unwrapped, wrapped = (self.line_of(lines, pid) for pid in ("Printer fleet", "bravo-desks", "charlie-vpn"))
-        i = lines.index(both)
-        self.assertIn("○1", both)
-        self.assertNotIn("unwrapped", both)
-        self.assertEqual(lines[i + 1].strip(), "1 unwrapped")
-        self.assertEqual(lines[i + 1].index("1 unwrapped"), both.index("○1"))
-        self.assertIn("2 unwrapped", unwrapped)
-        self.assertFalse(set("○◆●·") & set(unwrapped.split("bravo-desks", 1)[1]), unwrapped)
-        self.assertNotIn("unwrapped", wrapped)
-        self.assertFalse(set("○◆●·") & set(wrapped.split("charlie-vpn", 1)[1]), wrapped)
-        for line in (both, unwrapped, wrapped):
+        seen, steps = {}, []
+        for pid in (self.pid, "bravo-desks", "charlie-vpn"):
+            steps += [self.on_project(pid), self.look(seen, pid, screen_text)]
+        self.run_with("Projects", projects, steps)
+        both, unwrapped, wrapped = (self.sessions_field(seen[pid]) for pid in (self.pid, "bravo-desks", "charlie-vpn"))
+        self.assertRegex(both or "", r"^○1\W+1 unwrapped$")
+        self.assertEqual(unwrapped, "2 unwrapped")
+        self.assertEqual(wrapped, "none running")
+        side = [l[:roost.SIDEBAR_W] for l in seen[self.pid]]
+        for label in ("Printer fleet", "bravo-desks", "charlie-vpn"):
+            line = next(l for l in side if label in l)
             self.assertFalse(set("▸▾") & set(line), line)
 
     def test_show_its_sessions_lists_exactly_the_projects_sessions_until_esc(self):
@@ -565,10 +579,8 @@ class TextualScreens(unittest.TestCase):
         names = lambda app: [s["name"] for s in app.ui.srows]
         status = lambda app: self.line_of(screen_text(app), "Toner order")
 
-        def project(app):  # the project's line and the line under it, where "N unwrapped" goes
-            lines = screen_text(app)
-            i = lines.index(self.line_of(lines, "Printer fleet"))
-            return lines[i] + "\n" + lines[i + 1]
+        def project(app):  # the selected project's Sessions field, where "N unwrapped" goes
+            return self.sessions_field(screen_text(app)) or ""
         self.run_with("Sessions", [p], [
             self.keys(*self.ALL_VIEW), self.look(seen, "before", names),
             self.on_session("Toner order"), self.pick("Dismiss"),
@@ -576,10 +588,11 @@ class TextualScreens(unittest.TestCase):
             self.keys("left", "left"), self.look(seen, "closed view", names),
             self.select(lambda ui: setattr(ui, "sort", ("NAME", True))), self.look(seen, "by name", names),  # Z to A: Toner order would lead Closed
             self.select(lambda ui: setattr(ui, "sort", ("LAST ACTIVE", True))), self.keys("right", "right"),
-            self.keys("shift+tab"), self.look(seen, "project", project), self.keys("tab"),
+            self.keys("shift+tab"), self.on_project(self.pid), self.look(seen, "project", project), self.keys("tab"),
             self.on_session("Toner order"), self.pick("Undismiss"),
             self.look(seen, "after", names), self.look(seen, "status after", status),
-            self.keys("shift+tab"), self.look(seen, "project after", project)])
+            self.keys("shift+tab"), self.on_project(self.pid), self.look(seen, "project after", project)],
+            size=(120, 40))  # the status line takes a row: at 30 rows the Dismissed section's row is cut off
         self.assertLess(seen["before"].index("Toner order"), seen["before"].index("Old printer audit"))  # the fixture
         for view in ("all", "closed view", "by name"):
             self.assertEqual(seen[view][-1], "Toner order", (view, seen[view]))
@@ -705,6 +718,31 @@ class TextualScreens(unittest.TestCase):
                         self.assertIn("→ ", drawn)
                     else:
                         self.assertIn(entry, drawn)
+
+    def test_the_status_line_above_the_key_bar_says_how_many_sessions_are_running_on_every_tab(self):
+        """One line just above the key bar, on every tab: empty on the left, "N running" (Sessions whose
+        state isn't closed) on the right, or "nothing running"."""
+        import unittest.mock
+        data = {"rows": [], "tokens": {}, "unpriced": [], "priced": True}
+        roost.create_note("Printer idea", body="first line")
+        tabs = [t.name for t in roost.UI.TABS]
+        self.assertEqual(tabs, ["Projects", "Sessions", "Notes", "Stats"])
+        everyone = self.sessions + [self.closed("Toner order", 30)]  # idle, waiting, closed: 2 running
+        for sessions, want in ((everyone, "2 running"), ([self.closed("Toner order", 30)], "nothing running")):
+            for i, name in enumerate(tabs):
+                self.sessions = sessions
+                with self.subTest(tab=name, want=want), \
+                        unittest.mock.patch.multiple(roost, gather_spend=lambda table=None, now=None: data,
+                                                     monthly_limit=lambda: None):
+                    app = self.run_app([self.keys(*["tab"] * i)])
+                    self.assertEqual(app.ui.TABS[app.ui.tab].name, name)
+                    self.assertEqual(app.ui.status_line(), ("", want))
+                    rows = len(app.ui.bar[0]) if app.ui.bar else 1
+                    lines = self.screen(app)
+                    self.assertIn("quit", "   ".join(lines[-rows:]))  # the key bar is the bottom rows
+                    status = lines[-rows - 1]
+                    self.assertTrue(status.endswith(want), status)
+                    self.assertEqual(status.strip(), want, "the left side is empty for now")
 
     # Slow work off the UI thread: the idle refresh and the slow actions don't hold up the keys.
 
