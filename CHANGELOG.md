@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Projects in a sidebar:** the Projects tab lists projects in a sidebar, each marked ● when a Session runs in it and ◆ when it's ready to pick up, with the selected one's details beside it. The columns are gone; the details' Sessions field has the running and unwrapped counts. A status bar above the keys, on every tab, says how many Sessions are running
 - **Sub-projects:** a project's work splits into sub-projects (feature, bugfix, research, chore) in its `sub/` folder, each with its own README and Handoffs. `roost project new <project>/<slug> --type <type>` makes one; picking one up reads the parent project's README first, then the sub-project's own, then the project's other open sub-projects; wrap-up writes into the sub-project; `roost project list` shows them under their project. On the Projects tab, → shows a project's open sub-projects under it and ← hides them; a project's actions add New sub-project and Start a Session in a sub-project, and search finds sub-projects (`type:bugfix` by type). Sessions know their sub-project: PROJECT, `project:` search, and Add to or Move to a project
 - **Delete a project or sub-project:** Delete in its actions asks first, then asks you to type its name, then moves its folder to the Trash (a project's sub-projects go with it). Sub-projects can be renamed, like projects.
 - **Grouped action menus:** every row's actions are grouped, a line between them: working on it, organizing it, then removing it (Stop and Delete last). A project's menu no longer offers New project (ctrl+n and + New project do).
