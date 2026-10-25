@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Sub-projects:** a project's work splits into sub-projects (feature, bugfix, research, chore) in its `sub/` folder, each with its own README and Handoffs. `roost project new <project>/<slug> --type <type>` makes one; picking one up reads the parent project's README first, then the sub-project's own, then the project's other open sub-projects; wrap-up writes into the sub-project; `roost project list` shows them under their project. On the Projects tab, → shows a project's open sub-projects under it and ← hides them; a project's actions add New sub-project… and Start a Session in a sub-project…, and search finds sub-projects (`type:bugfix` by type). Sessions know their sub-project: PROJECT, `project:` search, and Add to or Move to a project
+- **Delete a project or sub-project:** Delete… in its actions asks first, then asks you to type its name, then moves its folder to the Trash (a project's sub-projects go with it). Sub-projects can be renamed, like projects.
 
 ## 2026.10.25
 

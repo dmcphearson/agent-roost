@@ -28,6 +28,7 @@ from roost.core import pricing
 from roost.core import handoffs as handoffdata
 from roost.core import summaries
 from roost.core import terminals
+from roost.core import adopt as adopting
 
 if Widget:
     from textual.containers import Vertical
@@ -218,15 +219,41 @@ class ProjectsTab:
             except (ValueError, OSError) as e:
                 self.msg = f"Couldn't rename it: {e}"
                 return None
+            if p["id"] in self.subs_open:  # a project's sub-projects stay shown under its new name
+                self.subs_open.discard(p["id"])
+                self.subs_open.add(new.name)
             self.load_projects()
-            row = next((r for r in self.project_rows() if r.kind == "project" and r.item["path"] == str(new)), None)
+            row = next((r for r in self.project_rows() if r.kind in ("project", "sub") and r.item["path"] == str(new)), None)
             if row:
                 self.select_key(self.row_key(row))
-            self.msg = f"Renamed {p['id']} to {new.name}" + (
+            self.msg = f"Renamed {p['id']} to {projectdata.project_id(new)}" + (
                 " · its INDEX.md still names the old folder: rebuild it" if (new.parent / "INDEX.md").exists() else "")
             return None
-        self.ask("", p["id"], done, "rename", title=f"Rename {clip(p['id'], 40)} (its folder)")
+        self.ask("", p.get("slug") or p["id"], done, "rename", title=f"Rename {clip(p['id'], 40)} (its folder)")
         return None
+
+    def delete_project_ui(self, p):
+        """Delete… on a project or sub-project: a confirm box, then its id typed exactly, then its folder
+        (with a project's sub-projects) goes to the Trash. Its Sessions keep running."""
+        self.ask_confirm("project-delete", p)
+
+    def ask_delete_typed(self, p):
+        def done(text):
+            if text.strip() != p["id"]:
+                self.msg = f"Cancelled: that didn't match {p['id']}"
+                return None
+            try:
+                adopting.trash(p["path"])
+            except OSError as e:
+                config.log(f"delete project {p['path']}: {e}")
+                self.msg = f"Couldn't move it: {e}"
+                return None
+            self.subs_open.discard(p["id"])
+            self.load_projects()
+            self.psel = min(self.psel, max(len(self.project_rows()) - 1, 0))
+            self.msg = f"Moved {p['id']} to the Trash"
+            return None
+        self.ask("", "", done, "delete", title=f"Type {clip(p['id'], 40)} to move it to the Trash")
 
     def load_projects(self):
         self.projects, self.recaps, self.notes = self.read_projects_notes(self.sessions)
@@ -574,6 +601,8 @@ class ProjectsTab:
             acts.append(("Edit its tags…", lambda: self.edit_tags(p)))
         if p.get("readme") and Path(p["path"]).is_dir():  # a real folder (the demo's aren't)
             acts.append(("Rename…", lambda: self.rename_project_ui(p)))
+        if Path(p["path"]).is_dir():  # a real folder (the demo's aren't)
+            acts.append(("Delete…", lambda: self.delete_project_ui(p)))
         acts.append(("Show its folder in Finder", lambda: self.show_in_finder(p["path"])))
         for name, _ in p.get("archives") or []:
             path = str(Path(p["path"]) / "_archive" / name)
@@ -594,6 +623,9 @@ class ProjectsTab:
         if self.linked(s):
             acts.append(("Show its Sessions", lambda: self.show_sessions(s)))
         acts.append(("Edit its tags…", lambda: self.edit_tags(s)))
+        if Path(s["path"]).is_dir():  # a real folder (the demo's aren't)
+            acts.append(("Rename…", lambda: self.rename_project_ui(s)))
+            acts.append(("Delete…", lambda: self.delete_project_ui(s)))
         acts.append(("Show its folder in Finder", lambda: self.show_in_finder(s["path"])))
         if parent:
             acts.append(("New sub-project…", lambda: self.new_subproject(parent)))

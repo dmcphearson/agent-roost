@@ -1,9 +1,10 @@
 """The screens' shell: tabs, keys, menus, pickers, prompts, and the confirm and alert boxes."""
 import curses, os, re, subprocess, textwrap, threading, time
 from collections import namedtuple
+from pathlib import Path
 
 from roost.core.sessiondata import CACHE_WARN, cache_left, span, visible
-from roost.core.projectdata import clean_tags, label_of
+from roost.core.projectdata import clean_tags, label_of, plural
 from roost.core.plugin import plugin_version
 from roost.core.formatting import clip, short, slug
 from roost.core.summaries import run_cap
@@ -308,6 +309,8 @@ class Shell:
                 config.log(f"clear archive {s['path']}: {e}")
                 self.msg = f"Couldn't move it: {e}"
             self.load_projects()
+        elif action == "project-delete" and k in ("y", "Y"):
+            self.ask_delete_typed(s)
         elif action == "note" and k in ("y", "Y"):
             try:
                 adopting.trash(s["path"])
@@ -352,6 +355,14 @@ class Shell:
         if action == "archive":
             return (f"Move {c['name']} to the Trash?", ["It holds the files roost adopt replaced."],
                     "y to move it · any other key cancels", self.RED)
+        if action == "project-delete":
+            subs = len([d for d in (Path(c["path"]) / "sub").glob("*/") if d.is_dir()]) if not c.get("parent") else 0
+            live = [x for x in self.linked(c) if x["state"] != "closed"]
+            return (f"Move {clip(c['id'], 50)} to the Trash?",
+                    ([f"Its {plural(subs, 'sub-project')} {'goes' if subs == 1 else 'go'} with it."] if subs else [])
+                    + ([f"{plural(len(live), 'Session')} running in it keep running, with no project."] if live else [])
+                    + ["Next, type its name to confirm."],
+                    "y to go on · any other key cancels", self.RED)
         if action == "note":
             return (f"Move the note {clip(c['name'], 50)} to the Trash?", [], "y to move it · any other key cancels", self.RED)
         if action == "summary":

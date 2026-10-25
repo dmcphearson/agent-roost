@@ -372,12 +372,13 @@ def readme(pid, summary, label=None, kind=None):
 
 
 def rename_project(folder, new):
-    """Rename a project: its folder, and what names it by its old name (its notes' `project:` lines,
-    a README title that was just the old name, a close-out record, a saved adopt plan). Returns the
+    """Rename a project or sub-project: its folder, and what names it by its old name (its notes' `project:`
+    lines, a README title that was just the old name, a close-out record, a saved adopt plan). Returns the
     new folder; raises ValueError with a reason, before anything changes."""
     folder, new = Path(folder), new.strip()
+    sub = is_subproject(folder)
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", new):
-        raise ValueError("a project's name is its folder's: lowercase letters, digits, and hyphens, like printer-rollout")
+        raise ValueError(f"a {'sub-project' if sub else 'project'}'s name is its folder's: lowercase letters, digits, and hyphens, like printer-rollout")
     if new == folder.name:
         raise ValueError("that's its name already")
     dst = folder.parent / new
@@ -397,7 +398,7 @@ def rename_project(folder, new):
         if at is not None and lines[at].strip() == f"# {folder.name}":
             lines[at] = f"# {new}\n"
             readme_path.write_text("".join(lines))
-    for d in (config.DONE, config.ADOPT_PLANS):
+    for d in () if sub else (config.DONE, config.ADOPT_PLANS):  # kept by project only
         if (d / f"{folder.name}.md").exists() and not (d / f"{new}.md").exists():
             os.rename(d / f"{folder.name}.md", d / f"{new}.md")
     return dst
