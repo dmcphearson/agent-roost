@@ -266,6 +266,129 @@ class Handoffs(unittest.TestCase):
         self.assertEqual(p["last"], time.mktime((2026, 10, 10, 9, 0, 0, 0, 0, -1)))
 
 
+class RollUp(unittest.TestCase):
+    """roost handoff --roll-up: a done sub-project's Session leaves one Handoff in the parent project,
+    saying what the sub-project came to."""
+    setUp_handoffs, tearDown, urlopen, transcript = Handoffs.setUp, Handoffs.tearDown, Handoffs.urlopen, Handoffs.transcript
+    WHEN = time.mktime((2026, 10, 9, 16, 5, 0, 0, 0, -1))
+    NAME = "2026-10-09-1605-11111111-rollup-toner.md"
+
+    def setUp(self):
+        self.setUp_handoffs()
+        (self.folder / "README.md").write_text("---\nsummary: Printers\nsessions: []\n---\n")
+        self.sub = self.folder / "sub" / "toner"
+        (self.sub / "handoffs").mkdir(parents=True)
+        self.sub_status("done")
+
+    def sub_status(self, status):
+        (self.sub / "README.md").write_text(f"---\nsummary: Toner\ntype: feature\nstatus: {status}\nsessions:\n"
+                                            f"  - name: Printer fix\n    id: {SID}\n---\n")
+
+    def roll_up(self, summary="Toner is ordered by the MDM now.", now=None):
+        return roost.write_handoff(SID, summary, now=now or self.WHEN, roll_up=True)
+
+    def written(self):
+        return sorted(p.name for p in (self.folder / "handoffs").iterdir()), sorted(p.name for p in (self.sub / "handoffs").iterdir())
+
+    def test_the_fixture_is_a_done_sub_project_listing_the_session(self):
+        self.assertEqual(roost.owner([SID]), self.sub)
+        self.assertEqual(roost.read_subprojects(self.folder)[0]["status"], "done")
+
+    def test_a_roll_up_goes_into_the_parents_handoffs_named_after_the_sub_project(self):
+        path, _ = self.roll_up()
+        self.assertEqual(path, self.folder / "handoffs" / self.NAME)
+        self.assertEqual(self.written(), ([self.NAME], []))
+        self.assertEqual(roost.handoff_time(path), self.WHEN)
+
+    def test_a_roll_up_has_its_frontmatter_heading_and_summary_and_no_facts(self):
+        path, _ = self.roll_up("Toner is ordered by the MDM now.\n\n- Next: the second office.")
+        text = path.read_text()
+        meta = roost.frontmatter(text)
+        self.assertEqual((meta["session"], meta["name"], meta["rollup"]), (SID, "Printer fix", "printers/toner"))
+        self.assertIn("# Roll-up of printers/toner", text)
+        self.assertIn("## Summary\n\nToner is ordered by the MDM now.\n\n- Next: the second office.", text)
+        self.assertLess(text.index("# Roll-up of printers/toner"), text.index("## Summary"))
+        self.assertNotIn("## Facts", text)
+
+    def test_secrets_in_a_roll_up_are_redacted(self):
+        path, kinds = self.roll_up(f"Done. The key was ghp_{'a' * 36}.")
+        text = path.read_text()
+        self.assertIn("## Summary\n\nDone. The key was [REDACTED:github].", text)
+        self.assertNotIn("ghp_" + "a" * 36, text)
+        self.assertEqual(kinds, ["github"])
+
+    def test_a_roll_up_is_never_overwritten(self):
+        path, _ = self.roll_up()
+        text = path.read_text()
+        with self.assertRaisesRegex(ValueError, "never overwrites"):
+            self.roll_up("Again.")
+        self.assertEqual(path.read_text(), text)
+        self.assertEqual(self.written(), ([self.NAME], []))
+
+    def test_a_session_in_a_project_not_a_sub_project_cant_roll_up(self):
+        (self.sub / "README.md").write_text("---\nsummary: Toner\ntype: feature\nstatus: done\nsessions: []\n---\n")
+        (self.folder / "README.md").write_text(f"---\nsummary: Printers\nsessions:\n  - name: Printer fix\n    id: {SID}\n---\n")
+        self.assertEqual(roost.owner([SID]), self.folder)
+        with self.assertRaisesRegex(ValueError, "sub-project"):
+            self.roll_up()
+        self.assertEqual(self.written(), ([], []))
+
+    def test_a_sub_project_not_done_cant_roll_up(self):
+        self.sub_status("active")
+        with self.assertRaisesRegex(ValueError, "done"):
+            self.roll_up()
+        self.assertEqual(self.written(), ([], []))
+
+    def test_without_roll_up_a_done_sub_projects_handoff_stays_in_the_sub_project(self):
+        path, _ = roost.write_handoff(SID, "Fixed the printers.", now=self.WHEN)
+        self.assertEqual(path, self.sub / "handoffs" / "2026-10-09-1605-11111111.md")
+        self.assertEqual(self.written(), ([], ["2026-10-09-1605-11111111.md"]))
+
+    def test_the_parents_brief_shows_the_roll_up_among_its_newest_handoffs(self):
+        path, _ = self.roll_up()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(roost.run_command("project", ["brief", "printers"]), 0)
+        text = out.getvalue()
+        self.assertIn("# Newest Handoffs (1 of 1, newest first)", text)
+        self.assertIn(f"## handoffs/{self.NAME}", text)
+        self.assertIn("# Roll-up of printers/toner", text)
+        self.assertIn("Toner is ordered by the MDM now.", text)
+
+    def test_the_parents_ledger_lists_the_roll_up_as_a_roll_up(self):
+        self.roll_up()
+        text = roost.ledger(self.folder)
+        self.assertTrue(text.startswith("# Ledger of printers: 1 Handoff, oldest first"))
+        self.assertIn(f"## handoffs/{self.NAME}\n\nRoll-up of printers/toner", text)
+        self.assertNotIn("(No Facts section", text)
+
+    def test_roost_handoff_roll_up_writes_into_the_parent_and_says_where(self):
+        out, saved = io.StringIO(), roost.sys.stdin
+        try:
+            roost.sys.stdin = io.StringIO("Toner is ordered by the MDM now.\n")
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(roost.run_command("handoff", ["--session", SID, "--roll-up"]), 0)
+        finally:
+            roost.sys.stdin = saved
+        parent, sub = self.written()
+        self.assertEqual(sub, [])
+        self.assertEqual(len(parent), 1)
+        self.assertTrue(parent[0].endswith("-11111111-rollup-toner.md"))
+        self.assertEqual(out.getvalue().strip(), f"Wrote {roost.short(str(self.folder / 'handoffs' / parent[0]))}")
+
+    def test_roost_handoff_roll_up_refusals_go_to_stderr(self):
+        self.sub_status("active")
+        err, saved = io.StringIO(), roost.sys.stdin
+        try:
+            roost.sys.stdin = io.StringIO("Toner is ordered by the MDM now.\n")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                self.assertEqual(roost.run_command("handoff", ["--session", SID, "--roll-up"]), 1)
+        finally:
+            roost.sys.stdin = saved
+        self.assertIn("done", err.getvalue())
+        self.assertEqual(self.written(), ([], []))
+
+
 class TranscriptSummary(unittest.TestCase):
     """#52: the Handoff and README update from a transcript, without resuming the Session."""
     setUp, tearDown, urlopen, transcript = Handoffs.setUp, Handoffs.tearDown, Handoffs.urlopen, Handoffs.transcript
