@@ -528,7 +528,7 @@ class Shell:
 
     def ask_project(self, label, summary, made, what="New project"):
         """A new project, in three prompts: its name as people read it (the README's heading), its
-        folder (made from the name, editable), then a one-sentence summary. made(pid, label, summary)
+        folder (made from the name, editable), then an optional one-sentence description. made(pid, label, summary)
         creates it and returns what the key handler returns."""
         def got_label(text):
             label = " ".join(text.split())
@@ -541,7 +541,7 @@ class Shell:
 
         def got_id(label, pid):
             self.ask("", summary, lambda text: made(pid, label, text), "create",
-                     title=f"{clip(label, 30)}: a one-sentence summary")
+                     title=f"{clip(label, 30)}: a one-sentence description (optional: enter skips)")
             return None
 
         self.ask("", label, got_label, "next", title=f"{what}: its name")

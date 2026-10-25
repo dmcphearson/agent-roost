@@ -17,7 +17,7 @@ from roost.core.adopt import (
     parse_plan,
     plan_problems,
 )
-from roost.core.formatting import clip, plain_text, short, short_when
+from roost.core.formatting import clip, plain_text, short, short_when, slug
 from roost.app.shell import BAR_KEYS, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES, first_action, grouped
 from roost.core.config import VIEWS
 from roost.app.widgets import Widget
@@ -208,16 +208,36 @@ class ProjectsTab:
                 "y to apply · e to edit · any other key: later", self.YELLOW)
 
     def rename_project_ui(self, p):
+        """Rename a project or sub-project in two prompts: its label (the README's heading, its name on
+        screen), then its folder's name, which follows a new label when it was made from the old one."""
         live = [s["name"] for s in self.linked(p) if s["state"] != "closed"]
         if live:
             self.msg = f"{', '.join(live)} {'is' if len(live) == 1 else 'are'} running in it: close {'it' if len(live) == 1 else 'them'} first"
             return None
+        old_label, folder = p.get("title") or label_of(p), Path(p["path"]).name
 
-        def done(text):
+        def got_label(text):
+            label = " ".join(text.split())
+            if not label:
+                self.msg = "Cancelled: it needs a label"
+                return None
+            start = slug(label) if label != old_label and folder == slug(old_label) else folder
+            self.ask("", start, lambda name: done(label, name.strip()), "rename", title=f"{clip(label, 30)}: its folder name")
+            return None
+
+        def done(label, name):
+            if label == old_label and name == folder:
+                self.msg = "Nothing changed"
+                return None
+            new = Path(p["path"])
             try:
-                new = rename_project(p["path"], text)
+                if name != folder:
+                    new = rename_project(new, name)
+                if label != old_label:
+                    projectdata.set_label(new, label)
             except (ValueError, OSError) as e:
                 self.msg = f"Couldn't rename it: {e}"
+                self.load_projects()
                 return None
             if p["id"] in self.subs_open:  # a project's sub-projects stay shown under its new name
                 self.subs_open.discard(p["id"])
@@ -226,10 +246,25 @@ class ProjectsTab:
             row = next((r for r in self.project_rows() if r.kind in ("project", "sub") and r.item["path"] == str(new)), None)
             if row:
                 self.select_key(self.row_key(row))
-            self.msg = f"Renamed {p['id']} to {projectdata.project_id(new)}" + (
-                " · its INDEX.md still names the old folder: rebuild it" if (new.parent / "INDEX.md").exists() else "")
+            self.msg = (f"Renamed {p['id']} to {projectdata.project_id(new)}" if name != folder else f"Renamed {p['id']}") + (
+                f", labeled {label}" if label != old_label else "") + (
+                " · its INDEX.md still names the old folder: rebuild it" if name != folder and (new.parent / "INDEX.md").exists() else "")
             return None
-        self.ask("", p.get("slug") or p["id"], done, "rename", title=f"Rename {clip(p['id'], 40)} (its folder)")
+        self.ask("", old_label, got_label, "next", title=f"Rename {clip(p['id'], 40)}: its label")
+        return None
+
+    def edit_description(self, p):
+        """Edit a project's or sub-project's one-sentence description; empty clears it."""
+        def done(text):
+            try:
+                projectdata.set_description(p["path"], text)
+            except (ValueError, OSError) as e:
+                self.msg = f"Couldn't save it: {e}"
+                return None
+            self.load_projects()
+            self.msg = f"Saved {p['id']}'s description" if text.strip() else f"Cleared {p['id']}'s description"
+            return None
+        self.ask("", p["summary"], done, "save", title=f"{clip(p.get('title') or label_of(p), 30)}: its description (one sentence)")
         return None
 
     def delete_project_ui(self, p):
@@ -310,7 +345,7 @@ class ProjectsTab:
         Spare width goes to NAME up to its longest name + 2, then to CATEGORY and TAGS until their
         longest values show whole, and what's left is spread evenly over every column, leftmost first."""
         projects = [r.item for r in rows if r.kind in ("project", "sub")]
-        names = [len(label_of(r.item)) if r.kind == "project" else len(r.item["slug"]) + 2 for r in rows if r.kind in ("project", "sub")]
+        names = [len(label_of(r.item)) if r.kind == "project" else len(r.item.get("title") or r.item["slug"]) + 2 for r in rows if r.kind in ("project", "sub")]
         widths = {"NAME": max(16, min(48, max(names, default=0) + 2)),
                   "STATUS": max([len("STATUS")] + [len(self.row_status(r, 0)[0]) for r in rows if r.kind not in ("head", "new")]) + 2,
                   "SESSIONS": 12, "CATEGORY": 14, "TAGS": 14, "LAST WORKED": 12}
@@ -449,7 +484,7 @@ class ProjectsTab:
         r = rows[self.psel]
         item = r.item
         if r.kind == "new":
-            return "+ New project", [("", "enter or a click: give it an id (its folder's name) and a one-sentence summary")]
+            return "+ New project", [("", "enter or a click: give it a name, its folder, and a one-sentence description if you like")]
         if r.kind == "head":
             return r.sec, [("Section", f"{r.sec}: {SECTION_RULES[r.sec]}"), ("", "enter or a click opens or closes it")]
         name = item["name"] if r.kind == "session" else label_of(item) if r.kind == "project" else item["id"]
@@ -486,13 +521,15 @@ class ProjectsTab:
             fields = [("Status", f"Session recap   Last worked  {short_when(item['last'])}   Sessions  {len(item.get('sessions') or [])}"),
                       ("File", short(item["path"])),
                       ("", "enter: start a Session from it, or make it a project (its Handoffs move in)")]
-        summary = textwrap.wrap(plain_text(item["summary"]), max(w - 18, 10)) or ["(none)"]
+        described = r.kind in ("project", "sub")  # a project's summary is its description
+        summary = textwrap.wrap(plain_text(item["summary"]), max(w - 18, 10)) or ["no description yet" if described else "(none)"]
         # a Session's "summary" is only its last message, so it's labeled that and kept short
         last = r.kind == "session"
         room = LAST_MESSAGE_LINES if last else max(2, h // 4)  # the list keeps most of the screen
         if len(summary) > room:
             summary = summary[:room - 1] + [clip(summary[room - 1], w - 20) + " …"]
-        return name, fields + [("Last message" if last else "Summary", summary[0])] + [("", line) for line in summary[1:]]
+        title = "Last message" if last else "Description" if described else "Summary"
+        return name, fields + [(title, summary[0])] + [("", line) for line in summary[1:]]
 
     def project_lines(self, rows, page):
         """The list's lines: a row's index, or None for the blank line before every header but the
@@ -602,6 +639,7 @@ class ProjectsTab:
         if p["readme"]:
             organize.append(("Set its category", lambda: self.edit_category(p)))
             organize.append(("Edit its tags", lambda: self.edit_tags(p)))
+            organize.append(("Edit its description", lambda: self.edit_description(p)))
         if p.get("readme") and real:
             organize.append(("Rename", lambda: self.rename_project_ui(p)))
         organize.append(("Show its folder in Finder", lambda: self.show_in_finder(p["path"])))
@@ -624,6 +662,8 @@ class ProjectsTab:
                          lambda: self.start_for(s)))
         if self.linked(s):
             work.append(("Show its Sessions", lambda: self.show_sessions(s)))
+        if s["readme"]:
+            organize.append(("Edit its description", lambda: self.edit_description(s)))
         if real:
             organize.append(("Rename", lambda: self.rename_project_ui(s)))
         organize.append(("Show its folder in Finder", lambda: self.show_in_finder(s["path"])))
@@ -639,8 +679,8 @@ class ProjectsTab:
         return None
 
     def new_subproject(self, p):
-        """Make a sub-project of p: its type, then its slug (its folder's name in sub/), then a one-sentence
-        summary. It shows under p, opened, and is selected."""
+        """Make a sub-project of p: its type, then its slug (its folder's name in sub/), then an optional one-sentence
+        description. It shows under p, opened, and is selected."""
         name = clip(label_of(p), 30)
 
         def made(kind, slug_, text):
@@ -666,7 +706,7 @@ class ProjectsTab:
             if not projectdata.SLUG.fullmatch(slug_):
                 self.msg = "Couldn't create it: a sub-project's slug is lowercase letters, digits, and hyphens, like badge-printers"
                 return None
-            self.ask("", "", lambda summary: made(kind, slug_, summary), "create", title=f"{slug_}: a one-sentence summary")
+            self.ask("", "", lambda summary: made(kind, slug_, summary), "create", title=f"{slug_}: a one-sentence description (optional: enter skips)")
             return None
 
         def got_type(kind):
@@ -739,7 +779,7 @@ class ProjectsTab:
         return None
 
     def new_project(self, note=None):
-        """Make a project: its name, its folder, then a one-sentence summary. From a Session recap,
+        """Make a project: its name, its folder, then an optional one-sentence description. From a Session recap,
         the recap's Handoffs move in and its name and summary are the starting text."""
         def made(pid, label, text):
             try:
@@ -854,7 +894,7 @@ if Region:
                     has = any(not s["closed"] for s in r.item.get("subs") or [])
                     name = ("▾ " if r.item["id"] in ui.subs_open else "▸ " if has else "  ") + label_of(r.item)
                 elif r.kind == "sub":
-                    name = "    " + r.item["slug"]
+                    name = "    " + (r.item.get("title") or r.item["slug"])
                 else:
                     name = "  " + (r.item["name"] if r.kind == "session" else r.item["id"])
                 row.put(3, clip(name, name_w), look((curses.A_BOLD if r.sec == "Recent" and r.kind == "project" else 0) | dim))
@@ -902,7 +942,7 @@ if Region:
             for label, value in ui.pfields:
                 row = self.line()
                 row.put(2, label, ui.DIM)
-                row.put(16, clip(value, w - 18), 0 if label in ("Summary", "Last message") or not label else ui.DIM)
+                row.put(16, clip(value, w - 18), 0 if label in ("Summary", "Description", "Last message") and value != "no description yet" or not label else ui.DIM)
                 out.append(row)
             return out
 

@@ -243,9 +243,9 @@ def use_demo():
 
     made = []  # projects created in the demo, kept in memory only
 
-    def new_project(pid, summary, label=None):
-        if not pid.strip() or not summary.strip():
-            raise ValueError("give it an id and a one-sentence summary")
+    def new_project(pid, summary="", label=None):
+        if not pid.strip():
+            raise ValueError("give it an id")
         made.insert(0, {"id": pid.strip(), "label": " ".join((label or "").split()) or pid.strip(), "path": f"{HOME}/.roost/projects/{pid.strip()}", "summary": " ".join(summary.split()),
                         "status": "active", "category": "", "tags": [], "sessions": [], "last": None,
                         "closed": False, "readme": True})

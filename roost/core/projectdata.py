@@ -1,5 +1,5 @@
 """Projects: folders with a README, their frontmatter, Sessions, tags, and categories."""
-import json, os, re, sys, time
+import argparse, json, os, re, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -76,7 +76,9 @@ def read_project(folder, sessions=()):
     category = meta.get("category").strip() if isinstance(meta.get("category"), str) else ""
     tags = tag_list(meta.get("tags"))
     kind = meta.get("type").strip() if isinstance(meta.get("type"), str) else ""
-    return {"id": folder.name, "type": kind, "label": heading(text) or folder.name, "path": str(folder), "summary": meta.get("summary") if isinstance(meta.get("summary"), str) else "",
+    described = meta.get("description", meta.get("summary"))  # summary: is the older name
+    return {"id": folder.name, "type": kind, "label": heading(text) or folder.name, "path": str(folder),
+            "summary": described if isinstance(described, str) else "",  # its description
             "status": status, "category": category, "tags": tags, "sessions": linked, "last": max(times) if times else None,
             "closed": status.lower() in CLOSED or (config.DONE / f"{folder.name}.md").exists(),
             "readme": (folder / "README.md").exists(), "archives": archives_due(folder),
@@ -175,6 +177,39 @@ def set_status(folder, status):
     return old
 
 
+def set_description(folder, text):
+    """Set the README's `description:` line (one sentence, or empty), replacing it or an older `summary:`
+    line, or adding one after the opening ---. Every other byte of the README stays as it was."""
+    path, lines, end = readme_lines(folder)
+    line = f"description: {json.dumps(' '.join(text.split()), ensure_ascii=False)}\n"
+    at = [i for i in range(1, end) if re.match(r"(description|summary)\s*:", lines[i])]
+    if not at:
+        lines[1:1] = [line]
+    else:
+        lines[at[0]] = line
+        for i in reversed(at[1:]):
+            del lines[i]
+    write_lines(path, lines)
+
+
+def set_label(folder, label):
+    """Set the README's first # heading, its name on screen, adding one under the frontmatter if there's none."""
+    label = " ".join(label.split())
+    if not label:
+        raise ValueError("give it a name")
+    path, lines, end = readme_lines(folder)
+    fence = False
+    for i in range(end + 1, len(lines)):
+        if lines[i].lstrip().startswith(("```", "~~~")):
+            fence = not fence
+        elif not fence and lines[i].startswith("# "):
+            lines[i] = f"# {label}\n"
+            break
+    else:
+        lines[end + 1:end + 1] = ["\n", f"# {label}\n"]
+    write_lines(path, lines)
+
+
 def sessions_list(lines, end):
     """Where the README's `sessions:` list is: (index of its line or None, its items as
     (first, last) line ranges, end exclusive). Raises ValueError for a form roost won't rewrite."""
@@ -251,7 +286,8 @@ def project_id(folder):
 
 
 def read_subprojects(folder, sessions=()):
-    """A project's sub-projects, each read like a project, plus its slug and parent; closed when done."""
+    """A project's sub-projects, each read like a project, plus its slug, parent, and title (its README's
+    heading, what its row shows; its label is its id, what a Session's PROJECT shows); closed when done."""
     root = Path(folder) / SUB
     if not root.is_dir():
         return []
@@ -259,7 +295,7 @@ def read_subprojects(folder, sessions=()):
     for f in sorted(root.iterdir()):
         if f.is_dir() and not f.name.startswith(("_", ".")):
             s = read_project(f, sessions)
-            s.update(id=f"{Path(folder).name}/{f.name}", label=f"{Path(folder).name}/{f.name}", slug=f.name,
+            s.update(id=f"{Path(folder).name}/{f.name}", title=s["label"], label=f"{Path(folder).name}/{f.name}", slug=f.name,
                      parent=Path(folder).name, closed=s["status"].lower() in SUB_DONE)
             out.append(s)
     return out
@@ -366,7 +402,7 @@ def move_recaps():
 
 
 def readme(pid, summary, label=None, kind=None):
-    return (f"---\nsummary: {json.dumps(summary, ensure_ascii=False)}\n" + (f"type: {kind}\n" if kind else "")
+    return (f"---\ndescription: {json.dumps(summary, ensure_ascii=False)}\n" + (f"type: {kind}\n" if kind else "")
             + "status: active\nsessions: []\n---\n\n"
             f"# {' '.join((label or '').split()) or pid}\n\n## Current state\n\n## Next\n\n## Key decisions\n\n## Files\n")
 
@@ -404,15 +440,13 @@ def rename_project(folder, new):
     return dst
 
 
-def create_project(pid, summary, label=None):
+def create_project(pid, summary="", label=None):
     """Make a project folder with a README in roost's project layout, its heading the label (else the id). Returns its path; raises ValueError
     with a reason the person can act on."""
     pid, summary = pid.strip(), " ".join(summary.split())
     root = config.projects_dir()
     if not pid or pid.startswith(("_", ".")) or "/" in pid or pid != pid.split()[0]:
         raise ValueError("a project id is one word, like 2026-10-printer-rollout, not starting with _ or .")
-    if not summary:
-        raise ValueError("give it a one-sentence summary")
     if not root.is_dir():
         raise ValueError(f"the Projects folder {short(str(root))} doesn't exist: run roost setup")
     folder = root / pid
@@ -424,7 +458,7 @@ def create_project(pid, summary, label=None):
     return folder
 
 
-def create_subproject(pid, kind, summary):
+def create_subproject(pid, kind, summary=""):
     """Make a sub-project <project>/<slug>: sub/<slug>/ in the project, with a README of the given type
     and handoffs/. Returns its path; raises ValueError with a reason, before anything is made."""
     parent, _, slug = pid.strip().partition("/")
@@ -438,8 +472,6 @@ def create_subproject(pid, kind, summary):
     root = config.projects_dir()
     if not parent or parent.startswith(("_", ".")) or not (root / parent).is_dir():
         raise ValueError(f"there's no project {parent!r} (roost project list shows them)")
-    if not summary:
-        raise ValueError("give it a one-sentence summary")
     folder = root / parent / SUB / slug
     if folder.exists():
         raise ValueError(f"{parent}/{slug} already exists")
@@ -459,11 +491,11 @@ def project_new(args):
         if "/" in args.id:
             if not args.type:
                 raise ValueError(f"a sub-project needs --type: {', '.join(SUB_TYPES)}")
-            folder = create_subproject(args.id, args.type, args.summary)
+            folder = create_subproject(args.id, args.type, args.description or "")
         elif args.type:
             raise ValueError("--type is for a sub-project (<project>/<slug>); a project has none")
         else:
-            folder = create_project(args.id, args.summary)
+            folder = create_project(args.id, args.description or "")
     except ValueError as e:
         print(f"roost project new: {e}", file=sys.stderr)
         return 1
@@ -588,7 +620,7 @@ def project_list(args):
         for n in recaps:
             print(f"{n['id'].ljust(width)}  {'recap':<10}  {worked(n['last']):<16}  {clip(plain_text(n['summary']), 90)}")
     if not shown and not recaps:
-        print("No projects yet. Create one: roost project new <id> --summary \"…\"")
+        print("No projects yet. Create one: roost project new <id> --description \"…\"")
     return 0
 
 
@@ -608,8 +640,25 @@ def project_status(args):
     return 0
 
 
+def project_description(args):
+    try:
+        folder = find_project(args.id)
+        if not folder.is_dir():
+            raise ValueError(f"{args.id} is a Session recap, which has no description")
+        if args.value is None:
+            print(read_project(folder)["summary"] or "(no description)")
+            return 0
+        set_description(folder, args.value)
+    except ValueError as e:
+        print(f"roost project description: {e}", file=sys.stderr)
+        return 1
+    print(f"{project_id(folder)}: description set")
+    return 0
+
+
 def project_command(args):
-    return {"new": project_new, "brief": project_brief, "list": project_list, "status": project_status}[args.action](args)
+    return {"new": project_new, "brief": project_brief, "list": project_list, "status": project_status,
+            "description": project_description}[args.action](args)
 
 
 def project_flags(parser):
@@ -617,7 +666,8 @@ def project_flags(parser):
     new = sub.add_parser("new", help="create a project folder and README", description="Create a project folder and README.")
     new.add_argument("id", help="the folder name, e.g. printer-rollout; <project>/<slug> makes a sub-project")
     new.add_argument("--type", help=f"a sub-project's type: {', '.join(SUB_TYPES)}")
-    new.add_argument("--summary", required=True, help="one sentence saying what the project is")
+    new.add_argument("--description", help="one sentence saying what the project is (optional)")
+    new.add_argument("--summary", dest="description", help=argparse.SUPPRESS)  # its older name
     b = sub.add_parser("brief", help="print what a Session needs to catch up (/pickup runs this)",
                        description="Print a project's README and its newest Handoffs, or a Session recap.")
     b.add_argument("id", help="the project's folder name, a sub-project's <project>/<slug>, or a Session recap's name")
@@ -630,6 +680,10 @@ def project_flags(parser):
                         description="Print a project's status, or set it. Only the README's status: line changes.")
     st.add_argument("id", help="the project's folder name, or a sub-project's <project>/<slug>")
     st.add_argument("value", nargs="?", help=f"the new status: active, blocked, {CLOSED[0]} (closed hides it), or a few lowercase words")
+    d = sub.add_parser("description", help="print a project's description, or set it (/wrap-up writes it)",
+                       description="Print a project's one-sentence description, or set it. Only the README's description: line changes.")
+    d.add_argument("id", help="the project's folder name, or a sub-project's <project>/<slug>")
+    d.add_argument("value", nargs="?", help="the new description, one sentence")
 RECAP_MARK = re.compile(r"^<!-- roost handoff ([\w.-]+) session: (\S+) from: (\S*) to: (\S*) -->$", re.M)
 
 
