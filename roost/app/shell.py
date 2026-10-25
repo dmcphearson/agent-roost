@@ -1,9 +1,10 @@
 """The screens' shell: tabs, keys, menus, pickers, prompts, and the confirm and alert boxes."""
 import curses, os, re, subprocess, textwrap, threading, time
 from collections import namedtuple
+from pathlib import Path
 
 from roost.core.sessiondata import CACHE_WARN, cache_left, span, visible
-from roost.core.projectdata import clean_tags, label_of
+from roost.core.projectdata import clean_tags, label_of, plural
 from roost.core.plugin import plugin_version
 from roost.core.formatting import clip, short, slug
 from roost.core.summaries import run_cap
@@ -29,6 +30,17 @@ NOTE_SECTIONS = {"Backlog": "tagged backlog: ideas and maybe-projects",  # the N
                  "Notes": "everything else"}
 QUIT = object()  # what a key handler returns to close roost
 SAVE = object()  # the picker's Save row, when it ticks several
+DIVIDER = ("─", object())  # a line between an actions list's groups: shown, never picked
+
+
+def grouped(*groups):
+    """An actions list from its groups (work on it, organize it, delete it), a DIVIDER between them."""
+    return [a for g in groups if g for a in [DIVIDER] + list(g)][1:]
+
+
+def first_action(acts):
+    """The function of the first real action (what a double-click runs), or None."""
+    return next((fn for label, fn in acts if (label, fn) != DIVIDER), None)
 
 
 def printable(k):
@@ -308,6 +320,8 @@ class Shell:
                 config.log(f"clear archive {s['path']}: {e}")
                 self.msg = f"Couldn't move it: {e}"
             self.load_projects()
+        elif action == "project-delete" and k in ("y", "Y"):
+            self.ask_delete_typed(s)
         elif action == "note" and k in ("y", "Y"):
             try:
                 adopting.trash(s["path"])
@@ -352,6 +366,14 @@ class Shell:
         if action == "archive":
             return (f"Move {c['name']} to the Trash?", ["It holds the files roost adopt replaced."],
                     "y to move it · any other key cancels", self.RED)
+        if action == "project-delete":
+            subs = len([d for d in (Path(c["path"]) / "sub").glob("*/") if d.is_dir()]) if not c.get("parent") else 0
+            live = [x for x in self.linked(c) if x["state"] != "closed"]
+            return (f"Move {clip(c['id'], 50)} to the Trash?",
+                    ([f"Its {plural(subs, 'sub-project')} {'goes' if subs == 1 else 'go'} with it."] if subs else [])
+                    + ([f"{plural(len(live), 'Session')} running in it keep running, with no project."] if live else [])
+                    + ["Next, type its name to confirm."],
+                    "y to go on · any other key cancels", self.RED)
         if action == "note":
             return (f"Move the note {clip(c['name'], 50)} to the Trash?", [], "y to move it · any other key cancels", self.RED)
         if action == "summary":
@@ -500,9 +522,13 @@ class Shell:
         handler returns; esc cancels."""
         self.asking = {"prompt": prompt, "text": text, "done": done, "verb": verb, "title": title}
 
+    def all_projects(self):
+        """Every project, each followed by its sub-projects: what a Session can belong to."""
+        return [x for p in self.projects or [] for x in [p] + (p.get("subs") or [])]
+
     def ask_project(self, label, summary, made, what="New project"):
         """A new project, in three prompts: its name as people read it (the README's heading), its
-        folder (made from the name, editable), then a one-sentence summary. made(pid, label, summary)
+        folder (made from the name, editable), then an optional one-sentence description. made(pid, label, summary)
         creates it and returns what the key handler returns."""
         def got_label(text):
             label = " ".join(text.split())
@@ -515,7 +541,7 @@ class Shell:
 
         def got_id(label, pid):
             self.ask("", summary, lambda text: made(pid, label, text), "create",
-                     title=f"{clip(label, 30)}: a one-sentence summary")
+                     title=f"{clip(label, 30)}: a one-sentence description (optional: enter skips)")
             return None
 
         self.ask("", label, got_label, "next", title=f"{what}: its name")
@@ -604,11 +630,29 @@ class Shell:
         self.choosing = {"title": title, "options": list(options), "sel": 0, "typed": "" if filtering else None,
                          "done": done, "add": add, "multi": None if multi is None else list(multi), "body": body or [],
                          "keys": keys or {}}
+        self.choosing["sel"] = self.next_option(self.choice_options(), -1, 1)
+
+    @staticmethod
+    def next_option(opts, at, step):
+        """The option after at (step 1) or before it (-1), wrapping and stepping over dividers."""
+        for i in range(1, len(opts) + 1):
+            j = (at + step * i) % len(opts)
+            if tuple(opts[j]) != DIVIDER:
+                return j
+        return 0
 
     def choice_options(self):
         c = self.choosing
         q = (c["typed"] or "").lower()
-        out = [o for o in c["options"] if q in o[0].lower()]
+        out = []
+        for o in c["options"]:  # a divider only between two groups, and none while filtering
+            if tuple(o) != DIVIDER:
+                if q in o[0].lower():
+                    out.append(o)
+            elif not q and out and tuple(out[-1]) != DIVIDER:
+                out.append(o)
+        if out and tuple(out[-1]) == DIVIDER:
+            out.pop()
         if c.get("add") and q:
             try:
                 new = clean_tags(q)
@@ -623,6 +667,8 @@ class Shell:
     def pick(self, value):
         """Enter (or a click) on a picker row: tick it, add it, save, or pick it."""
         c = self.choosing
+        if value is DIVIDER[1]:
+            return None
         if isinstance(value, tuple) and value[0] == "new":
             value = value[1]
             if c["multi"] is not None:
@@ -651,9 +697,9 @@ class Shell:
         if not isinstance(k, tuple) and k in c["keys"]:
             return self.pick(c["keys"][k])
         if k == "up":
-            c["sel"] = (c["sel"] - 1) % max(len(opts), 1)
+            c["sel"] = self.next_option(opts, c["sel"], -1) if opts else 0
         elif k == "down":
-            c["sel"] = (c["sel"] + 1) % max(len(opts), 1)
+            c["sel"] = self.next_option(opts, c["sel"], 1) if opts else 0
         elif k == "escape":
             self.choosing, self.msg = None, "Cancelled"
         elif k == "enter":

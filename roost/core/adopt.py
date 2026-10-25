@@ -5,7 +5,7 @@ from pathlib import Path
 
 from roost.core.statsdata import log_spend
 from roost.core.sessiondata import parse
-from roost.core.projectdata import read_project, readme, session_name, set_status
+from roost.core.projectdata import read_project, readme, session_name, set_description, set_status
 from roost.core.pricing import reply_cost
 from roost.core.handoffs import session_transcripts
 from roost.core.summaries import entry_cut, summary_settings
@@ -213,17 +213,6 @@ def plan_problems(folder, plan, taken=()):
     return out
 
 
-def set_summary(folder, summary):
-    path, lines, end = readme_lines(folder)
-    at = next((i for i in range(1, end) if re.match(r"summary\s*:", lines[i])), None)
-    line = f"summary: {json.dumps(summary, ensure_ascii=False)}\n"
-    if at is None:
-        lines[1:1] = [line]
-    else:
-        lines[at] = line
-    write_lines(path, lines)
-
-
 def apply_plan(folder, plan, today=None):
     """Carry out a checked plan. Every replaced or dropped file goes to _archive/<today>/, or
     <today>-2/ and on when an adopt already ran that day. Returns the project's folder after the rename."""
@@ -273,11 +262,11 @@ def apply_plan(folder, plan, today=None):
     try:
         path, lines, end = readme_lines(folder)
     except ValueError:  # no README, or one without frontmatter: start one, keeping nothing of the old (it's archived)
-        readme_path.write_text("---\nsummary: \"\"\nsessions: []\n---\n")
+        readme_path.write_text("---\ndescription: \"\"\nsessions: []\n---\n")
         path, lines, end = readme_lines(folder)
     body, _ = redact(plan["readme"])
     write_lines(path, lines[:end + 1] + ["\n", body.strip() + "\n"])
-    set_summary(folder, plan["summary"])
+    set_description(folder, plan["summary"])
     if plan["status"]:
         set_status(folder, plan["status"])
     new = folder.parent / plan["rename"]

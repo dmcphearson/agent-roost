@@ -246,6 +246,18 @@ class Handoffs(unittest.TestCase):
         self.assertNotIn("Summary one.", text)
         self.assertIn("No Handoffs yet.", roost.ledger(self.root / "missing"))
 
+    def test_a_sub_project_listing_the_session_owns_its_handoffs(self):
+        (self.folder / "README.md").write_text("---\nsummary: Printers\nsessions: []\n---\n")
+        sub = self.folder / "sub" / "toner"
+        (sub / "handoffs").mkdir(parents=True)
+        (sub / "README.md").write_text(f"---\nsummary: Toner\ntype: feature\nstatus: active\nsessions:\n"
+                                       f"  - name: Printer fix\n    id: {SID}\n---\n")
+        self.assertEqual(roost.owner([SID]), sub)
+        path, _ = self.handoff()
+        self.assertEqual(path, sub / "handoffs" / "2026-10-09-1605-11111111.md")
+        self.assertIn("## Summary\n\nFixed the printers.", path.read_text())
+        self.assertEqual(list((self.folder / "handoffs").iterdir()), [])
+
     def test_last_worked_uses_a_newer_handoff(self):
         (self.folder / "handoffs" / "2026-10-09-1605-11111111.md").write_text("x")
         p = roost.read_project(self.folder, [{"id": SID, "ids": [SID], "last": time.mktime((2026, 10, 8, 9, 0, 0, 0, 0, -1))}])
@@ -617,7 +629,7 @@ class SessionRecaps(unittest.TestCase):
             "VERDICT: add-to-project\nPROJECT: printers\nFINISHED: yes\nOPEN:\n- none\nWARNINGS:\n- none\nWHY:\nIt fixed the printers.\n", 0.05)
         roost.threading.Thread = sync
         self.addCleanup(lambda: (setattr(roost, "claude_print", saved[0]), setattr(roost.threading, "Thread", saved[1])))
-        act = dict(ui.session_actions(s))["Ask what to do with it…"]
+        act = dict(ui.session_actions(s))["Ask what to do with it"]
         act()
         self.assertEqual(ui.confirm[0], "ask")
         self.assertIn("Ask what to do with Printer fix", ui.confirm_text()[0])
@@ -731,7 +743,7 @@ class SessionRecaps(unittest.TestCase):
         dict(ui.note_actions(n))["Start a Session from it"]()
         self.assertEqual(started, [str(self.root)])  # where its Session worked, not home
         del ui.start
-        dict(ui.note_actions(n))["Make it a project…"]()
+        dict(ui.note_actions(n))["Make it a project"]()
         typed(ui, "\n")
         typed(ui, "\n")
         self.assertEqual(ui.asking["text"], "Fixed the printers [3]")  # the recap's summary to start from
@@ -826,8 +838,8 @@ class SessionRecaps(unittest.TestCase):
         self.assertEqual(ui.recap_of(s)["id"], "printer-fix")
         acts = dict(ui.session_actions(s))
         self.assertTrue(any(l.startswith("Read its Session recap") for l in acts))
-        self.assertNotIn("New project from this Session…", acts)
-        acts["Make it a project… (its recap's Handoffs move in)"]()
+        self.assertNotIn("New project from this Session", acts)
+        acts["Make it a project (its recap's Handoffs move in)"]()
         self.assertEqual(ui.asking["text"], "Printer fix")
         typed(ui, "\n")
         self.assertEqual(ui.asking["text"], "printer-fix")

@@ -1,6 +1,6 @@
 from support import *  # noqa: F401,F403 (the shared namespace, helpers, and fixtures)
 from support import _SCRATCH, own_tests  # noqa: F401
-from test_projects import Projects, ProjectRows  # for their helpers; their tests run in test_projects.py
+from test_projects import Projects, ProjectRows, SubProjects  # for their helpers; their tests run in test_projects.py
 from test_screens import TextualScreens  # for its helpers; its tests run in test_screens.py
 
 load_tests = own_tests(__name__)
@@ -616,17 +616,18 @@ class StartingSessions(unittest.TestCase):
             ui.load_projects()
             rows = ui.project_rows()
             ui.psel = 1
-            self.assertFalse([a for a in labels(ui, ui.keys_projects, rows) if a.startswith(("Stop", "Delete"))])
+            self.assertFalse([a for a in labels(ui, ui.keys_projects, rows)  # no Session Stop or Delete: the project's own Delete is allowed
+                              if a.startswith(("Stop", "Delete")) and a != "Delete"])
             live, old = 0, 1  # on the Sessions tab: the Projects tab lists no Sessions
             ui.sel = live
-            act(ui, ui.keys_sessions, ui.sessions, "Stop…")
+            act(ui, ui.keys_sessions, ui.sessions, "Stop")
             self.assertTrue(ui.sessions_typing())
             ui.keys_confirm("n")  # any other key cancels
             self.assertEqual((did, ui.msg), ([], "Cancelled"))
-            act(ui, ui.keys_sessions, ui.sessions, "Stop…")
+            act(ui, ui.keys_sessions, ui.sessions, "Stop")
             ui.keys_confirm("y")
             ui.sel = old
-            act(ui, ui.keys_sessions, ui.sessions, "Delete to the Trash…")
+            act(ui, ui.keys_sessions, ui.sessions, "Delete to the Trash")
             ui.keys_confirm("y")
             self.assertEqual(did, [("stop", ui.sessions[0]["attach"]), ("delete", "Old")])
         finally:
@@ -661,9 +662,9 @@ class StartingSessions(unittest.TestCase):
         self.assertEqual(ui.asking["text"], "Printer Fix!")  # then the summary
         typed(ui, "\x15Fix the printers.\n")
         meta = roost.frontmatter((self.root / "printer-fix" / "README.md").read_text())
-        self.assertEqual((meta["summary"], meta["sessions"]), ("Fix the printers.", [{"name": "Printer Fix!", "id": "dd4e0000-0000"}]))
+        self.assertEqual((meta["description"], meta["sessions"]), ("Fix the printers.", [{"name": "Printer Fix!", "id": "dd4e0000-0000"}]))
         self.assertEqual(offered, ui.sessions)  # its first Handoff, after the cost is shown
-        self.assertNotIn("New project from this Session…", labels(ui, ui.keys_sessions, ui.sessions))
+        self.assertNotIn("New project from this Session", labels(ui, ui.keys_sessions, ui.sessions))
         # a Session open in a window writes its own Handoff with /wrap-up
         ui.sessions = [dict(session("Other", kind="interactive"), id="ee5f0000-0000")]
         act(ui, ui.keys_sessions, ui.sessions, "New project from this Session")
@@ -719,6 +720,73 @@ class StartingSessions(unittest.TestCase):
         self.assertIn("--session ${CLAUDE_SESSION_ID}", skill)
         self.assertIn("roost project list", skill)
         self.assertEqual(json.loads((ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text())["name"], "roost")
+
+
+class SubProjectSessions(unittest.TestCase):
+    """A Session listed in a sub-project belongs to it: its project, its menu, project: search, and
+    Add to a project / Move to another project."""
+    setUp, tearDown, project, ui = StartingSessions.setUp, StartingSessions.tearDown, StartingSessions.project, StartingSessions.ui
+    sub = SubProjects.sub
+
+    def fixture(self):
+        """Project rollout (listing aa1b9a71-0000) with sub-project alpha (listing cc3d0000-1111), done gamma;
+        project other. Sessions: the sub-project's, the parent's, and a loose one."""
+        self.project("rollout", "---\nsummary: Rollout work.\nstatus: active\nsessions:\n  - name: Parent one\n"
+                                "    id: aa1b9a71-0000\n---\n\n# Rollout\n")
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n")
+        self.alpha = self.sub("rollout", "alpha", "feature", "active", "Badge printers.", [("Sub one", "cc3d0000-1111")])
+        self.sub("rollout", "gamma", "research", "done", "Old survey.")
+        ui = self.ui()
+        ui.sessions = [dict(session("Sub one"), id="cc3d0000-1111"), dict(session("Parent one"), id="aa1b9a71-0000"),
+                       dict(session("Loose"), id="dd4e0000-0000")]
+        ui.load_projects()
+        return ui
+
+    def test_a_session_listed_in_a_sub_project_belongs_to_it(self):
+        ui = self.fixture()
+        p = ui.project_of(ui.sessions[0])
+        self.assertIsNotNone(p)
+        self.assertEqual(p["id"], "rollout/alpha")
+        self.assertEqual(ui.project_of(ui.sessions[1])["id"], "rollout")
+        ui.sel = 0
+        acts = labels(ui, ui.keys_sessions, ui.sessions)
+        self.assertTrue([l for l in acts if l.startswith("Write its Handoff from the transcript")], acts)
+        self.assertFalse([l for l in acts if l.startswith("Write its Session recap")], acts)
+
+    def test_project_search_matches_a_sub_projects_sessions_by_its_id_or_its_parents(self):
+        ui = self.fixture()
+        ui.view, ui.sort, ui.summaries, ui.update_note, ui.warning = ALL, ("LAST ACTIVE", True), {}, "", ""
+        ui.DIM = ui.GREEN = ui.YELLOW = ui.RED = ui.CYAN = ui.ACCENT = 0
+        ui.scr = type("Screen", (), {"getmaxyx": lambda self: (40, 120)})()  # draw_sessions only asks its size
+        for q, want in [("project:rollout/alpha", {"cc3d0000-1111"}), ("project:rollout", {"cc3d0000-1111", "aa1b9a71-0000"})]:
+            ui.query = q
+            ui.draw_sessions()
+            self.assertEqual({s["id"] for s in ui.srows}, want, q)
+
+    def test_add_to_a_project_offers_open_sub_projects_and_lists_the_session_in_one(self):
+        ui = self.fixture()
+        ui.sel = 2  # Loose
+        act(ui, ui.keys_sessions, ui.sessions, "Add to a project")
+        opts = [l for l, _ in ui.choice_options()]
+        for pid in ("rollout", "other", "rollout/alpha"):  # rollout is labeled by its heading, Rollout
+            self.assertTrue([l for l in opts if pid in l.lower()], (pid, opts))
+        self.assertFalse([l for l in opts if "gamma" in l], opts)  # done: not offered
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "rollout/alpha" in l)
+        ui.keys_choice("enter")
+        listed = [x["id"] for x in roost.frontmatter((self.alpha / "README.md").read_text())["sessions"]]
+        self.assertEqual(listed, ["cc3d0000-1111", "dd4e0000-0000"])
+
+    def test_move_to_another_project_offers_open_sub_projects(self):
+        ui = self.fixture()
+        ui.sel = 1  # Parent one, in rollout
+        act(ui, ui.keys_sessions, ui.sessions, "Move to another project")
+        opts = [l for l, _ in ui.choice_options()]
+        self.assertTrue([l for l in opts if "rollout/alpha" in l], opts)
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "rollout/alpha" in l)
+        ui.keys_choice("enter")
+        listed = [x["id"] for x in roost.frontmatter((self.alpha / "README.md").read_text())["sessions"]]
+        self.assertEqual(listed, ["cc3d0000-1111", "aa1b9a71-0000"])
+        self.assertEqual(roost.frontmatter((self.root / "rollout" / "README.md").read_text())["sessions"], [])
 
 
 class Dismissing(unittest.TestCase):
@@ -808,6 +876,45 @@ class Dismissing(unittest.TestCase):
         self.assertIn("Dismiss", acts)
         self.assertNotIn("Undismiss", acts)
 
+
+class SessionMenuGroups(unittest.TestCase):
+    """A Session's actions, in groups split by dividers (| here): work on it, organize it, then stop or delete it."""
+    project, ui, fresh, acts = StartingSessions.project, StartingSessions.ui, Dismissing.fresh, Dismissing.acts
+    setUp = Dismissing.setUp
+
+    def fixture(self):
+        """Dismissing's: project p, Live (idle in the background, in p), and Loose (closed, no project);
+        plus project other, so each can go to a project."""
+        Dismissing.fixture(self)
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n")
+        return self.fresh()
+
+    def test_a_live_background_sessions_actions_in_groups(self):
+        ui = self.fixture()
+        self.assertEqual(self.acts(ui, "Live"),
+                         ["Open in a new window", "Write its Handoff from the transcript", "Ask what to do with it",
+                          "Pin: keep it running when idle", DIV,
+                          "Move to another project", "Rename", "Copy its id", "Show its folder in Finder", DIV,
+                          "Stop"])
+
+    def test_a_closed_sessions_actions_in_groups(self):
+        ui = self.fixture()
+        self.assertEqual(self.acts(ui, "Loose"),
+                         ["Open in a new window", "Write its Session recap from the transcript", "Ask what to do with it",
+                          "Restart in the background, pinned", DIV,
+                          "New project from this Session", "Add to a project", "Rename", "Dismiss", "Copy its id",
+                          "Show its folder in Finder", DIV,
+                          "Delete to the Trash"])
+
+
+    def test_no_action_label_has_an_ellipsis(self):
+        """A menu label is just its action's name: none ends in, or holds, "…". Rows: a live background
+        Session in a project, and a closed Session in no project."""
+        ui = self.fixture()
+        for name in ("Live", "Loose"):
+            real = [a for a in self.acts(ui, name) if a != DIV]
+            self.assertTrue(real, name)
+            self.assertEqual([a for a in real if "…" in a], [], name)
 
 class SessionColumns(unittest.TestCase):
     """The Sessions tab's columns scale with the window, read off the drawn header and rows. NAME

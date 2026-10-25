@@ -73,13 +73,13 @@ class Projects(unittest.TestCase):
     def test_create_writes_the_project_layout(self):
         folder = roost.create_project("2026-10-new", 'Say "hi"  to   it.')
         meta = roost.frontmatter((folder / "README.md").read_text())
-        self.assertEqual(meta, {"summary": 'Say "hi" to it.', "status": "active", "sessions": []})
+        self.assertEqual(meta, {"description": 'Say "hi" to it.', "status": "active", "sessions": []})
         self.assertTrue((folder / "handoffs").is_dir())
         self.assertIn("## Current state", (folder / "README.md").read_text())
 
     def test_create_refuses_what_it_cant_do_safely(self):
         self.project("taken")
-        for pid, summary in [("taken", "s"), ("a/b", "s"), ("_x", "s"), ("two words", "s"), ("ok", " ")]:
+        for pid, summary in [("taken", "s"), ("a/b", "s"), ("_x", "s"), ("two words", "s")]:
             with self.assertRaises(ValueError):
                 roost.create_project(pid, summary)
         self.assertEqual(roost.frontmatter((self.root / "taken" / "README.md").read_text())["category"], "vendor-reviews")
@@ -92,8 +92,7 @@ class Projects(unittest.TestCase):
         self.assertEqual(roost.run_command("project", ["new", "2026-10-x", "--summary", "A thing."]), 0)
         self.assertTrue((self.root / "2026-10-x" / "README.md").exists())
         self.assertEqual(roost.run_command("project", ["new", "2026-10-x", "--summary", "Again."]), 1)
-        with self.assertRaises(SystemExit):
-            roost.run_command("project", ["new", "2026-10-y"])  # --summary is required
+        self.assertEqual(roost.run_command("project", ["new", "2026-10-y"]), 0)  # a description is optional
 
     def ui(self):
         ui = object.__new__(roost.UI)
@@ -366,12 +365,15 @@ class Projects(unittest.TestCase):
         ui.folded = set()  # its close-out record puts it under Closed
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("b")
         act(ui, ui.keys_projects, ui.project_rows(), "Rename")
-        self.assertEqual(ui.asking["title"], "Rename b (its folder)")
+        self.assertIn("label", ui.asking["title"].lower())  # two prompts: its label, then its folder's name
+        typed(ui, "\n")  # its label stays b
+        self.assertIn("folder name", ui.asking["title"].lower())
         typed(ui, "\x7f" + "taken\n")
         self.assertIn("taken already exists", ui.msg)
         self.assertTrue(folder.exists())  # nothing changed
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("b")
         act(ui, ui.keys_projects, ui.project_rows(), "Rename")
+        typed(ui, "\n")
         typed(ui, "\x7f" + "vendor-track\n")
         new = self.root / "vendor-track"
         self.assertEqual((ui.msg, folder.exists(), new.is_dir()), ("Renamed b to vendor-track", False, True))
@@ -442,7 +444,7 @@ class Projects(unittest.TestCase):
         typed(ui, "Zed\n\x152026-10-z\nOne line.\n")  # its name, its folder (made from the name, edited), its summary
         self.assertIsNone(ui.asking)
         self.assertEqual(roost.read_project(self.root / "2026-10-z")["label"], "Zed")
-        self.assertEqual(roost.frontmatter((self.root / "2026-10-z" / "README.md").read_text())["summary"], "One line.")
+        self.assertEqual(roost.frontmatter((self.root / "2026-10-z" / "README.md").read_text())["description"], "One line.")
         self.assertEqual(ui.project_rows()[ui.psel].item["id"], "2026-10-z")
 
     def test_esc_cancels_the_new_project_prompt(self):
@@ -901,6 +903,1068 @@ class ProjectRows(unittest.TestCase):
         self.assertEqual(look(whole + 12), look(EXACT))  # LAST WORKED's 12 columns fit everything
         last_title = look(whole + 10)[0][x_lw:] if (x_lw := self.columns(look(whole + 10)[0]).get("LAST WORKED")) else ""
         self.assertTrue(last_title.endswith("…") and "LAST WORKED".startswith(last_title[:-1]), last_title)  # 10 of 12: cut
+
+
+
+class SubProjects(unittest.TestCase):
+    """Sub-projects: <project>/sub/<slug>/ with its own README and handoffs/, id <project>/<slug>."""
+    def setUp(self):
+        Projects.setUp(self)
+        self.saved_transcripts = roost.PROJECTS
+        roost.PROJECTS = Path(self.tmp.name) / "transcripts"  # session_name() reads here, never the real ones
+
+    def tearDown(self):
+        roost.PROJECTS = self.saved_transcripts
+        Projects.tearDown(self)
+
+    project = Projects.project
+
+    def sub(self, parent, slug, type="feature", status="active", summary="s", sessions=(), body="", handoffs=()):
+        """A sub-project folder made by hand, in the shape roost project new writes."""
+        folder = self.root / parent / "sub" / slug
+        (folder / "handoffs").mkdir(parents=True)
+        listed = "".join(f"\n  - name: {n}\n    id: {i}" for n, i in sessions) or " []"
+        (folder / "README.md").write_text(f"---\nsummary: {json.dumps(summary)}\ntype: {type}\nstatus: {status}\n"
+                                          f"sessions:{listed}\n---\n\n# {slug}\n\n{body}\n")
+        for name, text in handoffs:
+            (folder / "handoffs" / name).write_text(text)
+        return folder
+
+    def run_cli(self, argv):
+        """(exit code, stdout, stderr) of roost project <argv>; an argparse refusal counts as its exit code."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = roost.run_command("project", argv)
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def tree(self):
+        base = Path(self.tmp.name)
+        return {p: (p.read_bytes() if p.is_file() else None) for p in base.rglob("*") if p.name != "config.json"}
+
+    # roost project new <project>/<slug>
+
+    def test_new_sub_project_writes_its_readme_and_handoffs(self):
+        self.project("rollout")
+        for slug, kind in [("alpha", "feature"), ("fix-1", "bugfix"), ("2nd-look", "research"), ("tidy", "chore")]:
+            code, _, err = self.run_cli(["new", f"rollout/{slug}", "--type", kind, "--summary", f"The {slug}  work."])
+            self.assertEqual(code, 0, err)
+            folder = self.root / "rollout" / "sub" / slug
+            self.assertTrue((folder / "handoffs").is_dir(), slug)
+            meta = roost.frontmatter((folder / "README.md").read_text())
+            self.assertEqual({k: meta.get(k) for k in ("description", "type", "status", "sessions")},
+                             {"description": f"The {slug} work.", "type": kind, "status": "active", "sessions": []})
+        self.assertFalse((self.root / "rollout" / "alpha").exists())  # under sub/, not beside it
+
+    def test_new_sub_project_refuses_and_creates_nothing(self):
+        self.project("rollout")
+        self.assertEqual(self.run_cli(["new", "rollout/alpha", "--type", "feature", "--summary", "First."])[0], 0)
+        refused = [
+            (["new", "rollout/beta", "--type", "epic", "--summary", "s"], "unknown type"),
+            (["new", "rollout/beta", "--summary", "s"], "no --type for a sub-project"),
+            (["new", "toplevel", "--type", "feature", "--summary", "s"], "--type for a top-level project"),
+            (["new", "nope/beta", "--type", "feature", "--summary", "s"], "parent doesn't exist"),
+            (["new", "rollout/Beta", "--type", "feature", "--summary", "s"], "uppercase slug"),
+            (["new", "rollout/-beta", "--type", "feature", "--summary", "s"], "slug starting with a hyphen"),
+            (["new", "rollout/be_ta", "--type", "feature", "--summary", "s"], "underscore in slug"),
+            (["new", "rollout/be.ta", "--type", "feature", "--summary", "s"], "dot in slug"),
+            (["new", "rollout/alpha/deeper", "--type", "feature", "--summary", "s"], "sub-project of a sub-project"),
+            (["new", "../beta", "--type", "feature", "--summary", "s"], ".. as the project"),
+            (["new", "rollout/..", "--type", "feature", "--summary", "s"], ".. as the slug"),
+            (["new", "rollout/../beta", "--type", "feature", "--summary", "s"], ".. in the middle"),
+            (["new", "rollout/alpha", "--type", "bugfix", "--summary", "Again."], "already exists"),
+        ]
+        before = self.tree()
+        for argv, why in refused:
+            code, _, err = self.run_cli(argv)
+            self.assertNotIn(code, (0, None), why)
+            self.assertTrue(err.strip(), why)
+            self.assertEqual(self.tree(), before, why)
+        self.assertEqual(roost.frontmatter((self.root / "rollout" / "sub" / "alpha" / "README.md").read_text())["description"],
+                         "First.")
+
+    def test_a_top_level_project_new_still_needs_no_type(self):
+        self.project("rollout")
+        self.assertEqual(self.run_cli(["new", "rollout/alpha", "--type", "chore", "--summary", "Sub."])[0], 0)
+        code, _, err = self.run_cli(["new", "plain", "--summary", "Top."])
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("type", roost.frontmatter((self.root / "plain" / "README.md").read_text()))
+
+    # finding and reading them
+
+    def test_find_project_finds_a_sub_project_by_its_id(self):
+        self.project("rollout")
+        folder = self.sub("rollout", "alpha")
+        self.assertEqual(roost.find_project("rollout/alpha"), folder)
+        for bad in ["rollout/nope", "rollout/../rollout", "rollout/..", "../rollout/alpha", "rollout/alpha/x", "rollout/sub/alpha"]:
+            with self.assertRaises(ValueError, msg=bad):
+                roost.find_project(bad)
+
+    def test_read_subprojects_lists_each_sub_project_folder(self):
+        parent = self.project("rollout")
+        a = self.sub("rollout", "alpha", "feature", "active", "Badge printers.", [("One", "cc3d0000-1111")])
+        b = self.sub("rollout", "beta", "bugfix", "done", "Toner alerts.")
+        (parent / "sub" / "_draft").mkdir()
+        (parent / "sub" / ".hidden").mkdir()
+        subs = {s["id"]: s for s in roost.read_subprojects(parent)}
+        self.assertEqual(set(subs), {"rollout/alpha", "rollout/beta"})
+        want = {"rollout/alpha": ("alpha", "feature", "active", "Badge printers.", a, ["cc3d0000-1111"]),
+                "rollout/beta": ("beta", "bugfix", "done", "Toner alerts.", b, [])}
+        for sid, (slug, kind, status, summary, folder, sessions) in want.items():
+            s = subs[sid]
+            self.assertEqual((s["slug"], s["type"], s["status"], s["summary"], Path(s["path"]), s["sessions"], s["parent"]),
+                             (slug, kind, status, summary, folder, sessions, "rollout"))
+        self.assertEqual(roost.read_subprojects(self.project("bare")), [])
+
+    def test_sub_projects_never_appear_as_projects(self):
+        self.project("rollout")
+        self.sub("rollout", "alpha", sessions=[("One", "cc3d0000-1111")])
+        self.assertEqual([p["id"] for p in roost.read_projects()], ["rollout"])
+        self.assertNotIn("cc3d0000-1111", roost.read_projects()[0]["sessions"])
+
+    # roost project brief <project>/<slug>
+
+    def brief_fixture(self):
+        self.project("rollout", "---\nsummary: \"PARENTSUM wide rollout.\"\nstatus: active\nsessions: []\n---\n\n"
+                                "# Rollout\n\nPARENTBODY notes.\n")
+        (self.root / "rollout" / "handoffs" / "2026-10-05-0900-aaaaaaaa.md").write_text("PARENTHANDOFF text\n")
+        folder = self.sub("rollout", "alpha", "feature", "active", "SUBSUM badge printers.", body="SUBBODY notes.",
+                          handoffs=[("2026-10-06-0900-bbbbbbbb.md", "SUBHANDOFF text\n")])
+        self.sub("rollout", "beta", "bugfix", "blocked", "BETASUM toner alerts.")
+        self.sub("rollout", "gamma", "research", "done", "GAMMASUM old survey.")
+        return folder
+
+    def test_sub_project_brief_is_parent_then_sub_then_handoffs_then_open_siblings(self):
+        text = roost.brief(self.brief_fixture())
+        context = next((l for l in text.splitlines() if l.startswith("#") and "context" in l.lower() and "rollout" in l), None)
+        self.assertIsNotNone(context, "a heading naming rollout as the wider context")
+        order = [text.index(context), text.index("PARENTSUM"), text.index("PARENTBODY"), text.index("SUBSUM"),
+                 text.index("SUBBODY"), text.index("SUBHANDOFF"), text.index("BETASUM")]
+        self.assertEqual(order, sorted(order))
+        beta = next(l for l in text.splitlines() if "BETASUM" in l)
+        for part in ("beta", "bugfix", "blocked"):
+            self.assertIn(part, beta)
+        self.assertNotIn("PARENTHANDOFF", text)
+        self.assertNotIn("GAMMASUM", text)  # done siblings aren't listed
+        self.assertNotIn("SUBSUM", text[text.index("SUBHANDOFF"):])  # nor the sub-project itself
+
+    def test_sub_project_brief_command(self):
+        self.brief_fixture()
+        code, out, err = self.run_cli(["brief", "rollout/alpha"])
+        self.assertEqual(code, 0, err)
+        self.assertLess(out.index("PARENTSUM"), out.index("SUBSUM"))
+        self.assertLess(out.index("SUBHANDOFF"), out.index("BETASUM"))
+
+    def test_brief_session_lists_it_in_the_sub_project_and_off_the_parent(self):
+        parent = self.project("rollout")  # README lists aa1b9a71-0000 and bb2c0000-0000
+        folder = self.sub("rollout", "alpha")
+        code, _, err = self.run_cli(["brief", "rollout/alpha", "--session", "bb2c0000-0000"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual([x["id"] for x in roost.frontmatter((folder / "README.md").read_text())["sessions"]],
+                         ["bb2c0000-0000"])
+        self.assertEqual((parent / "README.md").read_text(), README.replace("  - name: Second look\n    id: bb2c0000-0000\n", ""))
+
+    # roost project status <project>/<slug>
+
+    def test_status_of_a_sub_project_sets_and_prints_only_its_own(self):
+        parent = self.project("rollout")
+        folder = self.sub("rollout", "alpha")
+        before = (parent / "README.md").read_text()
+        code, _, err = self.run_cli(["status", "rollout/alpha", "done"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.frontmatter((folder / "README.md").read_text())["status"], "done")
+        self.assertEqual((parent / "README.md").read_text(), before)
+        code, out, err = self.run_cli(["status", "rollout/alpha"])
+        self.assertEqual((code, out), (0, "done\n"), err)
+
+    # roost project list
+
+    def test_list_shows_open_sub_projects_indented_under_their_parent(self):
+        self.project("rollout")
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n")
+        self.sub("rollout", "alpha", "feature", "active", "Badge printers.")
+        self.sub("rollout", "beta", "bugfix", "done", "Toner alerts.")
+        for flags, subs in [([], ["rollout/alpha"]), (["--all"], ["rollout/alpha", "rollout/beta"])]:
+            code, out, err = self.run_cli(["list"] + flags)
+            self.assertEqual(code, 0, err)
+            lines = out.splitlines()
+            at = next(i for i, l in enumerate(lines) if l.startswith("rollout "))
+            after = lines[at + 1:at + 1 + len(subs)]
+            self.assertTrue(all(l[:1].isspace() for l in after), after)
+            self.assertEqual(sorted(next(s for s in subs if s in l) for l in after if any(s in l for s in subs)), subs)
+            if not flags:
+                self.assertNotIn("rollout/beta", out)
+
+
+class SubProjectRows(unittest.TestCase):
+    """Sub-projects on the Projects tab: rows under their project, folded until opened, with a panel,
+    actions, a New sub-project flow, and search."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    shown = Projects.shown
+
+    def ui(self):
+        ui = Projects.ui(self)
+        ui.term = "ghostty"
+        return ui
+
+    def fixture(self):
+        """Project rollout (worked on today) with open alpha and beta, and done gamma; project other with none."""
+        self.project("rollout", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n",
+                     handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-bbbbbbbb.md"])
+        self.sub("rollout", "beta", "bugfix", "blocked", "Toner alerts.")
+        self.sub("rollout", "alpha", "feature", "active", "Badge printers.")
+        self.sub("rollout", "gamma", "research", "done", "Old survey.")
+        ui = self.ui()
+        return ui
+
+    def select(self, ui, kind, rid):
+        rows = ui.project_rows()
+        at = [i for i, r in enumerate(rows) if r.kind == kind and r.item["id"] == rid]
+        self.assertTrue(at, f"no {kind} row {rid} in {self.shown(ui)}")
+        ui.psel = at[0]
+        return rows
+
+    def after(self, ui, rid):
+        """The (kind, id) rows right after project rid, up to the next project, header, or + New project."""
+        rows = self.shown(ui)
+        at = rows.index(("project", rid))
+        out = []
+        for kind, i in rows[at + 1:]:
+            if kind in ("project", "head", "new"):
+                break
+            out.append((kind, i))
+        return out
+
+    def capture_start(self):
+        """Patch terminals.start_session; returns the list of the args each call got."""
+        import unittest.mock
+        calls = []
+        patcher = unittest.mock.patch.object(importlib.import_module("roost.core.terminals"), "start_session",
+                                             lambda *a, **kw: calls.append(a) or "Started it")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def test_sub_projects_are_folded_until_right_and_left_folds_them_again(self):
+        ui = self.fixture()
+        self.assertEqual(self.after(ui, "rollout"), [])  # folded by default
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        self.assertEqual(self.after(ui, "rollout"), [("sub", "rollout/alpha"), ("sub", "rollout/beta")])  # slug order, no done one
+        sub_rows = [r for r in ui.project_rows() if r.kind == "sub"]
+        self.assertEqual([(r.item["slug"], r.item["type"]) for r in sub_rows], [("alpha", "feature"), ("beta", "bugfix")])
+        ui.keys_projects("left", ui.project_rows())  # on the project
+        self.assertEqual(self.after(ui, "rollout"), [])
+        self.assertEqual(ui.project_rows()[ui.psel].item["id"], "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        self.select(ui, "sub", "rollout/beta")
+        ui.keys_projects("left", ui.project_rows())  # on one of its sub rows
+        self.assertEqual(self.after(ui, "rollout"), [])
+        r = ui.project_rows()[ui.psel]
+        self.assertEqual((r.kind, r.item["id"]), ("project", "rollout"))
+
+    def test_a_projects_panel_counts_its_open_sub_projects(self):
+        ui = self.fixture()
+        rows = self.select(ui, "project", "rollout")
+        _, fields = ui.project_panel(rows, 40, 120)
+        subs = [str(v) for label, v in fields if label == "Sub-projects"]
+        self.assertEqual(len(subs), 1, fields)
+        self.assertIn("2 open", subs[0])
+        rows = self.select(ui, "project", "other")
+        _, fields = ui.project_panel(rows, 40, 120)
+        self.assertNotIn("Sub-projects", [label for label, _ in fields])
+
+    def test_a_sub_rows_panel_names_its_id_type_and_status(self):
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        rows = self.select(ui, "sub", "rollout/beta")
+        name, fields = ui.project_panel(rows, 40, 120)
+        self.assertEqual(name, "rollout/beta")
+        got = {label: str(v) for label, v in fields}
+        self.assertIn("bugfix", got.get("Type", ""), fields)
+        self.assertIn("blocked", got.get("Status", ""), fields)
+
+    def test_a_sub_rows_actions_start_a_session_in_it(self):
+        calls = self.capture_start()
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        rows = self.select(ui, "sub", "rollout/alpha")
+        acts = labels(ui, ui.keys_projects, rows)
+        for want in ("Start a Session", "Show its folder in Finder"):
+            self.assertTrue([l for l in acts if l.startswith(want)], (want, acts))
+        self.assertNotIn("New sub-project", acts)  # only in its parent's actions
+        act(ui, ui.keys_projects, ui.project_rows(), "Start a Session")
+        self.assertEqual([c[0] for c in calls], ["rollout/alpha"])
+
+    def test_a_projects_actions_offer_new_sub_project_and_start_one_in_a_sub_project(self):
+        calls = self.capture_start()
+        ui = self.fixture()
+        rows = self.select(ui, "project", "other")
+        acts = labels(ui, ui.keys_projects, rows)
+        self.assertIn("New sub-project", acts)
+        self.assertFalse([l for l in acts if l.startswith("Start a Session in a sub-project")], acts)  # none open
+        rows = self.select(ui, "project", "rollout")
+        acts = labels(ui, ui.keys_projects, rows)
+        self.assertIn("New sub-project", acts)
+        self.assertIn("Start a Session in a sub-project", acts)
+        act(ui, ui.keys_projects, rows, "Start a Session in a sub-project")
+        opts = [l for l, _ in ui.choice_options()]
+        for slug in ("alpha", "beta"):
+            self.assertEqual(len([l for l in opts if slug in l]), 1, (slug, opts))
+        self.assertFalse([l for l in opts if "gamma" in l], opts)  # done: not offered
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "beta" in l)
+        ui.keys_choice("enter")
+        self.assertEqual([c[0] for c in calls], ["rollout/beta"])
+
+    def test_new_sub_project_picks_a_type_then_asks_its_slug_and_summary(self):
+        ui = self.fixture()
+        self.assertIn("New sub-project", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "New sub-project")
+        self.assertIsNotNone(ui.choosing)
+        opts = [l for l, _ in ui.choice_options()]
+        self.assertEqual(len(opts), 4, opts)
+        for kind in roost.SUB_TYPES:
+            self.assertEqual(len([l for l in opts if kind in l]), 1, (kind, opts))
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "chore" in l)
+        ui.keys_choice("enter")
+        self.assertIsNone(ui.choosing)
+        self.assertIsNotNone(ui.asking)  # its slug
+        typed(ui, "\x15tidy-cables\n")
+        self.assertIsNotNone(ui.asking)  # its summary
+        typed(ui, "\x15Tidy the cables.\n")
+        self.assertIsNone(ui.asking)
+        readme = self.root / "rollout" / "sub" / "tidy-cables" / "README.md"
+        self.assertTrue(readme.is_file())
+        meta = roost.frontmatter(readme.read_text())
+        self.assertEqual((meta.get("type"), meta.get("description")), ("chore", "Tidy the cables."))
+        self.assertTrue(ui.msg.startswith("Created"), ui.msg)
+        self.assertIn(("sub", "rollout/tidy-cables"), self.after(ui, "rollout"))  # its parent is unfolded
+        r = ui.project_rows()[ui.psel]
+        self.assertEqual((r.kind, r.item["id"]), ("sub", "rollout/tidy-cables"))
+
+    def test_new_sub_project_with_a_bad_slug_creates_nothing(self):
+        ui = self.fixture()
+        before = sorted(p.name for p in (self.root / "rollout" / "sub").iterdir())
+        self.assertIn("New sub-project", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "New sub-project")
+        opts = [l for l, _ in ui.choice_options()]
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "feature" in l)
+        ui.keys_choice("enter")
+        typed(ui, "\x15Bad Slug\n")
+        if ui.asking:  # refused at the slug or after the summary: either way, nothing is made
+            typed(ui, "\x15A summary.\n")
+        self.assertEqual(sorted(p.name for p in (self.root / "rollout" / "sub").iterdir()), before)
+        self.assertTrue(ui.msg.startswith("Couldn't create it"), ui.msg)
+
+    def test_search_shows_a_matching_sub_project_under_its_parent(self):
+        ui = self.fixture()
+        ui.notes = []
+        for q, want in [("alpha", "rollout/alpha"), ("TONER", "rollout/beta"), ("type:bugfix", "rollout/beta")]:
+            ui.pquery = q
+            rows = [x for x in self.shown(ui) if x[0] != "head"]
+            self.assertEqual(rows, [("project", "rollout"), ("sub", want)], q)
+
+
+class ProjectMenuGroups(unittest.TestCase):
+    """A project's and a sub-project's actions, in groups split by dividers (| here): work on it,
+    then (a project's) New sub-project, then organize it, then delete it."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    ui, select, shown = SubProjectRows.ui, SubProjectRows.select, Projects.shown
+
+    def fixture(self):
+        """Project rollout (listing aa1b9a71-0000, a live Session) with open alpha (listing cc3d0000-1111,
+        another) and beta; project legacy, not in roost's shape yet (no handoffs/) with a due _archive folder."""
+        self.project("rollout", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        self.sub("rollout", "alpha", "feature", "active", "Badge printers.", [("Sub one", "cc3d0000-1111")])
+        self.sub("rollout", "beta", "bugfix", "active", "Toner alerts.")
+        legacy = self.root / "legacy"
+        (legacy / "_archive" / "2020-01-01").mkdir(parents=True)
+        (legacy / "README.md").write_text("---\nsummary: Older work.\nstatus: active\nsessions: []\n---\n\n# Legacy\n")
+        ui = self.ui()
+        ui.sessions = [dict(session("Password Manager Review"), id="aa1b9a71-0000"), dict(session("Sub one"), id="cc3d0000-1111")]
+        ui.load_projects()
+        return ui
+
+    def test_a_projects_actions_in_groups(self):
+        ui = self.fixture()
+        rows = self.select(ui, "project", "rollout")
+        self.assertEqual(labels(ui, ui.keys_projects, rows),
+                         ["Start a Session", "Start a Session in a sub-project", "Show its Sessions", DIV,
+                          "New sub-project", DIV,
+                          "Set its category", "Edit its tags", "Edit its description", "Rename", "Show its folder in Finder", DIV,
+                          "Delete"])
+
+    def test_adopt_and_a_due_archive_go_in_the_delete_group(self):
+        ui = self.fixture()
+        ui.folded = set()  # no work on it yet: it's under Inactive
+        rows = self.select(ui, "project", "legacy")
+        self.assertEqual(labels(ui, ui.keys_projects, rows),
+                         ["Start a Session", DIV,
+                          "New sub-project", DIV,
+                          "Set its category", "Edit its tags", "Edit its description", "Rename", "Show its folder in Finder", DIV,
+                          "Adopt it: plan its README and files, then write its Handoffs",
+                          "Move _archive/2020-01-01 to the Trash", "Delete"])
+
+    def test_a_double_click_runs_the_first_real_action_when_the_first_group_is_empty(self):
+        """A closed project with no open sub-projects and no linked Session has nothing to work on, so its
+        actions start with the New sub-project group: a double-click runs that, never a divider."""
+        self.project("shut", "---\nsummary: Finished work.\nstatus: closed\nsessions: []\n---\n\n# Shut\n")
+        ui = self.ui()
+        ui.folded = set()
+        rows = self.select(ui, "project", "shut")
+        self.assertEqual(labels(ui, ui.keys_projects, rows)[0], "New sub-project")
+        ui.prow_y = {6: ui.psel}  # the project's row, as draw left it
+        ui.keys_projects(("mouse", 20, 6, roost.curses.BUTTON1_DOUBLE_CLICKED), ui.project_rows())
+        self.assertTrue(ui.choosing and ui.choosing["title"].startswith("New sub-project of"), ui.choosing)
+
+    def test_a_sub_projects_actions_in_groups(self):
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        rows = self.select(ui, "sub", "rollout/alpha")
+        self.assertEqual(labels(ui, ui.keys_projects, rows),
+                         ["Start a Session", "Show its Sessions", DIV,
+                          "Edit its tags", "Edit its description", "Rename", "Show its folder in Finder", DIV,
+                          "Delete"])
+
+
+    def test_no_action_label_has_an_ellipsis(self):
+        """A menu label is just its action's name: none ends in, or holds, "…" (a prompt or confirm may follow
+        or not). Rows: a project with open sub-projects and a linked Session, one with a due _archive that
+        isn't adopted, and a sub-project."""
+        ui = self.fixture()
+        ui.folded = set()
+        seen = {}
+        seen["rollout"] = labels(ui, ui.keys_projects, self.select(ui, "project", "rollout"))
+        seen["legacy"] = labels(ui, ui.keys_projects, self.select(ui, "project", "legacy"))
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        seen["rollout/alpha"] = labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha"))
+        for row, acts in seen.items():
+            real = [a for a in acts if a != DIV]
+            self.assertTrue(real, row)
+            self.assertEqual([a for a in real if "…" in a], [], row)
+
+class ProjectDelete(unittest.TestCase):
+    """Delete on a project or sub-project: a confirm box, then the id typed exactly, then its folder goes
+    to the Trash (through adopt.trash, patched here to move it into a temp folder)."""
+    project, sub, shown, select, after = Projects.project, SubProjects.sub, Projects.shown, SubProjectRows.select, SubProjectRows.after
+    ui = SubProjectRows.ui
+
+    def setUp(self):
+        import shutil
+        import unittest.mock
+        SubProjects.setUp(self)
+        self.bin = Path(self.tmp.name) / "trash-bin"
+        self.bin.mkdir()
+        self.trashed = []
+
+        def trash(path):
+            self.trashed.append(Path(path))
+            dst = self.bin / f"{len(self.trashed)}-{Path(path).name}"
+            shutil.move(str(path), str(dst))
+            return dst
+        patcher = unittest.mock.patch.object(importlib.import_module("roost.core.adopt"), "trash", trash)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        SubProjects.tearDown(self)
+
+    @staticmethod
+    def answer(ui, text):
+        """Enter text at the open one-line prompt, as enter does."""
+        a, ui.asking = ui.asking, None
+        return a["done"](text)
+
+    def fresh(self):
+        """A new temp Projects folder (and Trash stand-in), for each case of a loop."""
+        self.doCleanups()
+        self.tearDown()
+        self.setUp()
+
+    def open_delete(self, ui, kind, rid):
+        """Select the row and choose Delete from its actions."""
+        if kind == "sub":
+            self.select(ui, "project", rid.split("/")[0])
+            if ("sub", rid) not in self.after(ui, rid.split("/")[0]):
+                ui.keys_projects("right", ui.project_rows())
+        act(ui, ui.keys_projects, self.select(ui, kind, rid), "Delete")
+
+    def ids(self, ui):
+        return [r.item["id"] for r in ui.project_rows() if r.kind in ("project", "sub")]
+
+    def fixture(self):
+        ui = SubProjectRows.fixture(self)
+        ui.DIM = ui.GREEN = ui.YELLOW = ui.RED = 0  # confirm_text's colors, set by curses in the app
+        return ui
+
+    def test_a_real_projects_actions_include_delete(self):
+        ui = self.fixture()
+        self.assertIn("Delete", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        p = next(x for x in ui.projects if x["id"] == "rollout")
+        demo_like = dict(p, path=str(Path(self.tmp.name) / "not-a-folder"))
+        self.assertNotIn("Delete", [l for l, _ in ui.project_actions(demo_like)])  # like Rename: real folders only
+
+    def test_a_sub_projects_actions_include_delete(self):
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        self.assertIn("Delete", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
+
+    def test_delete_on_a_project_opens_a_confirm_naming_it_and_its_sub_projects(self):
+        ui = self.fixture()
+        self.open_delete(ui, "project", "rollout")
+        self.assertIsNotNone(ui.confirm)
+        self.assertIsNone(ui.asking)
+        title, body, _, _ = ui.confirm_text()
+        self.assertIn("rollout", title)
+        self.assertIn("Trash", title)
+        text = " ".join(body)
+        self.assertIn("3", text)  # alpha, beta, and done gamma: every sub/ folder goes with it
+        self.assertIn("sub-project", text)
+        self.assertTrue((self.root / "rollout").is_dir())
+        self.assertEqual(self.trashed, [])
+
+    def test_delete_on_a_sub_project_opens_a_confirm_naming_it(self):
+        ui = self.fixture()
+        self.open_delete(ui, "sub", "rollout/alpha")
+        self.assertIsNotNone(ui.confirm)
+        title, _, _, _ = ui.confirm_text()
+        self.assertIn("rollout/alpha", title)
+        self.assertIn("Trash", title)
+        self.assertTrue((self.root / "rollout" / "sub" / "alpha").is_dir())
+        self.assertEqual(self.trashed, [])
+
+    def test_any_key_but_y_at_the_confirm_cancels(self):
+        for key in ("n", "escape", "enter", "x"):
+            self.fresh()
+            ui = self.fixture()
+            self.open_delete(ui, "project", "rollout")
+            ui.keys_confirm(key)
+            self.assertIsNone(ui.asking, key)
+            self.assertIn("Cancelled", ui.msg, key)
+            self.assertTrue((self.root / "rollout").is_dir(), key)
+            self.assertEqual(self.trashed, [], key)
+
+    def test_y_at_the_confirm_asks_for_the_id_typed(self):
+        for key, kind, rid in (("y", "project", "rollout"), ("Y", "sub", "rollout/beta")):
+            self.fresh()
+            ui = self.fixture()
+            self.open_delete(ui, kind, rid)
+            ui.keys_confirm(key)
+            self.assertIsNotNone(ui.asking, (key, rid))
+            self.assertEqual(ui.asking["text"], "", rid)
+            self.assertIn(rid, ui.asking["title"] or "", rid)
+            self.assertTrue((self.root / "rollout" / "sub" / "beta").is_dir())
+            self.assertEqual(self.trashed, [], rid)
+
+    def test_typing_anything_but_the_exact_id_cancels(self):
+        for kind, rid, wrong in (("project", "rollout", "other"), ("project", "rollout", "Rollout"), ("project", "rollout", ""),
+                                 ("sub", "rollout/alpha", "alpha"), ("sub", "rollout/alpha", "ROLLOUT/ALPHA"), ("sub", "rollout/alpha", "")):
+            self.fresh()
+            ui = self.fixture()
+            self.open_delete(ui, kind, rid)
+            ui.keys_confirm("y")
+            self.answer(ui, wrong)
+            self.assertEqual(self.trashed, [], (rid, wrong))
+            self.assertTrue((self.root / "rollout" / "sub" / "alpha").is_dir(), (rid, wrong))
+            self.assertRegex(ui.msg, r"(?i)match|cancel", (rid, wrong))
+            self.assertIn("rollout", self.ids(ui), (rid, wrong))
+
+    def test_the_exact_id_moves_a_project_and_its_sub_projects_to_the_trash(self):
+        ui = self.fixture()
+        folder = self.root / "rollout"
+        self.open_delete(ui, "project", "rollout")
+        ui.keys_confirm("y")
+        self.answer(ui, "  rollout \n")
+        self.assertFalse(folder.exists())
+        self.assertIn(folder, self.trashed)
+        moved = sorted(p.name for d in self.bin.iterdir() for p in (d / "sub").iterdir()) if self.bin.exists() else []
+        self.assertEqual(moved, ["alpha", "beta", "gamma"])  # its sub/ folders went with it
+        self.assertIn("Trash", ui.msg)
+        self.assertIn("rollout", ui.msg)
+        self.assertNotIn("rollout", self.ids(ui))
+        self.assertFalse([i for i in self.ids(ui) if i.startswith("rollout/")])
+        self.assertIn("other", self.ids(ui))
+        self.assertTrue((self.root / "other").is_dir())
+
+    def test_the_exact_id_moves_only_that_sub_project_to_the_trash(self):
+        ui = self.fixture()
+        folder = self.root / "rollout" / "sub" / "alpha"
+        self.open_delete(ui, "sub", "rollout/alpha")
+        ui.keys_confirm("y")
+        self.answer(ui, " rollout/alpha ")
+        self.assertFalse(folder.exists())
+        self.assertEqual(self.trashed, [folder])
+        self.assertIn("Trash", ui.msg)
+        self.assertIn("rollout/alpha", ui.msg)
+        for kept in ("rollout", "rollout/sub/beta", "rollout/sub/gamma"):
+            self.assertTrue((self.root / kept).is_dir(), kept)
+        self.assertTrue((self.root / "rollout" / "README.md").is_file())
+        if "rollout" not in ui.subs_open:
+            self.select(ui, "project", "rollout")
+            ui.keys_projects("right", ui.project_rows())
+        self.assertNotIn("rollout/alpha", self.ids(ui))
+        self.assertIn("rollout", self.ids(ui))
+        self.assertIn("rollout/beta", self.ids(ui))
+
+
+class SubProjectRename(unittest.TestCase):
+    """Rename on a sub-project: a Label prompt starting with its heading (its slug by default), then a Folder
+    name prompt starting with its slug; a new folder name renames <project>/sub/<old> to sub/<new>."""
+    setUp, tearDown = SubProjects.setUp, SubProjects.tearDown
+    project, sub, shown, select, after = Projects.project, SubProjects.sub, Projects.shown, SubProjectRows.select, SubProjectRows.after
+    ui, fixture = SubProjectRows.ui, SubProjectRows.fixture
+    answer, ids = staticmethod(ProjectDelete.answer), ProjectDelete.ids
+
+    def fresh(self):
+        """A new temp Projects folder, for each case of a loop."""
+        self.tearDown()
+        self.setUp()
+
+    def open_rename(self, ui, rid="rollout/alpha"):
+        if "rollout" not in ui.subs_open:
+            self.select(ui, "project", "rollout")
+            ui.keys_projects("right", ui.project_rows())
+        act(ui, ui.keys_projects, self.select(ui, "sub", rid), "Rename")
+
+    def test_a_sub_projects_actions_include_rename(self):
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        self.assertIn("Rename", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
+
+    def test_rename_starts_with_the_slug_and_renames_its_folder(self):
+        ui = self.fixture()
+        self.open_rename(ui)
+        self.assertIsNotNone(ui.asking)
+        self.assertEqual(ui.asking["text"], "alpha")  # its label: its heading, which is its slug
+        self.answer(ui, "alpha")
+        self.assertIsNotNone(ui.asking)
+        self.assertEqual(ui.asking["text"], "alpha")  # its folder's name
+        self.answer(ui, "delta")
+        sub = self.root / "rollout" / "sub"
+        self.assertFalse((sub / "alpha").exists())
+        self.assertTrue((sub / "delta").is_dir())
+        self.assertTrue((self.root / "rollout" / "README.md").is_file())
+        if "rollout" not in ui.subs_open:
+            self.select(ui, "project", "rollout")
+            ui.keys_projects("right", ui.project_rows())
+        self.assertIn("rollout/delta", self.ids(ui))
+        self.assertNotIn("rollout/alpha", self.ids(ui))
+        self.assertIn("rollout", self.ids(ui))
+
+    def test_rename_rewrites_a_heading_that_was_the_old_slug(self):
+        ui = self.fixture()
+        self.open_rename(ui)
+        self.answer(ui, "alpha")  # its label unchanged: the heading follows the folder
+        self.answer(ui, "delta")
+        text = (self.root / "rollout" / "sub" / "delta" / "README.md").read_text()
+        self.assertIn("\n# delta\n", text)
+        self.assertNotIn("# alpha", text)
+
+    def test_rename_refuses_a_bad_slug_or_a_siblings_name(self):
+        for bad in ("Bad Name", "beta"):
+            self.fresh()
+            ui = self.fixture()
+            before = sorted(p.name for p in (self.root / "rollout" / "sub").iterdir())
+            self.open_rename(ui)
+            self.answer(ui, "alpha")
+            self.answer(ui, bad)
+            self.assertTrue(ui.msg.startswith("Couldn't rename it"), (bad, ui.msg))
+            self.assertEqual(sorted(p.name for p in (self.root / "rollout" / "sub").iterdir()), before, bad)
+            self.assertIn("\n# alpha\n", (self.root / "rollout" / "sub" / "alpha" / "README.md").read_text(), bad)
+            self.assertIn("\n# beta\n", (self.root / "rollout" / "sub" / "beta" / "README.md").read_text(), bad)
+
+    def test_a_new_label_moves_a_folder_named_after_the_old_one(self):
+        """Its folder name was slug(its label): a new label starts the Folder name prompt at slug(new label)."""
+        ui = self.fixture()
+        self.open_rename(ui)
+        self.answer(ui, "Badge Printers")
+        self.assertIn("folder name", (ui.asking or {}).get("title", "").lower(), ui.asking)
+        self.assertEqual(ui.asking["text"], "badge-printers")
+        self.answer(ui, "badge-printers")
+        sub = self.root / "rollout" / "sub"
+        self.assertFalse((sub / "alpha").exists())
+        self.assertEqual(roost.heading((sub / "badge-printers" / "README.md").read_text()), "Badge Printers")
+
+    def test_a_new_label_alone_changes_only_its_heading(self):
+        ui = self.fixture()
+        before = (self.root / "rollout" / "sub" / "alpha" / "README.md").read_text()
+        self.open_rename(ui)
+        self.answer(ui, "Badge Printers")
+        self.answer(ui, "alpha")  # the folder name put back as it was
+        self.assertEqual((self.root / "rollout" / "sub" / "alpha" / "README.md").read_text(),
+                         before.replace("\n# alpha\n", "\n# Badge Printers\n"))
+        self.assertEqual(sorted(p.name for p in (self.root / "rollout" / "sub").iterdir()), ["alpha", "beta", "gamma"])
+
+    def test_rename_refuses_while_a_linked_session_is_running(self):
+        self.project("rollout", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        self.sub("rollout", "alpha", sessions=[("Live", "cc3d0000-0000")])
+        ui = self.ui()
+        ui.sessions = [dict(session("Live", state="idle"), id="cc3d0000-0000")]
+        ui.load_projects()
+        self.open_rename(ui)
+        self.assertIsNone(ui.asking)
+        self.assertIn("Live is running in it", ui.msg)
+        self.assertTrue((self.root / "rollout" / "sub" / "alpha").is_dir())
+
+
+TODAY = lambda: time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"  # a Handoff written now: its project is Recent
+SUMMARY_LINE = re.compile(r"(?m)^summary\s*:")
+DESCRIPTION_LINE = re.compile(r"(?m)^description\s*:")
+
+
+class Descriptions(unittest.TestCase):
+    """A project's (and sub-project's) description: the README's description: line, read with a legacy
+    summary: line as the fallback, optional when it's made, and set by set_description or roost project description."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    run_cli = SubProjects.run_cli
+
+    def readme(self, folder):
+        return (Path(folder) / "README.md").read_text()
+
+    def test_read_takes_description_then_a_legacy_summary(self):
+        self.project("new", '---\ndescription: "Current text."\nstatus: active\nsessions: []\n---\n\n# New\n')
+        self.project("old", '---\nsummary: "Legacy text."\nstatus: active\nsessions: []\n---\n\n# Old\n')
+        self.project("both", '---\ndescription: "Wins."\nsummary: "Loses."\nsessions: []\n---\n')
+        self.project("none", "---\nstatus: active\nsessions: []\n---\n")
+        self.assertEqual({p["id"]: p["summary"] for p in roost.read_projects()},
+                         {"new": "Current text.", "old": "Legacy text.", "both": "Wins.", "none": ""})
+        self.assertEqual(roost.read_project(self.root / "new")["summary"], "Current text.")
+        self.sub("new", "alpha", summary="Legacy sub.")
+        beta = self.sub("new", "beta")
+        (beta / "README.md").write_text(self.readme(beta).replace('summary: "s"', 'description: "Current sub."'))
+        self.assertEqual({s["slug"]: s["summary"] for s in roost.read_subprojects(self.root / "new")},
+                         {"alpha": "Legacy sub.", "beta": "Current sub."})
+
+    def test_create_project_needs_no_description(self):
+        for folder in (roost.create_project("bare"), roost.create_project("empty", "")):
+            text = self.readme(folder)
+            self.assertIn('\ndescription: ""\n', text)
+            self.assertNotRegex(text, SUMMARY_LINE)
+            self.assertEqual(roost.read_project(folder)["summary"], "")
+        said = 'Say "hi" here.'
+        folder = roost.create_project("said", said, label="Said It")
+        text = self.readme(folder)
+        self.assertIn(f"\ndescription: {json.dumps(said)}\n", text)  # JSON-quoted, like the summary: line was
+        self.assertNotRegex(text, SUMMARY_LINE)
+        self.assertEqual((roost.read_project(folder)["summary"], roost.read_project(folder)["label"]), (said, "Said It"))
+
+    def test_create_subproject_needs_no_description(self):
+        self.project("rollout")
+        for folder in (roost.create_subproject("rollout/alpha", "feature"), roost.create_subproject("rollout/beta", "chore", "")):
+            text = self.readme(folder)
+            self.assertIn('\ndescription: ""\n', text)
+            self.assertNotRegex(text, SUMMARY_LINE)
+        folder = roost.create_subproject("rollout/gamma", "bugfix", "Toner alerts.")
+        self.assertIn('\ndescription: "Toner alerts."\n', self.readme(folder))
+        self.assertEqual({s["slug"]: s["summary"] for s in roost.read_subprojects(self.root / "rollout")},
+                         {"alpha": "", "beta": "", "gamma": "Toner alerts."})
+
+    def test_set_description_replaces_converts_or_adds_its_line(self):
+        cur = self.project("cur", '---\ndescription: "Old."\nstatus: active\nsessions: []\n---\n\n# Cur\n\ndescription: body text\n')
+        said = 'New "text".'
+        roost.set_description(cur, said)
+        self.assertEqual(self.readme(cur), f"---\ndescription: {json.dumps(said)}\n"
+                                           "status: active\nsessions: []\n---\n\n# Cur\n\ndescription: body text\n")
+        legacy = self.project("legacy")  # README: category, summary, status, sessions
+        roost.set_description(legacy, "Fresh.")
+        self.assertEqual(self.readme(legacy), README.replace('summary: "Two password managers compared: cost and rollout."',
+                                                             'description: "Fresh."'))
+        bare = self.project("bare", "---\nstatus: active\nsessions: []\n---\n\n# Bare\n")
+        roost.set_description(bare, "Added.")
+        self.assertEqual(self.readme(bare), '---\ndescription: "Added."\nstatus: active\nsessions: []\n---\n\n# Bare\n')
+        roost.set_description(bare, "")
+        self.assertEqual(self.readme(bare), '---\ndescription: ""\nstatus: active\nsessions: []\n---\n\n# Bare\n')
+        self.assertEqual(roost.read_project(bare)["summary"], "")
+        for folder in (cur, legacy, bare):
+            fm = self.readme(folder).split("\n---\n", 1)[0]
+            self.assertEqual((len(DESCRIPTION_LINE.findall(fm)), len(SUMMARY_LINE.findall(fm))), (1, 0), folder.name)
+        (self.root / "no-readme").mkdir()
+        with self.assertRaises(ValueError):
+            roost.set_description(self.root / "no-readme", "x")
+        self.assertEqual(list((self.root / "no-readme").iterdir()), [])
+
+    def test_set_label_replaces_the_first_heading_or_adds_one(self):
+        folder = self.project("a")  # README: # Title
+        before = self.readme(folder)
+        roost.set_label(folder, "  Password   managers ")
+        self.assertEqual(self.readme(folder), before.replace("\n# Title\n", "\n# Password managers\n"))
+        two = self.project("b", "---\nsessions: []\n---\n\n# First\n\nText.\n\n# Second\n")
+        roost.set_label(two, "One")
+        self.assertEqual(self.readme(two), "---\nsessions: []\n---\n\n# One\n\nText.\n\n# Second\n")
+        none = self.project("c", "---\nstatus: active\nsessions: []\n---\n\nJust text.\n")
+        roost.set_label(none, "Named")
+        text = self.readme(none)
+        self.assertEqual(roost.heading(text), "Named")
+        self.assertTrue(text.startswith("---\nstatus: active\nsessions: []\n---\n"), text)
+        self.assertLess(text.index("# Named"), text.index("Just text."))
+        self.assertEqual(roost.read_project(none)["label"], "Named")
+        for bad in ("", "   "):
+            before = self.readme(two)
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                roost.set_label(two, bad)
+            self.assertEqual(self.readme(two), before, repr(bad))
+
+    def test_project_new_takes_an_optional_description(self):
+        self.project("rollout")
+        for argv, folder, want in [(["new", "plain"], self.root / "plain", ""),
+                                   (["new", "said", "--description", "Said it."], self.root / "said", "Said it."),
+                                   (["new", "legacy", "--summary", "Old flag."], self.root / "legacy", "Old flag."),
+                                   (["new", "rollout/alpha", "--type", "feature"], self.root / "rollout" / "sub" / "alpha", ""),
+                                   (["new", "rollout/beta", "--type", "bugfix", "--description", "Toner."],
+                                    self.root / "rollout" / "sub" / "beta", "Toner.")]:
+            code, _, err = self.run_cli(argv)
+            self.assertEqual(code, 0, (argv, err))
+            self.assertEqual(roost.read_project(folder)["summary"], want, argv)
+            self.assertNotRegex(self.readme(folder), SUMMARY_LINE)
+        code, out, _ = self.run_cli(["new", "--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("--description", out)
+        self.assertNotIn("--summary", out)  # it still works, but isn't offered
+
+    def test_description_command_prints_or_sets_it(self):
+        folder = self.project("p", "---\nstatus: active\nsessions: []\n---\n\n# P\n")
+        code, out, err = self.run_cli(["description", "p"])
+        self.assertEqual((code, out.strip()), (0, "(no description)"), err)
+        code, _, err = self.run_cli(["description", "p", "What it is."])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.frontmatter(self.readme(folder))["description"], "What it is.")
+        self.assertEqual(self.run_cli(["description", "p"])[1].strip(), "What it is.")
+        self.project("legacy")
+        self.assertEqual(self.run_cli(["description", "legacy"])[1].strip(), "Two password managers compared: cost and rollout.")
+        sub = self.sub("p", "alpha", summary="Sub text.")
+        parent = self.readme(folder)
+        code, _, err = self.run_cli(["description", "p/alpha", "New sub text."])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.read_project(sub)["summary"], "New sub text.")
+        self.assertEqual(self.run_cli(["description", "p/alpha"])[1].strip(), "New sub text.")
+        self.assertEqual(self.readme(folder), parent)
+        for argv in (["description", "nope"], ["description", "nope", "x"]):
+            code, _, err = self.run_cli(argv)
+            self.assertEqual(code, 1, argv)
+            self.assertTrue(err.strip(), argv)
+
+
+class DescriptionsOnTheTab(unittest.TestCase):
+    """The Projects tab: an optional description when a project or sub-project is made, a Description
+    field in the panel, and Edit its description in the organize group."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    ui, fixture, select, after = SubProjectRows.ui, SubProjectRows.fixture, SubProjectRows.select, SubProjectRows.after
+    answer = staticmethod(ProjectDelete.answer)
+    shown = Projects.shown
+
+    def open_sub(self, ui, rid):
+        if ("sub", rid) not in self.after(ui, rid.split("/")[0]):
+            self.select(ui, "project", rid.split("/")[0])
+            ui.keys_projects("right", ui.project_rows())
+        return self.select(ui, "sub", rid)
+
+    def assert_optional_description_title(self, ui):
+        title = ((ui.asking or {}).get("title") or "").lower()
+        self.assertIn("description", title)
+        self.assertIn("optional", title)
+        self.assertNotIn("summary", title)
+
+    def test_new_project_asks_an_optional_description_last(self):
+        ui = self.ui()
+        ui.keys_projects("enter", [])
+        typed(ui, "Zed\n")  # its name
+        typed(ui, "\n")  # its folder, zed
+        self.assert_optional_description_title(ui)
+        typed(ui, "\n")  # no description
+        self.assertIsNone(ui.asking)
+        self.assertFalse(ui.msg.startswith(("Cancelled", "Couldn't")), ui.msg)
+        self.assertEqual(roost.read_project(self.root / "zed")["summary"], "")
+        self.assertIn('\ndescription: ""\n', (self.root / "zed" / "README.md").read_text())
+
+    def test_new_sub_project_asks_an_optional_description_last(self):
+        ui = self.fixture()
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "New sub-project")
+        ui.choosing["sel"] = next(i for i, (l, _) in enumerate(ui.choice_options()) if "chore" in l)
+        ui.keys_choice("enter")
+        typed(ui, "\x15tidy\n")  # its slug
+        self.assert_optional_description_title(ui)
+        typed(ui, "\x15\n")  # no description
+        self.assertIsNone(ui.asking)
+        self.assertTrue(ui.msg.startswith("Created"), ui.msg)
+        folder = self.root / "rollout" / "sub" / "tidy"
+        self.assertEqual(roost.read_project(folder)["summary"], "")
+        self.assertIn('\ndescription: ""\n', (folder / "README.md").read_text())
+
+    def test_the_panel_field_is_description_and_says_when_there_is_none(self):
+        self.project("rollout", "---\nstatus: active\nsessions: []\n---\n\n# Rollout\n", handoffs=[TODAY()])
+        self.project("said", '---\ndescription: "Said text."\nstatus: active\nsessions: []\n---\n\n# Said\n', handoffs=[TODAY()])
+        self.sub("rollout", "alpha", summary="")
+        self.sub("rollout", "beta", summary="Toner alerts.")
+        ui = self.ui()
+        for kind, rid, want in [("project", "rollout", "no description yet"), ("project", "said", "Said text."),
+                                ("sub", "rollout/alpha", "no description yet"), ("sub", "rollout/beta", "Toner alerts.")]:
+            rows = self.open_sub(ui, rid) if kind == "sub" else self.select(ui, kind, rid)
+            _, fields = ui.project_panel(rows, 40, 120)
+            named = dict((label, str(v)) for label, v in fields if label)
+            self.assertNotIn("Summary", named, (rid, fields))
+            self.assertIn(want, named.get("Description", ""), (rid, fields))
+
+    def test_edit_its_description_starts_with_it_then_sets_or_clears_it(self):
+        ui = self.fixture()  # rollout's README has a legacy summary: line; alpha's is Badge printers.
+        readme = self.root / "rollout" / "README.md"
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "Edit its description")
+        self.assertEqual(ui.asking["text"], "Two password managers compared: cost and rollout.")
+        self.answer(ui, "Printers for every office.")
+        self.assertEqual(roost.frontmatter(readme.read_text())["description"], "Printers for every office.")
+        self.assertNotRegex(readme.read_text(), SUMMARY_LINE)
+        self.assertEqual(next(p for p in ui.projects if p["id"] == "rollout")["summary"], "Printers for every office.")
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "Edit its description")
+        self.assertEqual(ui.asking["text"], "Printers for every office.")
+        self.answer(ui, "")
+        self.assertEqual(roost.frontmatter(readme.read_text())["description"], "")
+        sub = self.root / "rollout" / "sub" / "alpha" / "README.md"
+        act(ui, ui.keys_projects, self.open_sub(ui, "rollout/alpha"), "Edit its description")
+        self.assertEqual(ui.asking["text"], "Badge printers.")
+        self.answer(ui, "Badge printers, every site.")
+        self.assertEqual(roost.frontmatter(sub.read_text())["description"], "Badge printers, every site.")
+        act(ui, ui.keys_projects, self.open_sub(ui, "rollout/alpha"), "Edit its description")
+        self.answer(ui, "")
+        self.assertEqual(roost.read_project(sub.parent)["summary"], "")
+
+
+class ProjectRename(unittest.TestCase):
+    """Rename on a project: a Label prompt (its README heading), then a Folder name prompt. The folder name
+    starts as slug(new label) when it was slug(old label) and the label changed, else as it is."""
+    setUp, tearDown, project = SubProjects.setUp, SubProjects.tearDown, Projects.project
+    ui, select = SubProjectRows.ui, SubProjectRows.select
+    answer = staticmethod(ProjectDelete.answer)
+    shown = Projects.shown
+
+    def fresh(self):
+        self.tearDown()
+        self.setUp()
+
+    def make(self, pid="printer-rollout", heading="Printer Rollout"):
+        return self.project(pid, README.replace("# Title", f"# {heading}"), handoffs=[TODAY()])
+
+    def open_rename(self, ui, pid="printer-rollout"):
+        act(ui, ui.keys_projects, self.select(ui, "project", pid), "Rename")
+
+    def folder_prompt(self, ui):
+        self.assertIsNotNone(ui.asking)
+        self.assertIn("folder name", (ui.asking.get("title") or "").lower(), ui.asking)
+        return ui.asking["text"]
+
+    def test_rename_asks_its_label_then_its_folder_name(self):
+        self.make()
+        ui = self.ui()
+        self.open_rename(ui)
+        self.assertIsNotNone(ui.asking)
+        self.assertIn("label", (ui.asking.get("title") or "").lower(), ui.asking)
+        self.assertEqual(ui.asking["text"], "Printer Rollout")
+        self.answer(ui, "Printer Rollout")
+        self.assertEqual(self.folder_prompt(ui), "printer-rollout")
+
+    def test_a_new_label_moves_a_folder_named_after_the_old_one(self):
+        self.make()
+        ui = self.ui()
+        self.open_rename(ui)
+        self.answer(ui, "Badge Printers")
+        self.assertEqual(self.folder_prompt(ui), "badge-printers")
+        self.answer(ui, "badge-printers")
+        self.assertFalse((self.root / "printer-rollout").exists())
+        self.assertEqual((self.root / "badge-printers" / "README.md").read_text(), README.replace("# Title", "# Badge Printers"))
+
+    def test_a_new_label_keeps_a_folder_name_not_made_from_it(self):
+        folder = self.make("b", "Vendor Track")
+        ui = self.ui()
+        self.open_rename(ui, "b")
+        self.answer(ui, "Vendor  Review")
+        self.assertEqual(self.folder_prompt(ui), "b")
+        self.answer(ui, "b")
+        self.assertEqual((folder / "README.md").read_text(), README.replace("# Title", "# Vendor Review"))
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["b"])
+        self.assertEqual(next(p for p in ui.projects if p["id"] == "b")["label"], "Vendor Review")
+
+    def test_nothing_changed_writes_nothing(self):
+        folder = self.make()
+        before = (folder / "README.md").read_text()
+        ui = self.ui()
+        self.open_rename(ui)
+        self.answer(ui, "Printer Rollout")
+        self.assertEqual(self.folder_prompt(ui), "printer-rollout")
+        self.answer(ui, "printer-rollout")
+        self.assertIsNone(ui.asking)
+        self.assertRegex(ui.msg, r"(?i)nothing|no change")
+        self.assertEqual((folder / "README.md").read_text(), before)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["printer-rollout"])
+
+    def test_an_empty_label_cancels(self):
+        folder = self.make()
+        before = (folder / "README.md").read_text()
+        ui = self.ui()
+        self.open_rename(ui)
+        self.answer(ui, "   ")
+        self.assertIsNone(ui.asking)
+        self.assertRegex(ui.msg, r"(?i)cancel")
+        self.assertEqual((folder / "README.md").read_text(), before)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["printer-rollout"])
+
+    def test_a_refused_folder_name_changes_nothing_not_even_the_label(self):
+        for bad in ("Bad Name", "taken"):
+            self.fresh()
+            folder = self.make()
+            self.project("taken")
+            before = (folder / "README.md").read_text()
+            ui = self.ui()
+            self.open_rename(ui)
+            self.answer(ui, "New Name")
+            self.folder_prompt(ui)
+            self.answer(ui, bad)
+            self.assertTrue(ui.msg.startswith("Couldn't rename it"), (bad, ui.msg))
+            self.assertEqual((folder / "README.md").read_text(), before, bad)
+            self.assertEqual((self.root / "taken" / "README.md").read_text(), README, bad)
+            self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["printer-rollout", "taken"], bad)
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class SubProjectLabels(unittest.TestCase):
+    """A sub-project's row on the Projects tab shows its label (its README heading); its id stays
+    <project>/<slug>, and the Sessions tab's PROJECT column shows that id."""
+    run_on, listing, head_index = ProjectRows.run_on, ProjectRows.listing, staticmethod(ProjectRows.head_index)
+    select = staticmethod(TextualScreens.select)
+
+    def setUp(self):
+        Projects.setUp(self)  # temp Projects folder, read here before the screens' stand-ins replace the readers
+        self.addCleanup(Projects.tearDown, self)
+        work = session("Badge work")
+        Projects.project(self, "rollout", handoffs=[TODAY()])
+        folder = SubProjects.sub(self, "rollout", "alpha", summary="Badge printers.", sessions=[("Badge work", work["id"])])
+        (folder / "README.md").write_text((folder / "README.md").read_text().replace("\n# alpha\n", "\n# Badge Printers\n"))
+        self.projects = roost.read_projects([work])
+        TextualScreens.setUp(self)
+        self.sessions = [work]
+
+    def test_a_sub_row_shows_its_label(self):
+        app = self.run_on(self.projects, [self.select(lambda ui: ui.subs_open.add("rollout"))])
+        self.assertEqual([r.item["id"] for r in app.ui.project_rows() if r.kind == "sub"], ["rollout/alpha"])
+        rows = self.listing(app.lines)
+        self.assertTrue([l for l in rows if "Badge Printers" in l], rows)
+
+    def test_the_sessions_tab_names_a_sub_project_by_its_id(self):
+        seen = {}
+
+        async def look(pilot):
+            seen.update({s["name"]: s.get("proj") for s in pilot.app.ui.srows})
+        app = self.run_on(self.projects, [look], tab="Sessions")
+        self.assertEqual(seen.get("Badge work"), "rollout/alpha")
+        row = next(l for l in app.lines if "Badge work" in l)
+        self.assertIn("rollout/alpha", row)
+        self.assertNotIn("Badge Printers", row)
 
 
 if __name__ == "__main__":

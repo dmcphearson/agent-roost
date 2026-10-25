@@ -259,8 +259,8 @@ class Notes(unittest.TestCase):
         ui.load_projects()
         ui.nsel = 1
         keys = lambda k, rows: ui.keys_notes(k, ui.note_rows())
-        self.assertEqual(labels(ui, keys, None)[1:], ["Start a Session from it", "Make it a project…", "Edit its tags…",
-                                                      "Show it in Finder", "Delete to the Trash…"])
+        self.assertEqual(labels(ui, keys, None)[1:], ["Start a Session from it", DIV, "Make it a project", "Edit its tags",
+                                                      "Show it in Finder", DIV, "Delete to the Trash"])
         self.project("p")
         ui.load_projects()
         act(ui, keys, None, "Move to a project")
@@ -273,6 +273,32 @@ class Notes(unittest.TestCase):
         act(ui, keys, None, "Delete to the Trash")
         ui.keys_confirm("y")
         self.assertEqual((len(self.trashed), ui.note_rows()[1:]), (1, []))
+
+    def test_a_notes_actions_in_groups(self):
+        """Work on it, then organize it, then delete it, split by dividers (| here)."""
+        ui = self.ui()
+        roost.create_note("Idea")
+        self.project("p")
+        ui.load_projects()
+        ui.nsel = 1
+        keys = lambda k, rows: ui.keys_notes(k, ui.note_rows())
+        self.assertEqual(labels(ui, keys, None),
+                         [f"Edit in {ui.editor_name().split()[0]}", "Start a Session from it", DIV,
+                          "Move to a project", "Make it a project", "Edit its tags", "Show it in Finder", DIV,
+                          "Delete to the Trash"])
+
+    def test_no_action_label_has_an_ellipsis(self):
+        """A menu label is just its action's name: none ends in, or holds, "…". Row: a note in no project,
+        with a project it could move to."""
+        ui = self.ui()
+        roost.create_note("Idea")
+        self.project("p")
+        ui.load_projects()
+        ui.nsel = 1
+        keys = lambda k, rows: ui.keys_notes(k, ui.note_rows())
+        real = [a for a in labels(ui, keys, None) if a != DIV]
+        self.assertTrue(real)
+        self.assertEqual([a for a in real if "…" in a], [])
 
     def test_roost_note_saves_from_the_command_line(self):
         out = io.StringIO()

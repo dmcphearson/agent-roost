@@ -174,7 +174,7 @@ def facts_lines(f, table):
 def owner(ids):
     """Where these Session ids leave Handoffs: the folder of the project that lists them, the file of
     the Session recap that does, or None. Raises ValueError when more than one lists them."""
-    hits = [p for p in (projectdata.read_projects() or []) + projectdata.read_recaps() if set(ids) & set(p["sessions"])]
+    hits = [p for p in projectdata.read_all() + projectdata.read_recaps() if set(ids) & set(p["sessions"])]
     if len(hits) > 1:
         raise ValueError(f"more than one project or recap lists this Session ({', '.join(p['id'] for p in hits)}): "
                          "take it off all but one")

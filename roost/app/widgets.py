@@ -4,7 +4,7 @@ import curses, re, textwrap
 
 from roost.core.formatting import clip
 from roost.core import wren
-from roost.app.shell import SAVE
+from roost.app.shell import DIVIDER, SAVE
 
 try:
     from rich.cells import cell_len
@@ -328,6 +328,10 @@ if Widget:
             top, first = c["top"], c["off"] - 1  # the border takes the box's first row
             for i, (label, value) in enumerate(opts[top:top + c["fit"]]):
                 on = top + i == c["sel"]
+                if (label, value) == DIVIDER:
+                    if first + i < len(out):
+                        out[first + i].put(2, "─" * (inner - 4), ui.selected(ui.DIM))
+                    continue
                 if c.get("multi") is not None and not isinstance(value, tuple) and value is not SAVE:
                     label = ("☑ " if value in c["multi"] else "☐ ") + label
                 if first + i < len(out):

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Sub-projects:** a project's work splits into sub-projects (feature, bugfix, research, chore) in its `sub/` folder, each with its own README and Handoffs. `roost project new <project>/<slug> --type <type>` makes one; picking one up reads the parent project's README first, then the sub-project's own, then the project's other open sub-projects; wrap-up writes into the sub-project; `roost project list` shows them under their project. On the Projects tab, → shows a project's open sub-projects under it and ← hides them; a project's actions add New sub-project and Start a Session in a sub-project, and search finds sub-projects (`type:bugfix` by type). Sessions know their sub-project: PROJECT, `project:` search, and Add to or Move to a project
+- **Delete a project or sub-project:** Delete in its actions asks first, then asks you to type its name, then moves its folder to the Trash (a project's sub-projects go with it). Sub-projects can be renamed, like projects.
+- **Grouped action menus:** every row's actions are grouped, a line between them: working on it, organizing it, then removing it (Stop and Delete last). A project's menu no longer offers New project (ctrl+n and + New project do).
+- **Descriptions:** a project's or sub-project's summary is now its description (`description:` in the README; an older `summary:` still reads). It's optional when you make one, Edit its description changes it, `roost project description <id> "…"` sets it, and `/wrap-up` writes it from the Session's work when it's empty. `roost project new --summary` still works.
+- **Rename asks for two things:** the label (the name roost shows) and then the folder's name, which follows a new label when it was made from the old one. Sub-project rows show their label.
+
 ## 2026.10.25
 
 - **IDE terminals:** in IntelliJ (and the other JetBrains IDEs), VS Code, or Cursor, with no `terminal` in config.json, Open and Start copy the command that runs the Session (`cd <folder> && claude …`) instead of replacing roost in that tab, and say how to open a new tab to paste it in
