@@ -6,7 +6,7 @@ from roost.core.config import HOME
 from roost.core.projectdata import plural
 from roost.core.notedata import at_end, create_note, editor
 from roost.core.formatting import clip, short, short_day, short_when
-from roost.app.shell import BAR_KEYS, CLICK, NOTE_READ_KEYS, NOTE_SECTIONS
+from roost.app.shell import BAR_KEYS, CLICK, NOTE_READ_KEYS, NOTE_SECTIONS, first_action, grouped
 from roost.app.widgets import Widget
 from roost.core import config
 from roost.core import projectdata
@@ -205,17 +205,17 @@ class NotesTab:
 
     def note_actions(self, n):
         """What can be done with one note, most likely first."""
-        acts = [(f"Edit in {self.editor_name().split()[0]}", lambda: self.edit(n["path"])),
+        work = [(f"Edit in {self.editor_name().split()[0]}", lambda: self.edit(n["path"])),
                 ("Start a Session from it" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
                  lambda: self.start_from_note(n))]
+        organize = []
         if any(not p["closed"] and p["id"] != n["project"] for p in self.projects or []):
-            acts.append(("Move to another project…" if n["project"] else "Move to a project…", lambda: self.move_note(n)))
+            organize.append(("Move to another project…" if n["project"] else "Move to a project…", lambda: self.move_note(n)))
         if not n["project"]:
-            acts.append(("Make it a project…", lambda: self.note_to_project(n)))
-        acts.append(("Edit its tags…", lambda: self.edit_tags(n)))
-        acts.append(("Show it in Finder", lambda: self.show_in_finder(n["path"], reveal=True)))
-        acts.append(("Delete to the Trash…", lambda: self.ask_confirm("note", n)))
-        return acts
+            organize.append(("Make it a project…", lambda: self.note_to_project(n)))
+        organize.append(("Edit its tags…", lambda: self.edit_tags(n)))
+        organize.append(("Show it in Finder", lambda: self.show_in_finder(n["path"], reveal=True)))
+        return grouped(work, organize, [("Delete to the Trash…", lambda: self.ask_confirm("note", n))])
 
     def keys_notes(self, k, rows):
         r = rows[self.nsel] if rows else None
@@ -234,7 +234,7 @@ class NotesTab:
                 if how == "menu":
                     return self.menu(rows[idx]["name"], self.note_actions(rows[idx]))
                 if how == "double":
-                    return self.note_actions(rows[idx])[0][1]()
+                    return first_action(self.note_actions(rows[idx]))()
             elif k[3] & CLICK and self.npane[0] <= k[2] < self.npane[0] + self.npane[2] \
                     and self.npane[1] <= k[1] and r and not r.get("new") and not r.get("head"):
                 self.nreading = True  # a click on the text moves into it

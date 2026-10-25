@@ -30,6 +30,17 @@ NOTE_SECTIONS = {"Backlog": "tagged backlog: ideas and maybe-projects",  # the N
                  "Notes": "everything else"}
 QUIT = object()  # what a key handler returns to close roost
 SAVE = object()  # the picker's Save row, when it ticks several
+DIVIDER = ("─", object())  # a line between an actions list's groups: shown, never picked
+
+
+def grouped(*groups):
+    """An actions list from its groups (work on it, organize it, delete it), a DIVIDER between them."""
+    return [a for g in groups if g for a in [DIVIDER] + list(g)][1:]
+
+
+def first_action(acts):
+    """The function of the first real action (what a double-click runs), or None."""
+    return next((fn for label, fn in acts if (label, fn) != DIVIDER), None)
 
 
 def printable(k):
@@ -619,11 +630,29 @@ class Shell:
         self.choosing = {"title": title, "options": list(options), "sel": 0, "typed": "" if filtering else None,
                          "done": done, "add": add, "multi": None if multi is None else list(multi), "body": body or [],
                          "keys": keys or {}}
+        self.choosing["sel"] = self.next_option(self.choice_options(), -1, 1)
+
+    @staticmethod
+    def next_option(opts, at, step):
+        """The option after at (step 1) or before it (-1), wrapping and stepping over dividers."""
+        for i in range(1, len(opts) + 1):
+            j = (at + step * i) % len(opts)
+            if tuple(opts[j]) != DIVIDER:
+                return j
+        return 0
 
     def choice_options(self):
         c = self.choosing
         q = (c["typed"] or "").lower()
-        out = [o for o in c["options"] if q in o[0].lower()]
+        out = []
+        for o in c["options"]:  # a divider only between two groups, and none while filtering
+            if tuple(o) != DIVIDER:
+                if q in o[0].lower():
+                    out.append(o)
+            elif not q and out and tuple(out[-1]) != DIVIDER:
+                out.append(o)
+        if out and tuple(out[-1]) == DIVIDER:
+            out.pop()
         if c.get("add") and q:
             try:
                 new = clean_tags(q)
@@ -638,6 +667,8 @@ class Shell:
     def pick(self, value):
         """Enter (or a click) on a picker row: tick it, add it, save, or pick it."""
         c = self.choosing
+        if value is DIVIDER[1]:
+            return None
         if isinstance(value, tuple) and value[0] == "new":
             value = value[1]
             if c["multi"] is not None:
@@ -666,9 +697,9 @@ class Shell:
         if not isinstance(k, tuple) and k in c["keys"]:
             return self.pick(c["keys"][k])
         if k == "up":
-            c["sel"] = (c["sel"] - 1) % max(len(opts), 1)
+            c["sel"] = self.next_option(opts, c["sel"], -1) if opts else 0
         elif k == "down":
-            c["sel"] = (c["sel"] + 1) % max(len(opts), 1)
+            c["sel"] = self.next_option(opts, c["sel"], 1) if opts else 0
         elif k == "escape":
             self.choosing, self.msg = None, "Cancelled"
         elif k == "enter":

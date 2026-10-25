@@ -23,7 +23,7 @@ from roost.core.sessiondata import (
 from roost.core.summaries import summary_settings
 from roost.core.advice import ASK_SYSTEM, ask_estimate, ask_input, parse_advice
 from roost.core.formatting import clip, ktok, plain_text, redact, short
-from roost.app.shell import BAR_KEYS, CLICK, PIN, TAB_X
+from roost.app.shell import BAR_KEYS, CLICK, PIN, TAB_X, first_action, grouped
 from roost.app.widgets import Widget
 from roost.core import config
 from roost.core import sessiondata
@@ -365,47 +365,47 @@ class SessionsTab:
         proj = self.project_of(s)
         in_window = s["kind"] == "interactive" or s.get("attached")
         closed = s["state"] == "closed" and not s.get("attach")
-        acts = []
+        work, organize, remove = [], [], []
         recap = None if proj else self.recap_of(s)
         done = closed and not proj and self.wrapped(s)  # its recap has everything: never reopen it
         if closed and proj:  # roost never resumes project work: a fresh Session picks it up
             if not proj["closed"]:
-                acts.append((f"Start a fresh Session for {projectdata.label_of(proj)}", lambda: self.start_for(proj)))
+                work.append((f"Start a fresh Session for {projectdata.label_of(proj)}", lambda: self.start_for(proj)))
         elif done:
-            acts.append(("Start a fresh Session from its recap", lambda: self.start_from_recap(recap, s)))
+            work.append(("Start a fresh Session from its recap", lambda: self.start_from_recap(recap, s)))
         else:
             label = "Go to Claude Desktop" if s.get("desktop") else "Go to its window" if in_window else "Open in a new window" if self.term else "Open here"
-            acts.append((label, lambda: self.open_one(s)))
+            work.append((label, lambda: self.open_one(s)))
         if recap:
-            acts.append((f"Read its Session recap in {self.editor_name().split()[0]}", lambda: self.edit(recap["path"])))
-            acts.append(("Make it a project… (its recap's Handoffs move in)", lambda: self.new_project(recap)))
+            work.append((f"Read its Session recap in {self.editor_name().split()[0]}", lambda: self.edit(recap["path"])))
+            organize.append(("Make it a project… (its recap's Handoffs move in)", lambda: self.new_project(recap)))
         elif not proj:
-            acts.append(("New project from this Session…", lambda: self.new_project_from(s)))
+            organize.append(("New project from this Session…", lambda: self.new_project_from(s)))
         others = [p for p in self.all_projects() if not p["closed"] and p is not proj]
         if others:
-            acts.append(("Move to another project…" if proj else "Add to a project…", lambda: self.add_to_project(s)))
+            organize.append(("Move to another project…" if proj else "Add to a project…", lambda: self.add_to_project(s)))
         if not in_window:
-            acts.append((f"Write its {'Handoff' if proj else 'Session recap'} from the transcript…", lambda: self.ask_summary(s)))
+            work.append((f"Write its {'Handoff' if proj else 'Session recap'} from the transcript…", lambda: self.ask_summary(s)))
             if s["state"] not in ("busy", "opening"):
-                acts.append(("Ask what to do with it…", lambda: self.ask_advice(s)))
+                work.append(("Ask what to do with it…", lambda: self.ask_advice(s)))
         if s.get("attach") and s["kind"] != "interactive":
-            acts.append(("Unpin" if s.get("pinned") else "Pin: keep it running when idle", lambda: self.pin(s)))
+            work.append(("Unpin" if s.get("pinned") else "Pin: keep it running when idle", lambda: self.pin(s)))
         elif closed and not proj and not done:
-            acts.append(("Restart in the background, pinned", lambda: self.pin(s)))
+            work.append(("Restart in the background, pinned", lambda: self.pin(s)))
         if not in_window:
-            acts.append(("Rename…", lambda: self.rename(s)))
+            organize.append(("Rename…", lambda: self.rename(s)))
         if s.get("attach"):
-            acts.append(("Stop…", lambda: self.ask_confirm("stop", s)))
+            remove.append(("Stop…", lambda: self.ask_confirm("stop", s)))
         elif closed:
             if s["id"] in sessiondata.read_dismissed():
-                acts.append(("Undismiss", lambda: self.dismiss(s, False)))
+                organize.append(("Undismiss", lambda: self.dismiss(s, False)))
             else:
-                acts.append(("Dismiss", lambda: self.dismiss(s)))
-            acts.append(("Delete to the Trash…", lambda: self.ask_confirm("delete", s)))
-        acts.append(("Copy its id", lambda: self.copy_id(s)))
+                organize.append(("Dismiss", lambda: self.dismiss(s)))
+            remove.append(("Delete to the Trash…", lambda: self.ask_confirm("delete", s)))
+        organize.append(("Copy its id", lambda: self.copy_id(s)))
         if s.get("cwd") and os.path.isdir(s["cwd"]):
-            acts.append(("Show its folder in Finder", lambda: self.show_in_finder(s["cwd"])))
-        return acts
+            organize.append(("Show its folder in Finder", lambda: self.show_in_finder(s["cwd"])))
+        return grouped(work, organize, remove)
 
     def dismiss(self, s, on=True):
         """Dismiss a closed Session (it's listed last, and its project stops counting it as unwrapped),
@@ -525,8 +525,8 @@ class SessionsTab:
                 if how == "menu":
                     return self.menu(rows[idx]["name"], self.session_actions(rows[idx]))
                 if how == "double":
-                    acts = self.session_actions(rows[idx])
-                    return acts[0][1]() if acts else None
+                    fn = first_action(self.session_actions(rows[idx]))
+                    return fn() if fn else None
             self.sel = max(0, min(self.sel, len(rows) - 1))
             return None
         to = self.move(k, self.sel, len(rows))

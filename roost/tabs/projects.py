@@ -18,7 +18,7 @@ from roost.core.adopt import (
     plan_problems,
 )
 from roost.core.formatting import clip, plain_text, short, short_when
-from roost.app.shell import BAR_KEYS, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES
+from roost.app.shell import BAR_KEYS, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES, first_action, grouped
 from roost.core.config import VIEWS
 from roost.app.widgets import Widget
 from roost.core import config
@@ -586,50 +586,48 @@ class ProjectsTab:
         return None
 
     def project_actions(self, p):
-        acts = []
+        """What can be done with a project, in groups: work on it, its sub-projects, organize it, then
+        what removes things."""
+        real = Path(p["path"]).is_dir()  # a real folder (the demo's aren't)
+        work, subs, organize, remove = [], [], [], []
         if not p["closed"]:
-            acts.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
+            work.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
                          lambda: self.start_for(p)))
         if any(not s["closed"] for s in p.get("subs") or []):
-            acts.append(("Start a Session in a sub-project…", lambda: self.start_in_sub(p)))
+            work.append(("Start a Session in a sub-project…", lambda: self.start_in_sub(p)))
         if self.linked(p):
-            acts.append(("Show its Sessions", lambda: self.show_sessions(p)))
-        if p["readme"] and not p["closed"] and not p.get("adopted", True):  # a demo project counts as adopted
-            acts.append(("Adopt it: plan its README and files, then write its Handoffs…", lambda: self.ask_adopt(p)))
+            work.append(("Show its Sessions", lambda: self.show_sessions(p)))
+        if real:
+            subs.append(("New sub-project…", lambda: self.new_subproject(p)))
         if p["readme"]:
-            acts.append(("Set its category…", lambda: self.edit_category(p)))
-            acts.append(("Edit its tags…", lambda: self.edit_tags(p)))
-        if p.get("readme") and Path(p["path"]).is_dir():  # a real folder (the demo's aren't)
-            acts.append(("Rename…", lambda: self.rename_project_ui(p)))
-        if Path(p["path"]).is_dir():  # a real folder (the demo's aren't)
-            acts.append(("Delete…", lambda: self.delete_project_ui(p)))
-        acts.append(("Show its folder in Finder", lambda: self.show_in_finder(p["path"])))
+            organize.append(("Set its category…", lambda: self.edit_category(p)))
+            organize.append(("Edit its tags…", lambda: self.edit_tags(p)))
+        if p.get("readme") and real:
+            organize.append(("Rename…", lambda: self.rename_project_ui(p)))
+        organize.append(("Show its folder in Finder", lambda: self.show_in_finder(p["path"])))
+        if p["readme"] and not p["closed"] and not p.get("adopted", True):  # a demo project counts as adopted
+            remove.append(("Adopt it: plan its README and files, then write its Handoffs…", lambda: self.ask_adopt(p)))
         for name, _ in p.get("archives") or []:
             path = str(Path(p["path"]) / "_archive" / name)
-            acts.append((f"Move _archive/{name} to the Trash…",
-                         lambda path=path, name=name: self.ask_confirm("archive", {"name": f"{p['id']}/_archive/{name}", "path": path})))
-        if Path(p["path"]).is_dir():  # a real folder (the demo's aren't)
-            acts.append(("New sub-project…", lambda: self.new_subproject(p)))
-        acts.append(("New project…", self.new_project))
-        return acts
+            remove.append((f"Move _archive/{name} to the Trash…",
+                           lambda path=path, name=name: self.ask_confirm("archive", {"name": f"{p['id']}/_archive/{name}", "path": path})))
+        if real:
+            remove.append(("Delete…", lambda: self.delete_project_ui(p)))
+        return grouped(work, subs, organize, remove)
 
     def sub_actions(self, s):
-        """What can be done with a sub-project: a project's actions that fit one."""
-        parent = next((p for p in self.projects or [] if p["id"] == s["parent"]), None)
-        acts = []
+        """What can be done with a sub-project: a project's actions that fit one, in the same groups."""
+        real = Path(s["path"]).is_dir()  # a real folder (the demo's aren't)
+        work, organize = [], [("Edit its tags…", lambda: self.edit_tags(s))]
         if not s["closed"]:
-            acts.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
+            work.append(("Start a Session" + ("" if self.plugin_ok else " (no plugin: it won't get /roost:pickup)"),
                          lambda: self.start_for(s)))
         if self.linked(s):
-            acts.append(("Show its Sessions", lambda: self.show_sessions(s)))
-        acts.append(("Edit its tags…", lambda: self.edit_tags(s)))
-        if Path(s["path"]).is_dir():  # a real folder (the demo's aren't)
-            acts.append(("Rename…", lambda: self.rename_project_ui(s)))
-            acts.append(("Delete…", lambda: self.delete_project_ui(s)))
-        acts.append(("Show its folder in Finder", lambda: self.show_in_finder(s["path"])))
-        if parent:
-            acts.append(("New sub-project…", lambda: self.new_subproject(parent)))
-        return acts
+            work.append(("Show its Sessions", lambda: self.show_sessions(s)))
+        if real:
+            organize.append(("Rename…", lambda: self.rename_project_ui(s)))
+        organize.append(("Show its folder in Finder", lambda: self.show_in_finder(s["path"])))
+        return grouped(work, organize, [("Delete…", lambda: self.delete_project_ui(s))] if real else [])
 
     def start_in_sub(self, p):
         """Pick one of p's open sub-projects and start a Session in it."""
@@ -779,8 +777,8 @@ class ProjectsTab:
                 elif how == "menu":
                     return self.menu(row.item.get("name") or label_of(row.item), self.row_actions(row))
                 elif how == "double":
-                    acts = self.row_actions(row)
-                    return acts[0][1]() if acts else None
+                    fn = first_action(self.row_actions(row))
+                    return fn() if fn else None
             return None
         to = self.move(k, self.psel, len(rows))
         if to is not None:
