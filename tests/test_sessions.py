@@ -616,7 +616,8 @@ class StartingSessions(unittest.TestCase):
             ui.load_projects()
             rows = ui.project_rows()
             ui.psel = 1
-            self.assertFalse([a for a in labels(ui, ui.keys_projects, rows) if a.startswith(("Stop", "Delete"))])
+            self.assertFalse([a for a in labels(ui, ui.keys_projects, rows)  # no Session Stop or Delete: the project's own Delete… is allowed
+                              if a.startswith(("Stop", "Delete")) and a != "Delete…"])
             live, old = 0, 1  # on the Sessions tab: the Projects tab lists no Sessions
             ui.sel = live
             act(ui, ui.keys_sessions, ui.sessions, "Stop…")
