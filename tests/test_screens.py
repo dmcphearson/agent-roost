@@ -861,7 +861,7 @@ class TextualScreens(unittest.TestCase):
         def act(app):
             app.ui.asking["text"] = "Printer fix 2"
             app.press("enter")
-        return self.slow_action("rename_session", slow, self.picked("Printer fix", "Rename…") + [self.keys("enter")], act,
+        return self.slow_action("rename_session", slow, self.picked("Printer fix", "Rename") + [self.keys("enter")], act,
                                 "Renaming Printer fix…", "Renamed to " if not slow.error else "Couldn't rename: ")
 
     def test_rename_doesnt_hold_up_the_keys(self):
@@ -873,7 +873,7 @@ class TextualScreens(unittest.TestCase):
         self.assertEqual(seen["after"], "Couldn't rename: claude stop timed out")
 
     def stop_one(self, slow):
-        return self.slow_action("stop_session", slow, self.picked("Printer fix", "Stop…") + [self.keys("enter")],
+        return self.slow_action("stop_session", slow, self.picked("Printer fix", "Stop") + [self.keys("enter")],
                                 lambda app: app.press("y"), "Stopping Printer fix…",
                                 "Stopped Printer fix" if not slow.error else "Couldn't stop it: ")
 

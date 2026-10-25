@@ -1195,7 +1195,7 @@ class SubProjectRows(unittest.TestCase):
         acts = labels(ui, ui.keys_projects, rows)
         for want in ("Start a Session", "Show its folder in Finder"):
             self.assertTrue([l for l in acts if l.startswith(want)], (want, acts))
-        self.assertNotIn("New sub-project…", acts)  # only in its parent's actions
+        self.assertNotIn("New sub-project", acts)  # only in its parent's actions
         act(ui, ui.keys_projects, ui.project_rows(), "Start a Session")
         self.assertEqual([c[0] for c in calls], ["rollout/alpha"])
 
@@ -1204,12 +1204,12 @@ class SubProjectRows(unittest.TestCase):
         ui = self.fixture()
         rows = self.select(ui, "project", "other")
         acts = labels(ui, ui.keys_projects, rows)
-        self.assertIn("New sub-project…", acts)
+        self.assertIn("New sub-project", acts)
         self.assertFalse([l for l in acts if l.startswith("Start a Session in a sub-project")], acts)  # none open
         rows = self.select(ui, "project", "rollout")
         acts = labels(ui, ui.keys_projects, rows)
-        self.assertIn("New sub-project…", acts)
-        self.assertIn("Start a Session in a sub-project…", acts)
+        self.assertIn("New sub-project", acts)
+        self.assertIn("Start a Session in a sub-project", acts)
         act(ui, ui.keys_projects, rows, "Start a Session in a sub-project")
         opts = [l for l, _ in ui.choice_options()]
         for slug in ("alpha", "beta"):
@@ -1221,7 +1221,7 @@ class SubProjectRows(unittest.TestCase):
 
     def test_new_sub_project_picks_a_type_then_asks_its_slug_and_summary(self):
         ui = self.fixture()
-        self.assertIn("New sub-project…", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        self.assertIn("New sub-project", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
         act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "New sub-project")
         self.assertIsNotNone(ui.choosing)
         opts = [l for l, _ in ui.choice_options()]
@@ -1248,7 +1248,7 @@ class SubProjectRows(unittest.TestCase):
     def test_new_sub_project_with_a_bad_slug_creates_nothing(self):
         ui = self.fixture()
         before = sorted(p.name for p in (self.root / "rollout" / "sub").iterdir())
-        self.assertIn("New sub-project…", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        self.assertIn("New sub-project", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
         act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "New sub-project")
         opts = [l for l, _ in ui.choice_options()]
         ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "feature" in l)
@@ -1270,7 +1270,7 @@ class SubProjectRows(unittest.TestCase):
 
 class ProjectMenuGroups(unittest.TestCase):
     """A project's and a sub-project's actions, in groups split by dividers (| here): work on it,
-    then (a project's) New sub-project…, then organize it, then delete it."""
+    then (a project's) New sub-project, then organize it, then delete it."""
     setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
     ui, select, shown = SubProjectRows.ui, SubProjectRows.select, Projects.shown
 
@@ -1292,10 +1292,10 @@ class ProjectMenuGroups(unittest.TestCase):
         ui = self.fixture()
         rows = self.select(ui, "project", "rollout")
         self.assertEqual(labels(ui, ui.keys_projects, rows),
-                         ["Start a Session", "Start a Session in a sub-project…", "Show its Sessions", DIV,
-                          "New sub-project…", DIV,
-                          "Set its category…", "Edit its tags…", "Rename…", "Show its folder in Finder", DIV,
-                          "Delete…"])
+                         ["Start a Session", "Start a Session in a sub-project", "Show its Sessions", DIV,
+                          "New sub-project", DIV,
+                          "Set its category", "Edit its tags", "Rename", "Show its folder in Finder", DIV,
+                          "Delete"])
 
     def test_adopt_and_a_due_archive_go_in_the_delete_group(self):
         ui = self.fixture()
@@ -1303,19 +1303,19 @@ class ProjectMenuGroups(unittest.TestCase):
         rows = self.select(ui, "project", "legacy")
         self.assertEqual(labels(ui, ui.keys_projects, rows),
                          ["Start a Session", DIV,
-                          "New sub-project…", DIV,
-                          "Set its category…", "Edit its tags…", "Rename…", "Show its folder in Finder", DIV,
-                          "Adopt it: plan its README and files, then write its Handoffs…",
-                          "Move _archive/2020-01-01 to the Trash…", "Delete…"])
+                          "New sub-project", DIV,
+                          "Set its category", "Edit its tags", "Rename", "Show its folder in Finder", DIV,
+                          "Adopt it: plan its README and files, then write its Handoffs",
+                          "Move _archive/2020-01-01 to the Trash", "Delete"])
 
     def test_a_double_click_runs_the_first_real_action_when_the_first_group_is_empty(self):
         """A closed project with no open sub-projects and no linked Session has nothing to work on, so its
-        actions start with the New sub-project… group: a double-click runs that, never a divider."""
+        actions start with the New sub-project group: a double-click runs that, never a divider."""
         self.project("shut", "---\nsummary: Finished work.\nstatus: closed\nsessions: []\n---\n\n# Shut\n")
         ui = self.ui()
         ui.folded = set()
         rows = self.select(ui, "project", "shut")
-        self.assertEqual(labels(ui, ui.keys_projects, rows)[0], "New sub-project…")
+        self.assertEqual(labels(ui, ui.keys_projects, rows)[0], "New sub-project")
         ui.prow_y = {6: ui.psel}  # the project's row, as draw left it
         ui.keys_projects(("mouse", 20, 6, roost.curses.BUTTON1_DOUBLE_CLICKED), ui.project_rows())
         self.assertTrue(ui.choosing and ui.choosing["title"].startswith("New sub-project of"), ui.choosing)
@@ -1327,12 +1327,29 @@ class ProjectMenuGroups(unittest.TestCase):
         rows = self.select(ui, "sub", "rollout/alpha")
         self.assertEqual(labels(ui, ui.keys_projects, rows),
                          ["Start a Session", "Show its Sessions", DIV,
-                          "Edit its tags…", "Rename…", "Show its folder in Finder", DIV,
-                          "Delete…"])
+                          "Edit its tags", "Rename", "Show its folder in Finder", DIV,
+                          "Delete"])
 
+
+    def test_no_action_label_has_an_ellipsis(self):
+        """A menu label is just its action's name: none ends in, or holds, "…" (a prompt or confirm may follow
+        or not). Rows: a project with open sub-projects and a linked Session, one with a due _archive that
+        isn't adopted, and a sub-project."""
+        ui = self.fixture()
+        ui.folded = set()
+        seen = {}
+        seen["rollout"] = labels(ui, ui.keys_projects, self.select(ui, "project", "rollout"))
+        seen["legacy"] = labels(ui, ui.keys_projects, self.select(ui, "project", "legacy"))
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        seen["rollout/alpha"] = labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha"))
+        for row, acts in seen.items():
+            real = [a for a in acts if a != DIV]
+            self.assertTrue(real, row)
+            self.assertEqual([a for a in real if "…" in a], [], row)
 
 class ProjectDelete(unittest.TestCase):
-    """Delete… on a project or sub-project: a confirm box, then the id typed exactly, then its folder goes
+    """Delete on a project or sub-project: a confirm box, then the id typed exactly, then its folder goes
     to the Trash (through adopt.trash, patched here to move it into a temp folder)."""
     project, sub, shown, select, after = Projects.project, SubProjects.sub, Projects.shown, SubProjectRows.select, SubProjectRows.after
     ui = SubProjectRows.ui
@@ -1370,12 +1387,12 @@ class ProjectDelete(unittest.TestCase):
         self.setUp()
 
     def open_delete(self, ui, kind, rid):
-        """Select the row and choose Delete… from its actions."""
+        """Select the row and choose Delete from its actions."""
         if kind == "sub":
             self.select(ui, "project", rid.split("/")[0])
             if ("sub", rid) not in self.after(ui, rid.split("/")[0]):
                 ui.keys_projects("right", ui.project_rows())
-        act(ui, ui.keys_projects, self.select(ui, kind, rid), "Delete…")
+        act(ui, ui.keys_projects, self.select(ui, kind, rid), "Delete")
 
     def ids(self, ui):
         return [r.item["id"] for r in ui.project_rows() if r.kind in ("project", "sub")]
@@ -1387,16 +1404,16 @@ class ProjectDelete(unittest.TestCase):
 
     def test_a_real_projects_actions_include_delete(self):
         ui = self.fixture()
-        self.assertIn("Delete…", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        self.assertIn("Delete", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
         p = next(x for x in ui.projects if x["id"] == "rollout")
         demo_like = dict(p, path=str(Path(self.tmp.name) / "not-a-folder"))
-        self.assertNotIn("Delete…", [l for l, _ in ui.project_actions(demo_like)])  # like Rename…: real folders only
+        self.assertNotIn("Delete", [l for l, _ in ui.project_actions(demo_like)])  # like Rename: real folders only
 
     def test_a_sub_projects_actions_include_delete(self):
         ui = self.fixture()
         self.select(ui, "project", "rollout")
         ui.keys_projects("right", ui.project_rows())
-        self.assertIn("Delete…", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
+        self.assertIn("Delete", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
 
     def test_delete_on_a_project_opens_a_confirm_naming_it_and_its_sub_projects(self):
         ui = self.fixture()
@@ -1497,7 +1514,7 @@ class ProjectDelete(unittest.TestCase):
 
 
 class SubProjectRename(unittest.TestCase):
-    """Rename… on a sub-project: a prompt starting with its slug renames <project>/sub/<old> to sub/<new>."""
+    """Rename on a sub-project: a prompt starting with its slug renames <project>/sub/<old> to sub/<new>."""
     setUp, tearDown = SubProjects.setUp, SubProjects.tearDown
     project, sub, shown, select, after = Projects.project, SubProjects.sub, Projects.shown, SubProjectRows.select, SubProjectRows.after
     ui, fixture = SubProjectRows.ui, SubProjectRows.fixture
@@ -1512,13 +1529,13 @@ class SubProjectRename(unittest.TestCase):
         if "rollout" not in ui.subs_open:
             self.select(ui, "project", "rollout")
             ui.keys_projects("right", ui.project_rows())
-        act(ui, ui.keys_projects, self.select(ui, "sub", rid), "Rename…")
+        act(ui, ui.keys_projects, self.select(ui, "sub", rid), "Rename")
 
     def test_a_sub_projects_actions_include_rename(self):
         ui = self.fixture()
         self.select(ui, "project", "rollout")
         ui.keys_projects("right", ui.project_rows())
-        self.assertIn("Rename…", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
+        self.assertIn("Rename", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
 
     def test_rename_starts_with_the_slug_and_renames_its_folder(self):
         ui = self.fixture()

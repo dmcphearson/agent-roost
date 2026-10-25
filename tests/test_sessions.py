@@ -616,18 +616,18 @@ class StartingSessions(unittest.TestCase):
             ui.load_projects()
             rows = ui.project_rows()
             ui.psel = 1
-            self.assertFalse([a for a in labels(ui, ui.keys_projects, rows)  # no Session Stop or Delete: the project's own Delete… is allowed
-                              if a.startswith(("Stop", "Delete")) and a != "Delete…"])
+            self.assertFalse([a for a in labels(ui, ui.keys_projects, rows)  # no Session Stop or Delete: the project's own Delete is allowed
+                              if a.startswith(("Stop", "Delete")) and a != "Delete"])
             live, old = 0, 1  # on the Sessions tab: the Projects tab lists no Sessions
             ui.sel = live
-            act(ui, ui.keys_sessions, ui.sessions, "Stop…")
+            act(ui, ui.keys_sessions, ui.sessions, "Stop")
             self.assertTrue(ui.sessions_typing())
             ui.keys_confirm("n")  # any other key cancels
             self.assertEqual((did, ui.msg), ([], "Cancelled"))
-            act(ui, ui.keys_sessions, ui.sessions, "Stop…")
+            act(ui, ui.keys_sessions, ui.sessions, "Stop")
             ui.keys_confirm("y")
             ui.sel = old
-            act(ui, ui.keys_sessions, ui.sessions, "Delete to the Trash…")
+            act(ui, ui.keys_sessions, ui.sessions, "Delete to the Trash")
             ui.keys_confirm("y")
             self.assertEqual(did, [("stop", ui.sessions[0]["attach"]), ("delete", "Old")])
         finally:
@@ -664,7 +664,7 @@ class StartingSessions(unittest.TestCase):
         meta = roost.frontmatter((self.root / "printer-fix" / "README.md").read_text())
         self.assertEqual((meta["summary"], meta["sessions"]), ("Fix the printers.", [{"name": "Printer Fix!", "id": "dd4e0000-0000"}]))
         self.assertEqual(offered, ui.sessions)  # its first Handoff, after the cost is shown
-        self.assertNotIn("New project from this Session…", labels(ui, ui.keys_sessions, ui.sessions))
+        self.assertNotIn("New project from this Session", labels(ui, ui.keys_sessions, ui.sessions))
         # a Session open in a window writes its own Handoff with /wrap-up
         ui.sessions = [dict(session("Other", kind="interactive"), id="ee5f0000-0000")]
         act(ui, ui.keys_sessions, ui.sessions, "New project from this Session")
@@ -892,20 +892,29 @@ class SessionMenuGroups(unittest.TestCase):
     def test_a_live_background_sessions_actions_in_groups(self):
         ui = self.fixture()
         self.assertEqual(self.acts(ui, "Live"),
-                         ["Open in a new window", "Write its Handoff from the transcript…", "Ask what to do with it…",
+                         ["Open in a new window", "Write its Handoff from the transcript", "Ask what to do with it",
                           "Pin: keep it running when idle", DIV,
-                          "Move to another project…", "Rename…", "Copy its id", "Show its folder in Finder", DIV,
-                          "Stop…"])
+                          "Move to another project", "Rename", "Copy its id", "Show its folder in Finder", DIV,
+                          "Stop"])
 
     def test_a_closed_sessions_actions_in_groups(self):
         ui = self.fixture()
         self.assertEqual(self.acts(ui, "Loose"),
-                         ["Open in a new window", "Write its Session recap from the transcript…", "Ask what to do with it…",
+                         ["Open in a new window", "Write its Session recap from the transcript", "Ask what to do with it",
                           "Restart in the background, pinned", DIV,
-                          "New project from this Session…", "Add to a project…", "Rename…", "Dismiss", "Copy its id",
+                          "New project from this Session", "Add to a project", "Rename", "Dismiss", "Copy its id",
                           "Show its folder in Finder", DIV,
-                          "Delete to the Trash…"])
+                          "Delete to the Trash"])
 
+
+    def test_no_action_label_has_an_ellipsis(self):
+        """A menu label is just its action's name: none ends in, or holds, "…". Rows: a live background
+        Session in a project, and a closed Session in no project."""
+        ui = self.fixture()
+        for name in ("Live", "Loose"):
+            real = [a for a in self.acts(ui, name) if a != DIV]
+            self.assertTrue(real, name)
+            self.assertEqual([a for a in real if "…" in a], [], name)
 
 class SessionColumns(unittest.TestCase):
     """The Sessions tab's columns scale with the window, read off the drawn header and rows. NAME
