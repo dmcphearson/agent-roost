@@ -184,15 +184,32 @@ class Adopt(unittest.TestCase):
         text = (new / "README.md").read_text()
         meta = roost.frontmatter(text)
         self.assertEqual((meta["category"], meta["status"]), ("infrastructure", "active"))
-        self.assertEqual(meta["summary"], "Roll the new printer driver out to every office Mac.")
+        self.assertEqual(meta["description"], "Roll the new printer driver out to every office Mac.")
         self.assertEqual(meta["sessions"], [{"name": "Printer fix", "id": SID}])  # Sessions stay linked through their ids
         self.assertIn("Driver packaged", text)
         self.assertNotIn("Old notes.", text)
         split = self.root / "badge-printers"
         self.assertTrue((split / "plan.md").exists())
-        self.assertIn("separate rollout", roost.frontmatter((split / "README.md").read_text())["summary"])
+        self.assertIn("separate rollout", roost.frontmatter((split / "README.md").read_text())["description"])
         # every file is still somewhere: moved, archived, or split out (plus the new README copy and Handoff)
         self.assertEqual(len(self.files(new, split)), before + 3)
+
+    def test_adopt_writes_a_description_line_and_no_summary_line(self):
+        """The README had a legacy summary: line; the adopted one, and a split-out project's, have one description: line."""
+        new = roost.apply_plan(self.old, self.plan(), today="2026-10-09")
+        for folder in (new, self.root / "badge-printers"):
+            front = (folder / "README.md").read_text().split("\n---\n", 1)[0]
+            self.assertEqual(len(re.findall(r"(?m)^description\s*:", front)), 1, folder.name)
+            self.assertNotRegex(front, r"(?m)^summary\s*:")
+        self.assertEqual(roost.read_project(new)["summary"], "Roll the new printer driver out to every office Mac.")
+
+    def test_adopting_a_readme_with_no_frontmatter_starts_one_with_a_description_line(self):
+        (self.old / "README.md").write_text("# Printer rollout\n\nOld notes.\n")
+        new = roost.apply_plan(self.old, self.plan(), today="2026-10-09")
+        front = (new / "README.md").read_text().split("\n---\n", 1)[0]
+        self.assertEqual(len(re.findall(r"(?m)^description\s*:", front)), 1)
+        self.assertNotRegex(front, r"(?m)^summary\s*:")
+        self.assertEqual(roost.read_project(new)["summary"], "Roll the new printer driver out to every office Mac.")
 
     def test_a_second_adopt_the_same_day_archives_beside_the_first(self):
         (self.old / "_archive" / "2026-10-09").mkdir(parents=True)

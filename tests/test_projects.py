@@ -73,13 +73,13 @@ class Projects(unittest.TestCase):
     def test_create_writes_the_project_layout(self):
         folder = roost.create_project("2026-10-new", 'Say "hi"  to   it.')
         meta = roost.frontmatter((folder / "README.md").read_text())
-        self.assertEqual(meta, {"summary": 'Say "hi" to it.', "status": "active", "sessions": []})
+        self.assertEqual(meta, {"description": 'Say "hi" to it.', "status": "active", "sessions": []})
         self.assertTrue((folder / "handoffs").is_dir())
         self.assertIn("## Current state", (folder / "README.md").read_text())
 
     def test_create_refuses_what_it_cant_do_safely(self):
         self.project("taken")
-        for pid, summary in [("taken", "s"), ("a/b", "s"), ("_x", "s"), ("two words", "s"), ("ok", " ")]:
+        for pid, summary in [("taken", "s"), ("a/b", "s"), ("_x", "s"), ("two words", "s")]:
             with self.assertRaises(ValueError):
                 roost.create_project(pid, summary)
         self.assertEqual(roost.frontmatter((self.root / "taken" / "README.md").read_text())["category"], "vendor-reviews")
@@ -92,8 +92,7 @@ class Projects(unittest.TestCase):
         self.assertEqual(roost.run_command("project", ["new", "2026-10-x", "--summary", "A thing."]), 0)
         self.assertTrue((self.root / "2026-10-x" / "README.md").exists())
         self.assertEqual(roost.run_command("project", ["new", "2026-10-x", "--summary", "Again."]), 1)
-        with self.assertRaises(SystemExit):
-            roost.run_command("project", ["new", "2026-10-y"])  # --summary is required
+        self.assertEqual(roost.run_command("project", ["new", "2026-10-y"]), 0)  # a description is optional
 
     def ui(self):
         ui = object.__new__(roost.UI)
@@ -366,12 +365,15 @@ class Projects(unittest.TestCase):
         ui.folded = set()  # its close-out record puts it under Closed
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("b")
         act(ui, ui.keys_projects, ui.project_rows(), "Rename")
-        self.assertEqual(ui.asking["title"], "Rename b (its folder)")
+        self.assertIn("label", ui.asking["title"].lower())  # two prompts: its label, then its folder's name
+        typed(ui, "\n")  # its label stays b
+        self.assertIn("folder name", ui.asking["title"].lower())
         typed(ui, "\x7f" + "taken\n")
         self.assertIn("taken already exists", ui.msg)
         self.assertTrue(folder.exists())  # nothing changed
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("b")
         act(ui, ui.keys_projects, ui.project_rows(), "Rename")
+        typed(ui, "\n")
         typed(ui, "\x7f" + "vendor-track\n")
         new = self.root / "vendor-track"
         self.assertEqual((ui.msg, folder.exists(), new.is_dir()), ("Renamed b to vendor-track", False, True))
@@ -442,7 +444,7 @@ class Projects(unittest.TestCase):
         typed(ui, "Zed\n\x152026-10-z\nOne line.\n")  # its name, its folder (made from the name, edited), its summary
         self.assertIsNone(ui.asking)
         self.assertEqual(roost.read_project(self.root / "2026-10-z")["label"], "Zed")
-        self.assertEqual(roost.frontmatter((self.root / "2026-10-z" / "README.md").read_text())["summary"], "One line.")
+        self.assertEqual(roost.frontmatter((self.root / "2026-10-z" / "README.md").read_text())["description"], "One line.")
         self.assertEqual(ui.project_rows()[ui.psel].item["id"], "2026-10-z")
 
     def test_esc_cancels_the_new_project_prompt(self):
@@ -952,8 +954,8 @@ class SubProjects(unittest.TestCase):
             folder = self.root / "rollout" / "sub" / slug
             self.assertTrue((folder / "handoffs").is_dir(), slug)
             meta = roost.frontmatter((folder / "README.md").read_text())
-            self.assertEqual({k: meta.get(k) for k in ("summary", "type", "status", "sessions")},
-                             {"summary": f"The {slug} work.", "type": kind, "status": "active", "sessions": []})
+            self.assertEqual({k: meta.get(k) for k in ("description", "type", "status", "sessions")},
+                             {"description": f"The {slug} work.", "type": kind, "status": "active", "sessions": []})
         self.assertFalse((self.root / "rollout" / "alpha").exists())  # under sub/, not beside it
 
     def test_new_sub_project_refuses_and_creates_nothing(self):
@@ -980,7 +982,7 @@ class SubProjects(unittest.TestCase):
             self.assertNotIn(code, (0, None), why)
             self.assertTrue(err.strip(), why)
             self.assertEqual(self.tree(), before, why)
-        self.assertEqual(roost.frontmatter((self.root / "rollout" / "sub" / "alpha" / "README.md").read_text())["summary"],
+        self.assertEqual(roost.frontmatter((self.root / "rollout" / "sub" / "alpha" / "README.md").read_text())["description"],
                          "First.")
 
     def test_a_top_level_project_new_still_needs_no_type(self):
@@ -1239,7 +1241,7 @@ class SubProjectRows(unittest.TestCase):
         readme = self.root / "rollout" / "sub" / "tidy-cables" / "README.md"
         self.assertTrue(readme.is_file())
         meta = roost.frontmatter(readme.read_text())
-        self.assertEqual((meta.get("type"), meta.get("summary")), ("chore", "Tidy the cables."))
+        self.assertEqual((meta.get("type"), meta.get("description")), ("chore", "Tidy the cables."))
         self.assertTrue(ui.msg.startswith("Created"), ui.msg)
         self.assertIn(("sub", "rollout/tidy-cables"), self.after(ui, "rollout"))  # its parent is unfolded
         r = ui.project_rows()[ui.psel]
@@ -1294,7 +1296,7 @@ class ProjectMenuGroups(unittest.TestCase):
         self.assertEqual(labels(ui, ui.keys_projects, rows),
                          ["Start a Session", "Start a Session in a sub-project", "Show its Sessions", DIV,
                           "New sub-project", DIV,
-                          "Set its category", "Edit its tags", "Rename", "Show its folder in Finder", DIV,
+                          "Set its category", "Edit its tags", "Edit its description", "Rename", "Show its folder in Finder", DIV,
                           "Delete"])
 
     def test_adopt_and_a_due_archive_go_in_the_delete_group(self):
@@ -1304,7 +1306,7 @@ class ProjectMenuGroups(unittest.TestCase):
         self.assertEqual(labels(ui, ui.keys_projects, rows),
                          ["Start a Session", DIV,
                           "New sub-project", DIV,
-                          "Set its category", "Edit its tags", "Rename", "Show its folder in Finder", DIV,
+                          "Set its category", "Edit its tags", "Edit its description", "Rename", "Show its folder in Finder", DIV,
                           "Adopt it: plan its README and files, then write its Handoffs",
                           "Move _archive/2020-01-01 to the Trash", "Delete"])
 
@@ -1327,7 +1329,7 @@ class ProjectMenuGroups(unittest.TestCase):
         rows = self.select(ui, "sub", "rollout/alpha")
         self.assertEqual(labels(ui, ui.keys_projects, rows),
                          ["Start a Session", "Show its Sessions", DIV,
-                          "Edit its tags", "Rename", "Show its folder in Finder", DIV,
+                          "Edit its tags", "Edit its description", "Rename", "Show its folder in Finder", DIV,
                           "Delete"])
 
 
@@ -1514,7 +1516,8 @@ class ProjectDelete(unittest.TestCase):
 
 
 class SubProjectRename(unittest.TestCase):
-    """Rename on a sub-project: a prompt starting with its slug renames <project>/sub/<old> to sub/<new>."""
+    """Rename on a sub-project: a Label prompt starting with its heading (its slug by default), then a Folder
+    name prompt starting with its slug; a new folder name renames <project>/sub/<old> to sub/<new>."""
     setUp, tearDown = SubProjects.setUp, SubProjects.tearDown
     project, sub, shown, select, after = Projects.project, SubProjects.sub, Projects.shown, SubProjectRows.select, SubProjectRows.after
     ui, fixture = SubProjectRows.ui, SubProjectRows.fixture
@@ -1541,7 +1544,10 @@ class SubProjectRename(unittest.TestCase):
         ui = self.fixture()
         self.open_rename(ui)
         self.assertIsNotNone(ui.asking)
-        self.assertEqual(ui.asking["text"], "alpha")
+        self.assertEqual(ui.asking["text"], "alpha")  # its label: its heading, which is its slug
+        self.answer(ui, "alpha")
+        self.assertIsNotNone(ui.asking)
+        self.assertEqual(ui.asking["text"], "alpha")  # its folder's name
         self.answer(ui, "delta")
         sub = self.root / "rollout" / "sub"
         self.assertFalse((sub / "alpha").exists())
@@ -1557,6 +1563,7 @@ class SubProjectRename(unittest.TestCase):
     def test_rename_rewrites_a_heading_that_was_the_old_slug(self):
         ui = self.fixture()
         self.open_rename(ui)
+        self.answer(ui, "alpha")  # its label unchanged: the heading follows the folder
         self.answer(ui, "delta")
         text = (self.root / "rollout" / "sub" / "delta" / "README.md").read_text()
         self.assertIn("\n# delta\n", text)
@@ -1568,11 +1575,34 @@ class SubProjectRename(unittest.TestCase):
             ui = self.fixture()
             before = sorted(p.name for p in (self.root / "rollout" / "sub").iterdir())
             self.open_rename(ui)
+            self.answer(ui, "alpha")
             self.answer(ui, bad)
             self.assertTrue(ui.msg.startswith("Couldn't rename it"), (bad, ui.msg))
             self.assertEqual(sorted(p.name for p in (self.root / "rollout" / "sub").iterdir()), before, bad)
             self.assertIn("\n# alpha\n", (self.root / "rollout" / "sub" / "alpha" / "README.md").read_text(), bad)
             self.assertIn("\n# beta\n", (self.root / "rollout" / "sub" / "beta" / "README.md").read_text(), bad)
+
+    def test_a_new_label_moves_a_folder_named_after_the_old_one(self):
+        """Its folder name was slug(its label): a new label starts the Folder name prompt at slug(new label)."""
+        ui = self.fixture()
+        self.open_rename(ui)
+        self.answer(ui, "Badge Printers")
+        self.assertIn("folder name", (ui.asking or {}).get("title", "").lower(), ui.asking)
+        self.assertEqual(ui.asking["text"], "badge-printers")
+        self.answer(ui, "badge-printers")
+        sub = self.root / "rollout" / "sub"
+        self.assertFalse((sub / "alpha").exists())
+        self.assertEqual(roost.heading((sub / "badge-printers" / "README.md").read_text()), "Badge Printers")
+
+    def test_a_new_label_alone_changes_only_its_heading(self):
+        ui = self.fixture()
+        before = (self.root / "rollout" / "sub" / "alpha" / "README.md").read_text()
+        self.open_rename(ui)
+        self.answer(ui, "Badge Printers")
+        self.answer(ui, "alpha")  # the folder name put back as it was
+        self.assertEqual((self.root / "rollout" / "sub" / "alpha" / "README.md").read_text(),
+                         before.replace("\n# alpha\n", "\n# Badge Printers\n"))
+        self.assertEqual(sorted(p.name for p in (self.root / "rollout" / "sub").iterdir()), ["alpha", "beta", "gamma"])
 
     def test_rename_refuses_while_a_linked_session_is_running(self):
         self.project("rollout", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
@@ -1584,6 +1614,357 @@ class SubProjectRename(unittest.TestCase):
         self.assertIsNone(ui.asking)
         self.assertIn("Live is running in it", ui.msg)
         self.assertTrue((self.root / "rollout" / "sub" / "alpha").is_dir())
+
+
+TODAY = lambda: time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"  # a Handoff written now: its project is Recent
+SUMMARY_LINE = re.compile(r"(?m)^summary\s*:")
+DESCRIPTION_LINE = re.compile(r"(?m)^description\s*:")
+
+
+class Descriptions(unittest.TestCase):
+    """A project's (and sub-project's) description: the README's description: line, read with a legacy
+    summary: line as the fallback, optional when it's made, and set by set_description or roost project description."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    run_cli = SubProjects.run_cli
+
+    def readme(self, folder):
+        return (Path(folder) / "README.md").read_text()
+
+    def test_read_takes_description_then_a_legacy_summary(self):
+        self.project("new", '---\ndescription: "Current text."\nstatus: active\nsessions: []\n---\n\n# New\n')
+        self.project("old", '---\nsummary: "Legacy text."\nstatus: active\nsessions: []\n---\n\n# Old\n')
+        self.project("both", '---\ndescription: "Wins."\nsummary: "Loses."\nsessions: []\n---\n')
+        self.project("none", "---\nstatus: active\nsessions: []\n---\n")
+        self.assertEqual({p["id"]: p["summary"] for p in roost.read_projects()},
+                         {"new": "Current text.", "old": "Legacy text.", "both": "Wins.", "none": ""})
+        self.assertEqual(roost.read_project(self.root / "new")["summary"], "Current text.")
+        self.sub("new", "alpha", summary="Legacy sub.")
+        beta = self.sub("new", "beta")
+        (beta / "README.md").write_text(self.readme(beta).replace('summary: "s"', 'description: "Current sub."'))
+        self.assertEqual({s["slug"]: s["summary"] for s in roost.read_subprojects(self.root / "new")},
+                         {"alpha": "Legacy sub.", "beta": "Current sub."})
+
+    def test_create_project_needs_no_description(self):
+        for folder in (roost.create_project("bare"), roost.create_project("empty", "")):
+            text = self.readme(folder)
+            self.assertIn('\ndescription: ""\n', text)
+            self.assertNotRegex(text, SUMMARY_LINE)
+            self.assertEqual(roost.read_project(folder)["summary"], "")
+        said = 'Say "hi" here.'
+        folder = roost.create_project("said", said, label="Said It")
+        text = self.readme(folder)
+        self.assertIn(f"\ndescription: {json.dumps(said)}\n", text)  # JSON-quoted, like the summary: line was
+        self.assertNotRegex(text, SUMMARY_LINE)
+        self.assertEqual((roost.read_project(folder)["summary"], roost.read_project(folder)["label"]), (said, "Said It"))
+
+    def test_create_subproject_needs_no_description(self):
+        self.project("rollout")
+        for folder in (roost.create_subproject("rollout/alpha", "feature"), roost.create_subproject("rollout/beta", "chore", "")):
+            text = self.readme(folder)
+            self.assertIn('\ndescription: ""\n', text)
+            self.assertNotRegex(text, SUMMARY_LINE)
+        folder = roost.create_subproject("rollout/gamma", "bugfix", "Toner alerts.")
+        self.assertIn('\ndescription: "Toner alerts."\n', self.readme(folder))
+        self.assertEqual({s["slug"]: s["summary"] for s in roost.read_subprojects(self.root / "rollout")},
+                         {"alpha": "", "beta": "", "gamma": "Toner alerts."})
+
+    def test_set_description_replaces_converts_or_adds_its_line(self):
+        cur = self.project("cur", '---\ndescription: "Old."\nstatus: active\nsessions: []\n---\n\n# Cur\n\ndescription: body text\n')
+        said = 'New "text".'
+        roost.set_description(cur, said)
+        self.assertEqual(self.readme(cur), f"---\ndescription: {json.dumps(said)}\n"
+                                           "status: active\nsessions: []\n---\n\n# Cur\n\ndescription: body text\n")
+        legacy = self.project("legacy")  # README: category, summary, status, sessions
+        roost.set_description(legacy, "Fresh.")
+        self.assertEqual(self.readme(legacy), README.replace('summary: "Two password managers compared: cost and rollout."',
+                                                             'description: "Fresh."'))
+        bare = self.project("bare", "---\nstatus: active\nsessions: []\n---\n\n# Bare\n")
+        roost.set_description(bare, "Added.")
+        self.assertEqual(self.readme(bare), '---\ndescription: "Added."\nstatus: active\nsessions: []\n---\n\n# Bare\n')
+        roost.set_description(bare, "")
+        self.assertEqual(self.readme(bare), '---\ndescription: ""\nstatus: active\nsessions: []\n---\n\n# Bare\n')
+        self.assertEqual(roost.read_project(bare)["summary"], "")
+        for folder in (cur, legacy, bare):
+            fm = self.readme(folder).split("\n---\n", 1)[0]
+            self.assertEqual((len(DESCRIPTION_LINE.findall(fm)), len(SUMMARY_LINE.findall(fm))), (1, 0), folder.name)
+        (self.root / "no-readme").mkdir()
+        with self.assertRaises(ValueError):
+            roost.set_description(self.root / "no-readme", "x")
+        self.assertEqual(list((self.root / "no-readme").iterdir()), [])
+
+    def test_set_label_replaces_the_first_heading_or_adds_one(self):
+        folder = self.project("a")  # README: # Title
+        before = self.readme(folder)
+        roost.set_label(folder, "  Password   managers ")
+        self.assertEqual(self.readme(folder), before.replace("\n# Title\n", "\n# Password managers\n"))
+        two = self.project("b", "---\nsessions: []\n---\n\n# First\n\nText.\n\n# Second\n")
+        roost.set_label(two, "One")
+        self.assertEqual(self.readme(two), "---\nsessions: []\n---\n\n# One\n\nText.\n\n# Second\n")
+        none = self.project("c", "---\nstatus: active\nsessions: []\n---\n\nJust text.\n")
+        roost.set_label(none, "Named")
+        text = self.readme(none)
+        self.assertEqual(roost.heading(text), "Named")
+        self.assertTrue(text.startswith("---\nstatus: active\nsessions: []\n---\n"), text)
+        self.assertLess(text.index("# Named"), text.index("Just text."))
+        self.assertEqual(roost.read_project(none)["label"], "Named")
+        for bad in ("", "   "):
+            before = self.readme(two)
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                roost.set_label(two, bad)
+            self.assertEqual(self.readme(two), before, repr(bad))
+
+    def test_project_new_takes_an_optional_description(self):
+        self.project("rollout")
+        for argv, folder, want in [(["new", "plain"], self.root / "plain", ""),
+                                   (["new", "said", "--description", "Said it."], self.root / "said", "Said it."),
+                                   (["new", "legacy", "--summary", "Old flag."], self.root / "legacy", "Old flag."),
+                                   (["new", "rollout/alpha", "--type", "feature"], self.root / "rollout" / "sub" / "alpha", ""),
+                                   (["new", "rollout/beta", "--type", "bugfix", "--description", "Toner."],
+                                    self.root / "rollout" / "sub" / "beta", "Toner.")]:
+            code, _, err = self.run_cli(argv)
+            self.assertEqual(code, 0, (argv, err))
+            self.assertEqual(roost.read_project(folder)["summary"], want, argv)
+            self.assertNotRegex(self.readme(folder), SUMMARY_LINE)
+        code, out, _ = self.run_cli(["new", "--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("--description", out)
+        self.assertNotIn("--summary", out)  # it still works, but isn't offered
+
+    def test_description_command_prints_or_sets_it(self):
+        folder = self.project("p", "---\nstatus: active\nsessions: []\n---\n\n# P\n")
+        code, out, err = self.run_cli(["description", "p"])
+        self.assertEqual((code, out.strip()), (0, "(no description)"), err)
+        code, _, err = self.run_cli(["description", "p", "What it is."])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.frontmatter(self.readme(folder))["description"], "What it is.")
+        self.assertEqual(self.run_cli(["description", "p"])[1].strip(), "What it is.")
+        self.project("legacy")
+        self.assertEqual(self.run_cli(["description", "legacy"])[1].strip(), "Two password managers compared: cost and rollout.")
+        sub = self.sub("p", "alpha", summary="Sub text.")
+        parent = self.readme(folder)
+        code, _, err = self.run_cli(["description", "p/alpha", "New sub text."])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.read_project(sub)["summary"], "New sub text.")
+        self.assertEqual(self.run_cli(["description", "p/alpha"])[1].strip(), "New sub text.")
+        self.assertEqual(self.readme(folder), parent)
+        for argv in (["description", "nope"], ["description", "nope", "x"]):
+            code, _, err = self.run_cli(argv)
+            self.assertEqual(code, 1, argv)
+            self.assertTrue(err.strip(), argv)
+
+
+class DescriptionsOnTheTab(unittest.TestCase):
+    """The Projects tab: an optional description when a project or sub-project is made, a Description
+    field in the panel, and Edit its description in the organize group."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    ui, fixture, select, after = SubProjectRows.ui, SubProjectRows.fixture, SubProjectRows.select, SubProjectRows.after
+    answer = staticmethod(ProjectDelete.answer)
+    shown = Projects.shown
+
+    def open_sub(self, ui, rid):
+        if ("sub", rid) not in self.after(ui, rid.split("/")[0]):
+            self.select(ui, "project", rid.split("/")[0])
+            ui.keys_projects("right", ui.project_rows())
+        return self.select(ui, "sub", rid)
+
+    def assert_optional_description_title(self, ui):
+        title = ((ui.asking or {}).get("title") or "").lower()
+        self.assertIn("description", title)
+        self.assertIn("optional", title)
+        self.assertNotIn("summary", title)
+
+    def test_new_project_asks_an_optional_description_last(self):
+        ui = self.ui()
+        ui.keys_projects("enter", [])
+        typed(ui, "Zed\n")  # its name
+        typed(ui, "\n")  # its folder, zed
+        self.assert_optional_description_title(ui)
+        typed(ui, "\n")  # no description
+        self.assertIsNone(ui.asking)
+        self.assertFalse(ui.msg.startswith(("Cancelled", "Couldn't")), ui.msg)
+        self.assertEqual(roost.read_project(self.root / "zed")["summary"], "")
+        self.assertIn('\ndescription: ""\n', (self.root / "zed" / "README.md").read_text())
+
+    def test_new_sub_project_asks_an_optional_description_last(self):
+        ui = self.fixture()
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "New sub-project")
+        ui.choosing["sel"] = next(i for i, (l, _) in enumerate(ui.choice_options()) if "chore" in l)
+        ui.keys_choice("enter")
+        typed(ui, "\x15tidy\n")  # its slug
+        self.assert_optional_description_title(ui)
+        typed(ui, "\x15\n")  # no description
+        self.assertIsNone(ui.asking)
+        self.assertTrue(ui.msg.startswith("Created"), ui.msg)
+        folder = self.root / "rollout" / "sub" / "tidy"
+        self.assertEqual(roost.read_project(folder)["summary"], "")
+        self.assertIn('\ndescription: ""\n', (folder / "README.md").read_text())
+
+    def test_the_panel_field_is_description_and_says_when_there_is_none(self):
+        self.project("rollout", "---\nstatus: active\nsessions: []\n---\n\n# Rollout\n", handoffs=[TODAY()])
+        self.project("said", '---\ndescription: "Said text."\nstatus: active\nsessions: []\n---\n\n# Said\n', handoffs=[TODAY()])
+        self.sub("rollout", "alpha", summary="")
+        self.sub("rollout", "beta", summary="Toner alerts.")
+        ui = self.ui()
+        for kind, rid, want in [("project", "rollout", "no description yet"), ("project", "said", "Said text."),
+                                ("sub", "rollout/alpha", "no description yet"), ("sub", "rollout/beta", "Toner alerts.")]:
+            rows = self.open_sub(ui, rid) if kind == "sub" else self.select(ui, kind, rid)
+            _, fields = ui.project_panel(rows, 40, 120)
+            named = dict((label, str(v)) for label, v in fields if label)
+            self.assertNotIn("Summary", named, (rid, fields))
+            self.assertIn(want, named.get("Description", ""), (rid, fields))
+
+    def test_edit_its_description_starts_with_it_then_sets_or_clears_it(self):
+        ui = self.fixture()  # rollout's README has a legacy summary: line; alpha's is Badge printers.
+        readme = self.root / "rollout" / "README.md"
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "Edit its description")
+        self.assertEqual(ui.asking["text"], "Two password managers compared: cost and rollout.")
+        self.answer(ui, "Printers for every office.")
+        self.assertEqual(roost.frontmatter(readme.read_text())["description"], "Printers for every office.")
+        self.assertNotRegex(readme.read_text(), SUMMARY_LINE)
+        self.assertEqual(next(p for p in ui.projects if p["id"] == "rollout")["summary"], "Printers for every office.")
+        act(ui, ui.keys_projects, self.select(ui, "project", "rollout"), "Edit its description")
+        self.assertEqual(ui.asking["text"], "Printers for every office.")
+        self.answer(ui, "")
+        self.assertEqual(roost.frontmatter(readme.read_text())["description"], "")
+        sub = self.root / "rollout" / "sub" / "alpha" / "README.md"
+        act(ui, ui.keys_projects, self.open_sub(ui, "rollout/alpha"), "Edit its description")
+        self.assertEqual(ui.asking["text"], "Badge printers.")
+        self.answer(ui, "Badge printers, every site.")
+        self.assertEqual(roost.frontmatter(sub.read_text())["description"], "Badge printers, every site.")
+        act(ui, ui.keys_projects, self.open_sub(ui, "rollout/alpha"), "Edit its description")
+        self.answer(ui, "")
+        self.assertEqual(roost.read_project(sub.parent)["summary"], "")
+
+
+class ProjectRename(unittest.TestCase):
+    """Rename on a project: a Label prompt (its README heading), then a Folder name prompt. The folder name
+    starts as slug(new label) when it was slug(old label) and the label changed, else as it is."""
+    setUp, tearDown, project = SubProjects.setUp, SubProjects.tearDown, Projects.project
+    ui, select = SubProjectRows.ui, SubProjectRows.select
+    answer = staticmethod(ProjectDelete.answer)
+    shown = Projects.shown
+
+    def fresh(self):
+        self.tearDown()
+        self.setUp()
+
+    def make(self, pid="printer-rollout", heading="Printer Rollout"):
+        return self.project(pid, README.replace("# Title", f"# {heading}"), handoffs=[TODAY()])
+
+    def open_rename(self, ui, pid="printer-rollout"):
+        act(ui, ui.keys_projects, self.select(ui, "project", pid), "Rename")
+
+    def folder_prompt(self, ui):
+        self.assertIsNotNone(ui.asking)
+        self.assertIn("folder name", (ui.asking.get("title") or "").lower(), ui.asking)
+        return ui.asking["text"]
+
+    def test_rename_asks_its_label_then_its_folder_name(self):
+        self.make()
+        ui = self.ui()
+        self.open_rename(ui)
+        self.assertIsNotNone(ui.asking)
+        self.assertIn("label", (ui.asking.get("title") or "").lower(), ui.asking)
+        self.assertEqual(ui.asking["text"], "Printer Rollout")
+        self.answer(ui, "Printer Rollout")
+        self.assertEqual(self.folder_prompt(ui), "printer-rollout")
+
+    def test_a_new_label_moves_a_folder_named_after_the_old_one(self):
+        self.make()
+        ui = self.ui()
+        self.open_rename(ui)
+        self.answer(ui, "Badge Printers")
+        self.assertEqual(self.folder_prompt(ui), "badge-printers")
+        self.answer(ui, "badge-printers")
+        self.assertFalse((self.root / "printer-rollout").exists())
+        self.assertEqual((self.root / "badge-printers" / "README.md").read_text(), README.replace("# Title", "# Badge Printers"))
+
+    def test_a_new_label_keeps_a_folder_name_not_made_from_it(self):
+        folder = self.make("b", "Vendor Track")
+        ui = self.ui()
+        self.open_rename(ui, "b")
+        self.answer(ui, "Vendor  Review")
+        self.assertEqual(self.folder_prompt(ui), "b")
+        self.answer(ui, "b")
+        self.assertEqual((folder / "README.md").read_text(), README.replace("# Title", "# Vendor Review"))
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["b"])
+        self.assertEqual(next(p for p in ui.projects if p["id"] == "b")["label"], "Vendor Review")
+
+    def test_nothing_changed_writes_nothing(self):
+        folder = self.make()
+        before = (folder / "README.md").read_text()
+        ui = self.ui()
+        self.open_rename(ui)
+        self.answer(ui, "Printer Rollout")
+        self.assertEqual(self.folder_prompt(ui), "printer-rollout")
+        self.answer(ui, "printer-rollout")
+        self.assertIsNone(ui.asking)
+        self.assertRegex(ui.msg, r"(?i)nothing|no change")
+        self.assertEqual((folder / "README.md").read_text(), before)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["printer-rollout"])
+
+    def test_an_empty_label_cancels(self):
+        folder = self.make()
+        before = (folder / "README.md").read_text()
+        ui = self.ui()
+        self.open_rename(ui)
+        self.answer(ui, "   ")
+        self.assertIsNone(ui.asking)
+        self.assertRegex(ui.msg, r"(?i)cancel")
+        self.assertEqual((folder / "README.md").read_text(), before)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["printer-rollout"])
+
+    def test_a_refused_folder_name_changes_nothing_not_even_the_label(self):
+        for bad in ("Bad Name", "taken"):
+            self.fresh()
+            folder = self.make()
+            self.project("taken")
+            before = (folder / "README.md").read_text()
+            ui = self.ui()
+            self.open_rename(ui)
+            self.answer(ui, "New Name")
+            self.folder_prompt(ui)
+            self.answer(ui, bad)
+            self.assertTrue(ui.msg.startswith("Couldn't rename it"), (bad, ui.msg))
+            self.assertEqual((folder / "README.md").read_text(), before, bad)
+            self.assertEqual((self.root / "taken" / "README.md").read_text(), README, bad)
+            self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["printer-rollout", "taken"], bad)
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class SubProjectLabels(unittest.TestCase):
+    """A sub-project's row on the Projects tab shows its label (its README heading); its id stays
+    <project>/<slug>, and the Sessions tab's PROJECT column shows that id."""
+    run_on, listing, head_index = ProjectRows.run_on, ProjectRows.listing, staticmethod(ProjectRows.head_index)
+    select = staticmethod(TextualScreens.select)
+
+    def setUp(self):
+        Projects.setUp(self)  # temp Projects folder, read here before the screens' stand-ins replace the readers
+        self.addCleanup(Projects.tearDown, self)
+        work = session("Badge work")
+        Projects.project(self, "rollout", handoffs=[TODAY()])
+        folder = SubProjects.sub(self, "rollout", "alpha", summary="Badge printers.", sessions=[("Badge work", work["id"])])
+        (folder / "README.md").write_text((folder / "README.md").read_text().replace("\n# alpha\n", "\n# Badge Printers\n"))
+        self.projects = roost.read_projects([work])
+        TextualScreens.setUp(self)
+        self.sessions = [work]
+
+    def test_a_sub_row_shows_its_label(self):
+        app = self.run_on(self.projects, [self.select(lambda ui: ui.subs_open.add("rollout"))])
+        self.assertEqual([r.item["id"] for r in app.ui.project_rows() if r.kind == "sub"], ["rollout/alpha"])
+        rows = self.listing(app.lines)
+        self.assertTrue([l for l in rows if "Badge Printers" in l], rows)
+
+    def test_the_sessions_tab_names_a_sub_project_by_its_id(self):
+        seen = {}
+
+        async def look(pilot):
+            seen.update({s["name"]: s.get("proj") for s in pilot.app.ui.srows})
+        app = self.run_on(self.projects, [look], tab="Sessions")
+        self.assertEqual(seen.get("Badge work"), "rollout/alpha")
+        row = next(l for l in app.lines if "Badge work" in l)
+        self.assertIn("rollout/alpha", row)
+        self.assertNotIn("Badge Printers", row)
 
 
 if __name__ == "__main__":

@@ -70,6 +70,19 @@ class Demo(unittest.TestCase):
         self.assertIn("(demo)", r.stdout)
 
 
+    def test_the_demo_makes_a_project_with_no_description(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as home:  # use_demo() patches every module, so it runs on its own
+            r = subprocess.run([sys.executable, "-c", "from roost.demo import use_demo; use_demo()\n"
+                                "from roost.core import projectdata\n"
+                                "print(projectdata.create_project('demo-blank', ''))\n"
+                                "print([p['summary'] for p in projectdata.read_projects() if p['id'] == 'demo-blank'])"],
+                               cwd=ROOT, env={**os.environ, "HOME": home}, stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("demo-blank", r.stdout)
+        self.assertIn("['']", r.stdout)
+
 class Compat(unittest.TestCase):
     def test_a_newer_claude_code_alone_is_only_logged(self):
         import unittest.mock

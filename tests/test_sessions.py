@@ -662,7 +662,7 @@ class StartingSessions(unittest.TestCase):
         self.assertEqual(ui.asking["text"], "Printer Fix!")  # then the summary
         typed(ui, "\x15Fix the printers.\n")
         meta = roost.frontmatter((self.root / "printer-fix" / "README.md").read_text())
-        self.assertEqual((meta["summary"], meta["sessions"]), ("Fix the printers.", [{"name": "Printer Fix!", "id": "dd4e0000-0000"}]))
+        self.assertEqual((meta["description"], meta["sessions"]), ("Fix the printers.", [{"name": "Printer Fix!", "id": "dd4e0000-0000"}]))
         self.assertEqual(offered, ui.sessions)  # its first Handoff, after the cost is shown
         self.assertNotIn("New project from this Session", labels(ui, ui.keys_sessions, ui.sessions))
         # a Session open in a window writes its own Handoff with /wrap-up
