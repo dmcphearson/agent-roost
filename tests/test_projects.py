@@ -1267,5 +1267,243 @@ class SubProjectRows(unittest.TestCase):
             self.assertEqual(rows, [("project", "rollout"), ("sub", want)], q)
 
 
+class ProjectDelete(unittest.TestCase):
+    """Delete… on a project or sub-project: a confirm box, then the id typed exactly, then its folder goes
+    to the Trash (through adopt.trash, patched here to move it into a temp folder)."""
+    project, sub, shown, select, after = Projects.project, SubProjects.sub, Projects.shown, SubProjectRows.select, SubProjectRows.after
+    ui = SubProjectRows.ui
+
+    def setUp(self):
+        import shutil
+        import unittest.mock
+        SubProjects.setUp(self)
+        self.bin = Path(self.tmp.name) / "trash-bin"
+        self.bin.mkdir()
+        self.trashed = []
+
+        def trash(path):
+            self.trashed.append(Path(path))
+            dst = self.bin / f"{len(self.trashed)}-{Path(path).name}"
+            shutil.move(str(path), str(dst))
+            return dst
+        patcher = unittest.mock.patch.object(importlib.import_module("roost.core.adopt"), "trash", trash)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        SubProjects.tearDown(self)
+
+    @staticmethod
+    def answer(ui, text):
+        """Enter text at the open one-line prompt, as enter does."""
+        a, ui.asking = ui.asking, None
+        return a["done"](text)
+
+    def fresh(self):
+        """A new temp Projects folder (and Trash stand-in), for each case of a loop."""
+        self.doCleanups()
+        self.tearDown()
+        self.setUp()
+
+    def open_delete(self, ui, kind, rid):
+        """Select the row and choose Delete… from its actions."""
+        if kind == "sub":
+            self.select(ui, "project", rid.split("/")[0])
+            if ("sub", rid) not in self.after(ui, rid.split("/")[0]):
+                ui.keys_projects("right", ui.project_rows())
+        act(ui, ui.keys_projects, self.select(ui, kind, rid), "Delete…")
+
+    def ids(self, ui):
+        return [r.item["id"] for r in ui.project_rows() if r.kind in ("project", "sub")]
+
+    def fixture(self):
+        ui = SubProjectRows.fixture(self)
+        ui.DIM = ui.GREEN = ui.YELLOW = ui.RED = 0  # confirm_text's colors, set by curses in the app
+        return ui
+
+    def test_a_real_projects_actions_include_delete(self):
+        ui = self.fixture()
+        self.assertIn("Delete…", labels(ui, ui.keys_projects, self.select(ui, "project", "rollout")))
+        p = next(x for x in ui.projects if x["id"] == "rollout")
+        demo_like = dict(p, path=str(Path(self.tmp.name) / "not-a-folder"))
+        self.assertNotIn("Delete…", [l for l, _ in ui.project_actions(demo_like)])  # like Rename…: real folders only
+
+    def test_a_sub_projects_actions_include_delete(self):
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        self.assertIn("Delete…", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
+
+    def test_delete_on_a_project_opens_a_confirm_naming_it_and_its_sub_projects(self):
+        ui = self.fixture()
+        self.open_delete(ui, "project", "rollout")
+        self.assertIsNotNone(ui.confirm)
+        self.assertIsNone(ui.asking)
+        title, body, _, _ = ui.confirm_text()
+        self.assertIn("rollout", title)
+        self.assertIn("Trash", title)
+        text = " ".join(body)
+        self.assertIn("3", text)  # alpha, beta, and done gamma: every sub/ folder goes with it
+        self.assertIn("sub-project", text)
+        self.assertTrue((self.root / "rollout").is_dir())
+        self.assertEqual(self.trashed, [])
+
+    def test_delete_on_a_sub_project_opens_a_confirm_naming_it(self):
+        ui = self.fixture()
+        self.open_delete(ui, "sub", "rollout/alpha")
+        self.assertIsNotNone(ui.confirm)
+        title, _, _, _ = ui.confirm_text()
+        self.assertIn("rollout/alpha", title)
+        self.assertIn("Trash", title)
+        self.assertTrue((self.root / "rollout" / "sub" / "alpha").is_dir())
+        self.assertEqual(self.trashed, [])
+
+    def test_any_key_but_y_at_the_confirm_cancels(self):
+        for key in ("n", "escape", "enter", "x"):
+            self.fresh()
+            ui = self.fixture()
+            self.open_delete(ui, "project", "rollout")
+            ui.keys_confirm(key)
+            self.assertIsNone(ui.asking, key)
+            self.assertIn("Cancelled", ui.msg, key)
+            self.assertTrue((self.root / "rollout").is_dir(), key)
+            self.assertEqual(self.trashed, [], key)
+
+    def test_y_at_the_confirm_asks_for_the_id_typed(self):
+        for key, kind, rid in (("y", "project", "rollout"), ("Y", "sub", "rollout/beta")):
+            self.fresh()
+            ui = self.fixture()
+            self.open_delete(ui, kind, rid)
+            ui.keys_confirm(key)
+            self.assertIsNotNone(ui.asking, (key, rid))
+            self.assertEqual(ui.asking["text"], "", rid)
+            self.assertIn(rid, ui.asking["title"] or "", rid)
+            self.assertTrue((self.root / "rollout" / "sub" / "beta").is_dir())
+            self.assertEqual(self.trashed, [], rid)
+
+    def test_typing_anything_but_the_exact_id_cancels(self):
+        for kind, rid, wrong in (("project", "rollout", "other"), ("project", "rollout", "Rollout"), ("project", "rollout", ""),
+                                 ("sub", "rollout/alpha", "alpha"), ("sub", "rollout/alpha", "ROLLOUT/ALPHA"), ("sub", "rollout/alpha", "")):
+            self.fresh()
+            ui = self.fixture()
+            self.open_delete(ui, kind, rid)
+            ui.keys_confirm("y")
+            self.answer(ui, wrong)
+            self.assertEqual(self.trashed, [], (rid, wrong))
+            self.assertTrue((self.root / "rollout" / "sub" / "alpha").is_dir(), (rid, wrong))
+            self.assertRegex(ui.msg, r"(?i)match|cancel", (rid, wrong))
+            self.assertIn("rollout", self.ids(ui), (rid, wrong))
+
+    def test_the_exact_id_moves_a_project_and_its_sub_projects_to_the_trash(self):
+        ui = self.fixture()
+        folder = self.root / "rollout"
+        self.open_delete(ui, "project", "rollout")
+        ui.keys_confirm("y")
+        self.answer(ui, "  rollout \n")
+        self.assertFalse(folder.exists())
+        self.assertIn(folder, self.trashed)
+        moved = sorted(p.name for d in self.bin.iterdir() for p in (d / "sub").iterdir()) if self.bin.exists() else []
+        self.assertEqual(moved, ["alpha", "beta", "gamma"])  # its sub/ folders went with it
+        self.assertIn("Trash", ui.msg)
+        self.assertIn("rollout", ui.msg)
+        self.assertNotIn("rollout", self.ids(ui))
+        self.assertFalse([i for i in self.ids(ui) if i.startswith("rollout/")])
+        self.assertIn("other", self.ids(ui))
+        self.assertTrue((self.root / "other").is_dir())
+
+    def test_the_exact_id_moves_only_that_sub_project_to_the_trash(self):
+        ui = self.fixture()
+        folder = self.root / "rollout" / "sub" / "alpha"
+        self.open_delete(ui, "sub", "rollout/alpha")
+        ui.keys_confirm("y")
+        self.answer(ui, " rollout/alpha ")
+        self.assertFalse(folder.exists())
+        self.assertEqual(self.trashed, [folder])
+        self.assertIn("Trash", ui.msg)
+        self.assertIn("rollout/alpha", ui.msg)
+        for kept in ("rollout", "rollout/sub/beta", "rollout/sub/gamma"):
+            self.assertTrue((self.root / kept).is_dir(), kept)
+        self.assertTrue((self.root / "rollout" / "README.md").is_file())
+        if "rollout" not in ui.subs_open:
+            self.select(ui, "project", "rollout")
+            ui.keys_projects("right", ui.project_rows())
+        self.assertNotIn("rollout/alpha", self.ids(ui))
+        self.assertIn("rollout", self.ids(ui))
+        self.assertIn("rollout/beta", self.ids(ui))
+
+
+class SubProjectRename(unittest.TestCase):
+    """Rename… on a sub-project: a prompt starting with its slug renames <project>/sub/<old> to sub/<new>."""
+    setUp, tearDown = SubProjects.setUp, SubProjects.tearDown
+    project, sub, shown, select, after = Projects.project, SubProjects.sub, Projects.shown, SubProjectRows.select, SubProjectRows.after
+    ui, fixture = SubProjectRows.ui, SubProjectRows.fixture
+    answer, ids = staticmethod(ProjectDelete.answer), ProjectDelete.ids
+
+    def fresh(self):
+        """A new temp Projects folder, for each case of a loop."""
+        self.tearDown()
+        self.setUp()
+
+    def open_rename(self, ui, rid="rollout/alpha"):
+        if "rollout" not in ui.subs_open:
+            self.select(ui, "project", "rollout")
+            ui.keys_projects("right", ui.project_rows())
+        act(ui, ui.keys_projects, self.select(ui, "sub", rid), "Rename…")
+
+    def test_a_sub_projects_actions_include_rename(self):
+        ui = self.fixture()
+        self.select(ui, "project", "rollout")
+        ui.keys_projects("right", ui.project_rows())
+        self.assertIn("Rename…", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
+
+    def test_rename_starts_with_the_slug_and_renames_its_folder(self):
+        ui = self.fixture()
+        self.open_rename(ui)
+        self.assertIsNotNone(ui.asking)
+        self.assertEqual(ui.asking["text"], "alpha")
+        self.answer(ui, "delta")
+        sub = self.root / "rollout" / "sub"
+        self.assertFalse((sub / "alpha").exists())
+        self.assertTrue((sub / "delta").is_dir())
+        self.assertTrue((self.root / "rollout" / "README.md").is_file())
+        if "rollout" not in ui.subs_open:
+            self.select(ui, "project", "rollout")
+            ui.keys_projects("right", ui.project_rows())
+        self.assertIn("rollout/delta", self.ids(ui))
+        self.assertNotIn("rollout/alpha", self.ids(ui))
+        self.assertIn("rollout", self.ids(ui))
+
+    def test_rename_rewrites_a_heading_that_was_the_old_slug(self):
+        ui = self.fixture()
+        self.open_rename(ui)
+        self.answer(ui, "delta")
+        text = (self.root / "rollout" / "sub" / "delta" / "README.md").read_text()
+        self.assertIn("\n# delta\n", text)
+        self.assertNotIn("# alpha", text)
+
+    def test_rename_refuses_a_bad_slug_or_a_siblings_name(self):
+        for bad in ("Bad Name", "beta"):
+            self.fresh()
+            ui = self.fixture()
+            before = sorted(p.name for p in (self.root / "rollout" / "sub").iterdir())
+            self.open_rename(ui)
+            self.answer(ui, bad)
+            self.assertTrue(ui.msg.startswith("Couldn't rename it"), (bad, ui.msg))
+            self.assertEqual(sorted(p.name for p in (self.root / "rollout" / "sub").iterdir()), before, bad)
+            self.assertIn("\n# alpha\n", (self.root / "rollout" / "sub" / "alpha" / "README.md").read_text(), bad)
+            self.assertIn("\n# beta\n", (self.root / "rollout" / "sub" / "beta" / "README.md").read_text(), bad)
+
+    def test_rename_refuses_while_a_linked_session_is_running(self):
+        self.project("rollout", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        self.sub("rollout", "alpha", sessions=[("Live", "cc3d0000-0000")])
+        ui = self.ui()
+        ui.sessions = [dict(session("Live", state="idle"), id="cc3d0000-0000")]
+        ui.load_projects()
+        self.open_rename(ui)
+        self.assertIsNone(ui.asking)
+        self.assertIn("Live is running in it", ui.msg)
+        self.assertTrue((self.root / "rollout" / "sub" / "alpha").is_dir())
+
+
 if __name__ == "__main__":
     unittest.main()
