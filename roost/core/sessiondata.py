@@ -6,7 +6,6 @@ from pathlib import Path
 from roost.core.config import (
     AGENT_KEYS,
     HOME,
-    RECENT_HOURS,
     STATE_ORDER,
     TESTED_CLAUDE,
     TITLE_KEYS,
@@ -521,17 +520,8 @@ def span(secs):
 def in_view(s, view, keep=()):
     """keep: Sessions that count as running while roost writes their Handoff or recap (it stopped
     them first), so they stay where the person started it."""
-    label = VIEWS[view]
     running = s["state"] not in ("closed",) or s.get("id") in keep
-    if label == "Running":
-        return running
-    if label == "Recently closed":
-        return not running and s["last"] >= time.time() - RECENT_HOURS * 3600
-    if label == "Closed":
-        return not running
-    if label == "Stale":
-        return stale(s)
-    return True
+    return running if VIEWS[view] == "Running" else not running
 
 
 def matches(s, query):

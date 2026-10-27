@@ -502,7 +502,7 @@ class TextualScreens(unittest.TestCase):
         """The first list line holding text (the panel at the bottom comes after the list)."""
         return next((l for l in lines[:-10] if text in l), None)
 
-    ALL_VIEW = ("right",) * 4  # from Running, the view roost opens on with a running Session, to All
+    CLOSED_VIEW = ("right",)  # from Running, the view roost opens on with a running Session, to Closed
 
     @staticmethod
     def sessions_field(lines):
@@ -536,25 +536,30 @@ class TextualScreens(unittest.TestCase):
             self.assertFalse(set("▸▾") & set(line), line)
 
     def test_show_its_sessions_lists_exactly_the_projects_sessions_until_esc(self):
-        """Spec 3 (with 4): Show its Sessions puts the Sessions tab on All with project:<id>, listing
-        the project's Sessions (running, closed, wrapped up, dismissed) and neither decoy; esc lists
-        every Session again. A plain search for the id matches name, summary, and folder only."""
+        """Spec 3 (with 4): Show its Sessions puts the Sessions tab on Running (one of its Sessions is
+        running) with project:<id>, listing the project's running Session; → lists its closed ones
+        (closed, wrapped up, dismissed) and neither decoy; esc lists every closed Session again. A plain
+        search for the id matches name, summary, and folder only."""
         p, linked, decoys = self.fleet()
         seen = {}
         ids = lambda app: sorted(s["id"] for s in app.ui.srows)
+        running = lambda ss: sorted(s["id"] for s in ss if s["state"] != "closed")
+        closed = lambda ss: sorted(s["id"] for s in ss if s["state"] == "closed")
         self.run_with("Sessions", [p], [
-            open_view("Sessions"), self.keys(*self.ALL_VIEW), self.on_session("Toner order"), self.pick("Dismiss"),
+            open_view("Sessions"), self.keys(*self.CLOSED_VIEW), self.on_session("Toner order"), self.pick("Dismiss"),
             open_view("Projects"), self.on_project(self.pid), self.pick("Show its Sessions"),
-            self.look(seen, "shown", lambda app: (app.ui.TABS[app.ui.tab].name, app.ui.view, app.ui.query, ids(app))),
+            self.look(seen, "shown", lambda app: (app.ui.TABS[app.ui.tab].name, roost.VIEWS[app.ui.view], app.ui.query, ids(app))),
+            self.keys("right"), self.look(seen, "closed", lambda app: (roost.VIEWS[app.ui.view], ids(app))),
             self.keys("escape"), self.look(seen, "cleared", lambda app: (app.ui.query, ids(app))),
             self.keys("slash", *self.pid, "enter"), self.look(seen, "plain", ids)])
-        self.assertEqual(seen["shown"], ("Sessions", ALL, f"project:{self.pid}", sorted(s["id"] for s in linked)))
-        self.assertEqual(seen["cleared"], ("", sorted(s["id"] for s in self.sessions)))
-        self.assertEqual(seen["plain"], sorted(s["id"] for s in decoys))
+        self.assertEqual(seen["shown"], ("Sessions", "Running", f"project:{self.pid}", running(linked)))
+        self.assertEqual(seen["closed"], ("Closed", closed(linked)))
+        self.assertEqual(seen["cleared"], ("", closed(self.sessions)))
+        self.assertEqual(seen["plain"], sorted(s["id"] for s in decoys))  # the decoys are closed
 
     def test_dismiss_marks_sorts_and_uncounts_a_session_and_undismiss_takes_it_back(self):
         """Spec 4: a dismissed Session's STATUS says dismissed, it lists after every other Session in
-        its view (All or Closed, whatever the sort), and its project stops counting it as unwrapped.
+        its view (Closed, whatever the sort), and its project stops counting it as unwrapped.
         Undismiss undoes all three, and its id leaves config.DISMISSED."""
         p, _, _ = self.fleet()
         seen = {}
@@ -564,19 +569,18 @@ class TextualScreens(unittest.TestCase):
         def project(app):  # the selected project's Sessions field, where "N unwrapped" goes
             return self.sessions_field(screen_text(app)) or ""
         self.run_with("Sessions", [p], [
-            open_view("Sessions"), self.keys(*self.ALL_VIEW), self.look(seen, "before", names),
+            open_view("Sessions"), self.keys(*self.CLOSED_VIEW), self.look(seen, "before", names),
             self.on_session("Toner order"), self.pick("Dismiss"),
-            self.look(seen, "all", names), self.look(seen, "status", status),
-            self.keys("left", "left"), self.look(seen, "closed view", names),
+            self.look(seen, "closed view", names), self.look(seen, "status", status),
             self.select(lambda ui: setattr(ui, "sort", ("NAME", True))), self.look(seen, "by name", names),  # Z to A: Toner order would lead Closed
-            self.select(lambda ui: setattr(ui, "sort", ("LAST ACTIVE", True))), self.keys("right", "right"),
+            self.select(lambda ui: setattr(ui, "sort", ("LAST ACTIVE", True))),
             open_view("Projects"), self.on_project(self.pid), self.look(seen, "project", project), open_view("Sessions"),
             self.on_session("Toner order"), self.pick("Undismiss"),
             self.look(seen, "after", names), self.look(seen, "status after", status),
             open_view("Projects"), self.on_project(self.pid), self.look(seen, "project after", project)],
             size=(120, 40))  # the status line takes a row: at 30 rows the Dismissed section's row is cut off
         self.assertLess(seen["before"].index("Toner order"), seen["before"].index("Old printer audit"))  # the fixture
-        for view in ("all", "closed view", "by name"):
+        for view in ("closed view", "by name"):
             self.assertEqual(seen[view][-1], "Toner order", (view, seen[view]))
         self.assertIn("dismissed", seen["status"])
         self.assertIn("1 unwrapped", seen["project after"])
@@ -589,18 +593,66 @@ class TextualScreens(unittest.TestCase):
         """Spec 4: dismissed persists: a second roost, reading the same config.DISMISSED, draws it dismissed."""
         p, _, _ = self.fleet()
         pristine = [dict(s) for s in self.sessions]  # the second roost gets Sessions the first never touched
-        self.run_with("Sessions", [p], [open_view("Sessions"), self.keys(*self.ALL_VIEW), self.on_session("Toner order"), self.pick("Dismiss")])
+        self.run_with("Sessions", [p], [open_view("Sessions"), self.keys(*self.CLOSED_VIEW), self.on_session("Toner order"), self.pick("Dismiss")])
         self.assertIn(self.sessions[2]["id"], self.persisted())
         self.sessions = pristine
-        app = self.run_with("Sessions", [p], [open_view("Sessions"), self.keys(*self.ALL_VIEW)])
+        app = self.run_with("Sessions", [p], [open_view("Sessions"), self.keys(*self.CLOSED_VIEW)])
         self.assertIn("dismissed", self.line_of(self.screen(app), "Toner order"))
         self.assertEqual(app.ui.srows[-1]["name"], "Toner order")
 
     def test_the_sessions_tab_still_lists_a_wrapped_up_session(self):
-        app, _ = self.with_wrapped("Sessions", ["wrapped"], [open_view("Sessions"), self.keys("right", "right", "right", "right")])  # the All view
+        app, _ = self.with_wrapped("Sessions", ["wrapped"], [open_view("Sessions"), self.keys(*self.CLOSED_VIEW)])  # it's closed
         self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
         line = next(l for l in self.screen(app)[:-10] if "Old printer audit" in l)
         self.assertIn("✓ wrapped up", line)
+
+    # The Sessions views: Running and Closed, a simple history.
+
+    def views_fixture(self):
+        """Two running Sessions (Printer fix, Laptop refresh) and three closed: Printer toner order, Old
+        printer audit, and Spare audit (big and untouched for days)."""
+        self.sessions = self.sessions + [self.closed("Printer toner order", 30), self.closed("Old printer audit", 60 * 24 * 10),
+                                         dict(self.closed("Spare audit", 60 * 24 * 9), tokens=900_000)]
+
+    @staticmethod
+    def view_row(app):
+        """The Sessions view row's text, right of the sidebar."""
+        return screen_text(app)[app.ui.view_row_y][roost.SIDEBAR_W:]
+
+    def test_the_view_row_shows_running_and_closed_with_their_counts_then_the_search(self):
+        self.views_fixture()
+        seen = {}
+        self.run_app([open_view("Sessions"), self.look(seen, "row", self.view_row),
+                      self.keys("slash", *"printer", "enter"), self.look(seen, "searched", self.view_row)])
+        self.assertRegex(seen["row"], r"^\s*Running \(2\)\s+Closed \(3\)\s*$")
+        self.assertRegex(seen["searched"], r"^\s*Running \(1\)\s+Closed \(2\)\s+/ printer\s*$")
+
+    def test_left_and_right_switch_between_running_and_closed_wrapping(self):
+        self.views_fixture()
+        seen = {}
+        view = lambda app: roost.VIEWS[app.ui.view]
+        self.run_app([open_view("Sessions"), self.look(seen, "start", view),
+                      self.keys("right"), self.look(seen, "right", view), self.keys("right"), self.look(seen, "right again", view),
+                      self.keys("left"), self.look(seen, "left", view), self.keys("left"), self.look(seen, "left again", view)])
+        self.assertEqual([seen[k] for k in ("start", "right", "right again", "left", "left again")],
+                         ["Running", "Closed", "Running", "Closed", "Running"])
+
+    def test_a_click_on_a_view_label_picks_that_view(self):
+        self.views_fixture()
+        seen = {}
+        view = lambda app: roost.VIEWS[app.ui.view]
+
+        def click(label):
+            async def step(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                y = pilot.app.ui.view_row_y
+                x = screen_text(pilot.app)[y].index(f" {label} (") + 3
+                await pilot.click(offset=(x, y))
+            return step
+        self.run_app([open_view("Sessions"), click("Closed"), self.look(seen, "closed", view),
+                      click("Running"), self.look(seen, "running", view)])
+        self.assertEqual((seen["closed"], seen["running"]), ("Closed", "Running"))
 
     # The key bar: every key it names does what it says, on each tab that draws it.
 
@@ -831,7 +883,7 @@ class TextualScreens(unittest.TestCase):
         self.assertNotIn("Badge printer setup", seen["names"])
 
     def slow_action(self, patch, slow, opens, act, during, after):
-        """On the Sessions tab's All view: opens(pilot) gets the action ready, act(app) does it with
+        """On the Sessions tab (Running, then whatever opens moves it to): opens(pilot) gets the action ready, act(app) does it with
         patch (a sessiondata name) replaced by slow. Returns how long act took, what the screen said
         then, whether during was what it said, and what it said once a later tick said after."""
         import unittest.mock
@@ -848,7 +900,7 @@ class TextualScreens(unittest.TestCase):
             seen["ended"] = await self.until(pilot, lambda: shown(app.ui).startswith(after))
             seen["after"] = shown(app.ui)
         with unittest.mock.patch.multiple(roost, **{patch: slow}):
-            self.run_app([open_view("Sessions"), self.keys(*self.ALL_VIEW)] + opens + [step])
+            self.run_app([open_view("Sessions")] + opens + [step])
         self.assertLess(seen["took"], self.QUICK, f"the action waited for {patch}")
         self.assertEqual(seen["during"], during)
         self.assertTrue(seen["ended"], f"a later tick said {seen['after']!r}, not {after!r}…")
@@ -868,7 +920,7 @@ class TextualScreens(unittest.TestCase):
 
     def pin_closed(self, slow):
         self.sessions = self.sessions + [self.closed("Toner order", 30)]
-        return self.slow_action("revive_pinned", slow, self.picked("Toner order", "Restart in the background, pinned"),
+        return self.slow_action("revive_pinned", slow, [self.keys(*self.CLOSED_VIEW)] + self.picked("Toner order", "Restart in the background, pinned"),
                                 lambda app: app.press("enter"), "Restarting Toner order in the background…",
                                 "Pinned Toner order: " if not slow.error else "Couldn't restart it: ")
 
@@ -902,7 +954,7 @@ class TextualScreens(unittest.TestCase):
 
     def test_stop_after_its_confirmation_doesnt_hold_up_the_keys(self):
         seen = self.stop_one(self.Slow())
-        self.assertEqual(seen["after"], "Stopped Printer fix. It's under Recently closed")
+        self.assertEqual(seen["after"], "Stopped Printer fix. It's under Closed")
 
     def test_a_stop_that_fails_says_why(self):
         seen = self.stop_one(self.Slow(error=RuntimeError("no such job")))
@@ -1227,7 +1279,7 @@ class Sidebar(unittest.TestCase):
         seen = {}
 
         async def click_count(pilot):
-            pilot.app.ui.view = ALL  # somewhere else, so the click has to put it on Running
+            pilot.app.ui.view = CLOSED  # somewhere else, so the click has to put it on Running
             pilot.app.redraw()
             await pilot.pause()
             lines = screen_text(pilot.app)

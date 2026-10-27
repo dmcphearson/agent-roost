@@ -232,9 +232,10 @@ class Projects(unittest.TestCase):
         ui.pquery = "PRINTER"
         self.assertEqual(self.shown(ui), [("head", "Inactive"), ("project", "printers")])
 
-    def test_show_its_sessions_opens_the_sessions_tab_on_all_searching_for_the_project(self):
-        """Spec 3: Show its Sessions switches to the Sessions tab, sets the view to All, and prefills its
-        search with project:<folder id>. The Projects tab gets no rows, and there's no Hide its Sessions."""
+    def test_show_its_sessions_opens_the_sessions_tab_on_running_searching_for_the_project(self):
+        """Spec 3: Show its Sessions switches to the Sessions tab, on Running when one of its Sessions is
+        running, and prefills its search with project:<folder id>. The Projects tab gets no rows, and
+        there's no Hide its Sessions."""
         self.project("b", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
         ui = self.ui()
         ui.tab, ui.view, ui.query, ui.sel, ui.top = [t.name for t in ui.TABS].index("Projects"), RUNNING, "", 0, 0
@@ -243,9 +244,24 @@ class Projects(unittest.TestCase):
         ui.load_projects()
         ui.psel = 1
         act(ui, ui.keys_projects, ui.project_rows(), "Show its Sessions")
-        self.assertEqual((ui.TABS[ui.tab].name, ui.view, ui.query), ("Sessions", ALL, "project:b"))
+        self.assertEqual((ui.TABS[ui.tab].name, roost.VIEWS[ui.view], ui.query), ("Sessions", "Running", "project:b"))
         self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("new", "+ New project")])
         self.assertFalse([l for l in labels(ui, ui.keys_projects, ui.project_rows()) if l.startswith("Hide its Sessions")])
+
+    def test_show_its_sessions_opens_on_closed_when_none_of_its_sessions_is_running(self):
+        """Spec 3: with every Session it lists closed, Show its Sessions opens Sessions on Closed, searching
+        project:<folder id>, even while a Session it doesn't list is running."""
+        self.project("b", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        ui = self.ui()
+        ui.folded = set()
+        ui.tab, ui.view, ui.query, ui.sel, ui.top = [t.name for t in ui.TABS].index("Projects"), RUNNING, "", 0, 0
+        ui.sessions = [dict(session("Mine", state="closed", kind=None, mins=30), id="aa1b9a71-0000"),
+                       dict(session("Old one", state="closed", kind=None, mins=60), id="bb2c0000-0000"),
+                       session("Loose", state="waiting")]
+        ui.load_projects()
+        ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "project" and r.item["id"] == "b")
+        act(ui, ui.keys_projects, ui.project_rows(), "Show its Sessions")
+        self.assertEqual((ui.TABS[ui.tab].name, roost.VIEWS[ui.view], ui.query), ("Sessions", "Closed", "project:b"))
 
     def test_show_its_sessions_comes_after_start_a_session_or_first(self):
         """Spec 3: on an open project, Show its Sessions is right after Start a Session; on a closed

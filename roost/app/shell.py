@@ -354,7 +354,7 @@ class Shell:
             def stop():
                 try:
                     sessiondata.stop_session(s["attach"])
-                    return f"Stopped {s['name']}. It's under Recently closed"
+                    return f"Stopped {s['name']}. It's under Closed"
                 except Exception as e:
                     config.log(f"stop {s['id'][:8]}: {e}")
                     return f"Couldn't stop it: {e}"

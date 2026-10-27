@@ -47,7 +47,7 @@ class Everything:
 
 roost = Everything()
 
-RUNNING, ALL = roost.VIEWS.index("Running"), roost.VIEWS.index("All")
+RUNNING, CLOSED = roost.VIEWS.index("Running"), roost.VIEWS.index("Closed")
 _SCRATCH = tempfile.TemporaryDirectory()
 roost.NOTES, roost.RECAPS = Path(_SCRATCH.name) / "notes", Path(_SCRATCH.name) / "sessions"  # never the person's own
 # nor their settings, pins, or installed files: a test that misses a stand-in writes here instead
