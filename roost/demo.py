@@ -197,7 +197,10 @@ def demo_projects(sessions):
                     "sessions": sids, "last": max(times) if times else None, "closed": status == "closed",
                     "handed": now - hours * 3600 if hours is not None else None,
                     "readme": True, "adopted": pid not in DEMO_NOT_ADOPTED,
-                    "covered": {ids[i]: last_of.get(ids[i], 0) + 60 for i in linked if i in DEMO_WRAPPED}})
+                    "covered": {ids[i]: last_of.get(ids[i], 0) + 60 for i in linked if i in DEMO_WRAPPED},
+                    "handoffs": [(now - hours * 3600, next((s["name"] for s in sessions if s["id"] in sids), "Handoff"))]
+                    if hours is not None else [],
+                    "notes": [], "repo": "", "subs": []})
     return out
 
 
