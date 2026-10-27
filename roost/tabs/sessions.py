@@ -507,7 +507,7 @@ class SessionsTab:
     def keys_sessions(self, k, rows):
         if isinstance(k, tuple):
             _, mx, my, bstate = k
-            if my == 2 and bstate & CLICK:
+            if my == getattr(self, "view_row_y", 2) and bstate & CLICK:
                 for x0, x1, i in self.tabs:
                     if x0 <= mx < x1:
                         self.view, self.sel, self.top = i, 0, 0
@@ -548,10 +548,11 @@ if Region:
         def lines(self):
             ui = self.ui
             row, x, ui.tabs = self.line(), TAB_X - 1, []  # each view's label starts with a space, as the tab names do
+            ui.view_row_y, x0 = self.region.y, self.region.x
             for i, label in enumerate(VIEWS):
                 count = sum(in_view(s, i, ui.summarizing()) and matches(s, ui.query) for s in ui.sessions)
                 tab = f" {label} ({count}) "  # a count in ( ), as the Projects sections show theirs
-                ui.tabs.append((x, x + len(tab), i))
+                ui.tabs.append((x0 + x, x0 + x + len(tab), i))  # in the screen's columns, as a click gives them
                 row.put(x, tab, curses.A_REVERSE | curses.A_BOLD if i == ui.view else ui.DIM)
                 x += len(tab) + 1
             if ui.searching or ui.query:
@@ -571,7 +572,7 @@ if Region:
                     continue
                 on = ui.sort[0] == title
                 head.put(cx, title + (" ▾" if ui.sort[1] else " ▴") if on else title, curses.A_BOLD | (ui.ACCENT if on else ui.DIM))
-                ui.col_x.append((cx, cx + cw - 1, title))
+                ui.col_x.append((self.region.x + cx, self.region.x + cx + cw - 1, title))
                 cx += cw
             out = [head, self.line()]
             lines = ui.session_lines(rows, page)

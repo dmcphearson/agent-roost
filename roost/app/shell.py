@@ -8,6 +8,7 @@ from roost.core.projectdata import clean_tags, label_of, plural
 from roost.core.plugin import plugin_version
 from roost.core.formatting import clip, short, slug
 from roost.core.summaries import run_cap
+from roost.core.config import VIEWS
 from roost.core import config
 from roost.core import sessiondata
 from roost.core import install
@@ -48,7 +49,9 @@ def printable(k):
     return isinstance(k, str) and len(k) == 1 and k.isprintable()
 CLICK = curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON1_DOUBLE_CLICKED
 RIGHT_CLICK = curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED
-BAR_KEYS = "↑↓ move   ←→ views   enter actions   / search   ctrl+n new   tab switch tab   ? help   ctrl+q quit"
+BAR_KEYS = "↑↓ move   ←→ views   enter actions   / search   ctrl+n new   tab switch pane   ? help   ctrl+q quit"
+SIDEBAR_W = 34  # the sidebar's columns, on every view; the right pane takes the rest
+ENTRIES = ("Sessions", "Notes", "Stats")  # the sidebar's entries under the projects, each a view in the right pane
 PIN = "\uf435"  # a pinned Session's mark: Nerd Font's pin (nf-oct-pin), which Ghostty ships
 TAB_X = 12  # where the first tab's name starts: the views and searches under the tabs line up with it
 SEARCH_KEYS = "type to search · enter keep it · esc clear"
@@ -56,9 +59,15 @@ NOTE_READ_KEYS = "↑↓ scroll   page up/down a screen   ← or esc back to the
 
 
 def start_tab(names):
-    """Index of the tab roost opens on: the last one used, if it still exists."""
+    """Index of the view roost opens on: the last one used, if it still exists."""
     last = config.read_config().get("tab")
     return names.index(last) if last in names else 0
+
+
+def start_entry():
+    """The sidebar entry roost opens on: the last one shown, or None for the projects."""
+    last = config.read_config().get("tab")
+    return last if last in ENTRIES else None
 FAILED = re.compile(r"^(Couldn't|Can't|No editor found|Its folder no longer exists|Summary of .+ failed|Handoffs for .+ stopped)")
 REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|\d summaries are running|Its summary is already running|That's .+ work:|"
                      r"It's wrapped up:|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
@@ -68,6 +77,7 @@ class Shell:
     """The screens' shell: what every tab shares. Each tab's module adds its own draw, keys, and actions (see roost.app.ui)."""
     reading, fresh, told = False, None, None  # a refresh's reads in a thread (see read_later)
     keys_seen = 0  # keys so far: a read that a key came during may be out of date
+    entry, focus, entry_y = None, "side", {}  # the sidebar entry shown (None: a project), and where keys go
 
     def setup(self, sessions, query):
         """Everything the screens keep, read once at start: no terminal is touched."""
@@ -83,9 +93,10 @@ class Shell:
         self.asking = None  # the one-line prompt up on the bottom row (see ask), on any tab
         self.helping = False
         self.alerting = None  # a failure, or why an action didn't run, shown as a box until a key
-        names = [tab.name for tab in self.TABS]
-        self.tab = names.index("Sessions") if query else start_tab(names)  # a search is for Sessions
-        self.psel, self.ptop, self.prow_y = 0, 0, {}
+        self.entry = "Sessions" if query else start_entry()  # a search is for Sessions
+        self.tab = [tab.name for tab in self.TABS].index(self.entry or "Projects")  # the view in the right pane
+        self.focus = "side"  # where keys go: the sidebar, or the view in the right pane
+        self.psel, self.ptop, self.prow_y, self.entry_y = 0, 0, {}, {}
         self.pquery = ""  # the Projects tab's search
         self.folded = {"Inactive", "Closed"}  # closed sections
         self.nsel, self.ntop, self.nrow_y, self.nquery = 0, 0, {}, ""  # Notes: selection, scroll, rows, search
@@ -98,7 +109,7 @@ class Shell:
         self.offer = None  # (model, cap, estimate) while a summary run waits on its confirmation
         self.quit_anyway = False  # q was pressed once while a summary was running
         self.load_projects()
-        self.tab_x = []  # (x0, x1, index) of each name in the tab bar, filled in by draw()
+        self.psel = next((i for i, r in enumerate(self.project_rows()) if r.kind == "project"), 0)
         self.warning = plugin.plugin_problem() or sessiondata.check_compat()
         self.plugin_ok = plugin.plugin_registered() or plugin_version() is not None  # can a Session get /roost:pickup
         self.msg = plugin.taken_plugin_change()
@@ -241,7 +252,11 @@ class Shell:
         if self.msg and (FAILED.search(self.msg) or REFUSED.search(self.msg)):
             self.alerting, self.msg = self.msg, ""
         self.corner, self.bar = None, None
-        return self.TABS[self.tab].draw(self)
+        drawn = self.draw_projects()  # the sidebar, on every view
+        if self.tab:
+            self.subhead = None
+            drawn = self.TABS[self.tab].draw(self)
+        return drawn
 
     def status_line(self):
         """The status bar's two sides: the left kept for Sessions waiting on you, the right how many run."""
@@ -419,8 +434,8 @@ class Shell:
         ("Views", "←→ switch views on Sessions (or click one) · open and close on Projects · read on Notes"),
         ("Actions", "enter or right-click opens the selected row's actions · double-click runs the first one"),
         ("Search", "/ then type · enter keeps it · esc clears it"),
-        ("New", "ctrl+n from any tab: a new Project (P), Session (S), or Note (N)"),
-        ("Tabs", "tab next · shift+tab previous · or click a tab's name"),
+        ("New", "ctrl+n from anywhere: a new Project (P), Session (S), or Note (N)"),
+        ("Panes", "tab moves between the sidebar and the right pane, where its entry (Sessions, Notes, Stats) shows · esc back"),
         ("Close", "esc closes a list or prompt · ? these keys · ctrl+q quit"),
     ]
 
@@ -466,7 +481,8 @@ class Shell:
         tab = self.TABS[self.tab]
         if not tab.typing(self):  # a confirmation or the category picker takes every key
             if k in ("tab", "shift+tab"):
-                self.switch_tab(self.tab + (1 if k == "tab" else -1))
+                if self.entry:  # a project's detail has nothing to move to yet
+                    self.focus = "side" if self.focus == "pane" else "pane"
                 return None
             if k == "?":
                 self.helping = True
@@ -488,16 +504,22 @@ class Shell:
             if k == "escape" and getattr(self, "nreading", False):  # esc leaves a note's text
                 self.nreading = False
                 return None
-            if k == "escape":  # esc clears the search; it never quits
+            if k == "escape":  # esc clears the search, then leaves the right pane; it never quits
                 if getattr(self, self.query_attr()):
                     setattr(self, self.query_attr(), "")
+                elif self.focus == "pane":
+                    self.focus = "side"
                 return None
-            if isinstance(k, tuple) and k[2] == 0:
-                if k[3] & CLICK:
-                    for x0, x1, i in self.tab_x:
-                        if x0 <= k[1] < x1:
-                            self.switch_tab(i)
+            if isinstance(k, tuple) and k[2] == 0:  # the top bar
                 return None
+            if isinstance(k, tuple):  # a click on the sidebar works it; one in the pane works the view there
+                if k[1] < SIDEBAR_W:
+                    self.focus = "side"
+                    return self.keys_sidebar(k)
+                self.focus = "pane" if self.entry else "side"
+                return tab.keys(self, k, drawn)
+            if self.focus == "side":
+                return self.keys_sidebar(k)
         return tab.keys(self, k, drawn)
 
     def query_attr(self):
@@ -717,15 +739,70 @@ class Shell:
         return None
 
     def switch_tab(self, i):
-        """Show tab i (wrapping around) and remember it for the next start."""
-        i %= len(self.TABS)
-        if i == self.tab:
+        """Show view i in the right pane: Projects selects a project in the sidebar, any other its entry,
+        with the keys going to its view."""
+        name = self.TABS[i % len(self.TABS)].name
+        if name == "Projects":
+            self.show_entry(None)
+            self.focus = "side"
+        else:
+            self.open_entry(name)
+
+    def show_entry(self, name):
+        """Select the sidebar entry name (None: the projects) and show its view, remembered for the next start."""
+        if name == self.entry and self.TABS[self.tab].name == (name or "Projects"):
             return
-        self.tab = i
+        self.entry = name
+        self.tab = [tab.name for tab in self.TABS].index(name or "Projects")
         try:
-            config.save_config(tab=self.TABS[i].name)
+            config.save_config(tab=name or "Projects")
         except OSError:
             pass
+
+    def open_entry(self, name):
+        """Select the entry name and move the keys into its view."""
+        self.show_entry(name)
+        self.focus = "pane"
+
+    def open_running(self):
+        """The status bar's running count: every running Session."""
+        self.view, self.sel, self.top = VIEWS.index("Running"), 0, 0
+        self.open_entry("Sessions")
+
+    def keys_sidebar(self, k):
+        """The sidebar's keys: the projects' (see keys_projects), then the entries under them."""
+        rows = getattr(self, "prows", None) or self.project_rows()
+        if isinstance(k, tuple):
+            _, mx, my, bstate = k
+            if my in self.entry_y:
+                if bstate & CLICK:
+                    self.show_entry(self.entry_y[my])
+                return None
+            if my in self.prow_y:
+                self.show_entry(None)
+            return self.keys_projects(k, rows)
+        if self.entry:
+            i = ENTRIES.index(self.entry)
+            if k == "up":
+                if i:
+                    self.show_entry(ENTRIES[i - 1])
+                else:
+                    self.show_entry(None)
+                    self.psel = len(rows) - 1
+            elif k == "down" and i + 1 < len(ENTRIES):
+                self.show_entry(ENTRIES[i + 1])
+            elif k == "home":
+                self.show_entry(None)
+                self.psel = 0
+            elif k == "end":
+                self.show_entry(ENTRIES[-1])
+            elif k in ("enter", "right"):
+                self.focus = "pane"
+            return None
+        if k in ("down", "end") and (k == "end" or self.psel >= len(rows) - 1):
+            self.show_entry(ENTRIES[-1] if k == "end" else ENTRIES[0])
+            return None
+        return self.keys_projects(k, rows)
 
     def copy_id(self, s):
         self.copy_text(s["id"], f"Copied {s['id'][:8]}… to the clipboard")

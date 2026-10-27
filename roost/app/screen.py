@@ -22,6 +22,8 @@ if Widget:
     from textual.containers import Horizontal, Vertical
     from textual.widgets import Input, Label
     from roost.app.widgets import AlertBox, ConfirmBox, HelpBox, KeyBar, Menu, Region, StatusBar, TooSmall, TopBar
+    from roost.app.shell import SIDEBAR_W
+    from roost.tabs.projects import ProjectList
 else:  # the CLI commands need none of it; main() says how to get it
     App = None
 
@@ -182,6 +184,9 @@ if Widget:
         CSS = """
         Screen { background: ansi_default; layers: base over top; }
         TopBar { height: 1; }
+        #body { height: 1fr; }
+        #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 3 0 0 0; border-right: vkey #2c313a; }
+        #pane { width: 1fr; height: 100%; }
         KeyBar { height: 1; }
         Prompt { layer: top; position: absolute; display: none; background: #22262d; color: #d6dae0; height: auto; }
         Prompt.box { width: 64; border: edge #6bd968; border-title-color: #6bd968;
@@ -194,7 +199,7 @@ if Widget:
         Prompt Input:focus { border: none; }
         Prompt Label#hint { color: #8b929c; width: auto; }
         Prompt.line Label#hint { padding: 0 0 0 3; }
-        """
+        """.replace("SIDEBAR_W", str(SIDEBAR_W))
         ENABLE_COMMAND_PALETTE = False
 
         def __init__(self, sessions, query):
@@ -208,8 +213,11 @@ if Widget:
         def compose(self):
             yield Keys()
             yield TopBar()
-            for tab in self.ui.TABS:
-                yield tab.widget()
+            with Horizontal(id="body"):  # the sidebar on every view, and the selected view beside it
+                yield ProjectList()
+                with Vertical(id="pane"):
+                    for tab in self.ui.TABS:
+                        yield tab.widget()
             yield StatusBar()
             yield KeyBar()
             yield ConfirmBox()
@@ -251,6 +259,7 @@ if Widget:
                     for part in view.query(Region):
                         part.refresh()
             self.query_one(TopBar).refresh()
+            self.query_one(ProjectList).refresh()
             self.query_one(StatusBar).refresh()
             bar = self.query_one(KeyBar)
             bar.styles.height = max(len(ui.bar[0]) if ui.bar else 1, 1)

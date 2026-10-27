@@ -396,7 +396,7 @@ class Commands(unittest.TestCase):
 
 
 class Tabs(unittest.TestCase):
-    """The tab bar, using a UI built without a screen and two stand-in tabs."""
+    """The keys every view shares, using a UI built without a screen and two stand-in views, the pane focused."""
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = roost.CONFIG
@@ -410,6 +410,7 @@ class Tabs(unittest.TestCase):
         self.ui.choosing, self.ui.confirm, self.ui.summaries, self.ui.quit_anyway = None, None, {}, False
         self.ui.load_projects = lambda: None
         self.ui.asking, self.ui.searching, self.ui.query, self.ui.pquery = None, False, "", ""
+        self.ui.focus = "pane"  # the keys go to the view shown, ui.tab
 
     def tearDown(self):
         roost.CONFIG = self.saved
@@ -418,39 +419,20 @@ class Tabs(unittest.TestCase):
     def test_projects_is_the_home_tab(self):
         self.assertEqual([t.name for t in roost.UI.TABS], ["Projects", "Sessions", "Notes", "Stats"])
 
-    def test_switching_wraps_and_is_remembered(self):
-        self.ui.dispatch("tab", None)
-        self.assertEqual((self.ui.tab, roost.read_config()["tab"]), (1, "Projects"))
-        self.ui.dispatch("tab", None)
-        self.assertEqual(self.ui.tab, 0)
-        self.assertEqual(roost.start_tab(["Sessions", "Projects"]), 0)
-        self.ui.dispatch("shift+tab", None)
-        self.assertEqual(roost.start_tab(["Sessions", "Projects"]), 1)
-
-    def test_tab_key_switches_tabs(self):
-        self.ui.dispatch("tab", None)
-        self.assertEqual(self.ui.tab, 1)
-        self.ui.dispatch("shift+tab", None)
-        self.assertEqual((self.ui.tab, self.got), (0, []))
-
     def test_start_tab_falls_back_when_the_tab_is_gone(self):
         roost.save_config(tab="Tasks")
         self.assertEqual(roost.start_tab(["Sessions"]), 0)
 
-    def test_clicking_a_tab_name_switches(self):
-        self.ui.dispatch(("mouse", 25, 0, roost.curses.BUTTON1_CLICKED), None)
-        self.assertEqual(self.ui.tab, 1)
-        self.assertEqual(self.got, [])
-
     def test_other_keys_go_to_the_current_tab_only(self):
+        x = roost.SIDEBAR_W + 5  # in the pane
         self.ui.dispatch("j", None)
-        self.ui.switch_tab(1)
+        self.ui.tab = 1
         self.ui.dispatch("j", None)
-        self.ui.dispatch(("mouse", 5, 6, roost.curses.BUTTON1_CLICKED), None)
-        self.assertEqual(self.got, [("Sessions", "j"), ("Projects", "j"), ("Projects", ("mouse", 5, 6, roost.curses.BUTTON1_CLICKED))])
+        self.ui.dispatch(("mouse", x, 6, roost.curses.BUTTON1_CLICKED), None)
+        self.assertEqual(self.got, [("Sessions", "j"), ("Projects", "j"), ("Projects", ("mouse", x, 6, roost.curses.BUTTON1_CLICKED))])
 
     def test_a_confirm_is_answered_on_whatever_tab_is_open(self):
-        self.ui.switch_tab(1)
+        self.ui.tab = 1
         self.ui.confirm = ("note", {"name": "x", "path": "/nowhere"})  # as a background run puts one up
         self.ui.dispatch("n", None)
         self.assertEqual((self.ui.confirm, self.ui.msg, self.got), (None, "Cancelled", []))
@@ -468,7 +450,7 @@ class Tabs(unittest.TestCase):
         self.assertIsNot(self.ui.dispatch("q", None), roost.QUIT)  # a plain q is just a letter, for the tab
         self.assertEqual(self.got.pop(), ("Sessions", "q"))
         self.assertIs(self.ui.dispatch("ctrl+q", None), roost.QUIT)
-        self.ui.switch_tab(1)
+        self.ui.tab = 1
         self.ui.dispatch("?", None)
         self.assertTrue(self.ui.helping)
         names = [a for a, _ in self.ui.help_rows()]
@@ -494,7 +476,7 @@ class Tabs(unittest.TestCase):
             self.assertFalse([b for _, b in tab.help if re.search(r"(^|· )[a-zA-Z] ", b)], tab.name)
 
     def test_slash_searches_the_current_tab_and_esc_clears_it_without_quitting(self):
-        self.ui.switch_tab(1)
+        self.ui.tab = 1
         self.ui.dispatch("/", None)
         for k in names("ab\n"):
             self.ui.dispatch(k, None)
