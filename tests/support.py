@@ -84,12 +84,14 @@ def bold_text(app):
     return out
 
 
-ENTRIES = ("Sessions", "Notes", "Stats")  # the sidebar's entries, under the projects, top to bottom
+# the sidebar's entries, under the projects, top to bottom; Unfiled (the Sessions no project lists, and the
+# notes in ~/.roost/notes) comes first
+ENTRIES = ("Unfiled", "Sessions", "Notes", "Stats")
 
 
 def open_view(name):
-    """A pilot step that shows the view name in the right pane, as the sidebar does. An entry (Sessions,
-    Notes, Stats): ui.open_entry(name) selects it and focuses the pane, so the keys that follow go to
+    """A pilot step that shows the view name in the right pane, as the sidebar does. An entry (Unfiled,
+    Sessions, Notes, Stats): ui.open_entry(name) selects it and focuses the pane, so the keys that follow go to
     that view. Projects: the focus goes back to the sidebar and home puts its selection on the top row."""
     async def step(pilot):
         ui = pilot.app.ui
@@ -109,6 +111,21 @@ def session(name, state="idle", kind="background", pinned=False, attached=False,
     return {"id": sid, "name": name, "state": state, "kind": kind, "pinned": pinned, "attached": attached,
             "attach": sid[:8] if kind == "background" else None, "last": time.time() - mins * 60,
             "tokens": tokens, "cwd": cwd, "summary": "", "files": []}
+
+
+def pane_raised(app):
+    """The screen rows where the right pane (right of the sidebar) draws the selected style: a raised band."""
+    from rich.cells import cell_len
+    raised = importlib.import_module("roost.app.widgets").RAISED.lower()
+    out = set()
+    for y, strip in enumerate(app.screen._compositor.render_strips()):
+        x = 0
+        for seg in strip:
+            bg = seg.style and seg.style.bgcolor
+            if x >= roost.SIDEBAR_W and bg and bg.triplet and bg.triplet.hex.lower() == raised and seg.text.strip():
+                out.add(y)
+            x += cell_len(seg.text)
+    return out
 
 
 DIV = "|"  # where labels() puts a divider between an action menu's groups

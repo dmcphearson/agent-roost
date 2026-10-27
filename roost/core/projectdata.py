@@ -64,7 +64,7 @@ def read_project(folder, sessions=()):
     handed = [t for t in map(handoff_time, sorted((folder / "handoffs").glob("*.md"))) if t]
     times = handed + [s["last"] for s in sessions if set(s.get("ids") or [s["id"]]) & set(linked)]
     covered = {}  # Session id -> where its newest Handoff stopped (its to:)
-    handoffs = []  # (when, title), newest first: a roll-up by its sub-project, else by its Session's name
+    handoffs = []  # (when, title, path), newest first: a roll-up by its sub-project, else by its Session's name
     for h in (folder / "handoffs").glob("*.md"):
         try:
             hm = frontmatter(h.read_text(errors="replace"))
@@ -75,7 +75,7 @@ def read_project(folder, sessions=()):
             covered[hm["session"]] = max(to, covered.get(hm["session"], 0))
         if handoff_time(h):
             named = lambda k: hm[k].strip() if isinstance(hm.get(k), str) else ""
-            handoffs.append((handoff_time(h), f"Roll-up of {named('rollup')}" if named("rollup") else named("name") or h.stem))
+            handoffs.append((handoff_time(h), f"Roll-up of {named('rollup')}" if named("rollup") else named("name") or h.stem, str(h)))
     notes = []
     for n in (folder / "notes").glob("*.md"):
         try:

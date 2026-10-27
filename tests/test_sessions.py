@@ -463,7 +463,8 @@ class StartingSessions(unittest.TestCase):
 
     def open_here(self, ui):
         """Enter on the Sessions tab's only Session, then enter on Open here, through dispatch."""
-        ui.tab, ui.view, ui.top, ui.quit_anyway = 1, 0, 0, False
+        # Unfiled is now view 1; find Sessions by name
+        ui.tab, ui.view, ui.top, ui.quit_anyway = [t.name for t in ui.TABS].index("Sessions"), 0, 0, False
         ui.focus = "pane"  # the Sessions view focused, so enter goes to it
         ui.dispatch("enter", ui.sessions)
         opts = ui.choosing["options"]
