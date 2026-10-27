@@ -417,7 +417,8 @@ class Tabs(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_projects_is_the_home_tab(self):
-        self.assertEqual([t.name for t in roost.UI.TABS], ["Projects", "Sessions", "Notes", "Stats"])
+        # Unfiled's view comes right after Projects since step 3b-1
+        self.assertEqual([t.name for t in roost.UI.TABS], ["Projects", "Unfiled", "Sessions", "Notes", "Stats"])
 
     def test_start_tab_falls_back_when_the_tab_is_gone(self):
         roost.save_config(tab="Tasks")

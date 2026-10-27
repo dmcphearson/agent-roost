@@ -5,7 +5,7 @@ from pathlib import Path
 
 from roost.core.statsdata import log_spend
 from roost.core.projectdata import label_of, plural, rename_project, session_name
-from roost.core.notedata import read_notes
+from roost.core.notedata import read_note, read_notes
 from roost.core.summaries import summary_settings
 from roost.core.adopt import (
     ADOPT_PROMPT,
@@ -375,16 +375,70 @@ class ProjectsTab:
                 lines.append(f"{self.markers(Row(r.sec, 'sub', s, 0)):3} {s.get('title') or s['slug']}  "
                              f"{s.get('type') or ''}  {s.get('status') or ''}  {state}".rstrip())
             out.append(("Sub-projects", lines))
-        linked, since = self.linked(p), time.time() - self.RECENT_SESSION_DAYS * 86400
-        recent = ([s for s in linked if s["state"] != "closed"]
-                  + [s for s in linked if s["state"] == "closed" and s["last"] >= since])[:self.DETAIL_ROWS]
+        recent = self.recent_sessions(p)
         out.append(("Sessions", [f"{s['name']}  {short_when(s['last'])}" for s in recent]
                     or [f"none in the last {self.RECENT_SESSION_DAYS} days"]))
-        out.append(("Handoffs", [f"{short_when(t)}  {title}" for t, title in (p.get("handoffs") or [])[:self.DETAIL_ROWS]]
+        out.append(("Handoffs", [f"{short_when(t)}  {title}" for t, title, _ in (p.get("handoffs") or [])[:self.DETAIL_ROWS]]
                     or ["No Handoffs yet"]))
         out.append(("Notes", [title for _, title, _ in (p.get("notes") or [])[:self.DETAIL_ROWS]] or ["No notes"]))
         out.append(("Stats", [self.month_line(p)]))
         return out
+
+    def recent_sessions(self, p):
+        """The detail pane's Sessions: running ones, then ones closed in the last RECENT_SESSION_DAYS days."""
+        linked, since = self.linked(p), time.time() - self.RECENT_SESSION_DAYS * 86400
+        return ([s for s in linked if s["state"] != "closed"]
+                + [s for s in linked if s["state"] == "closed" and s["last"] >= since])[:self.DETAIL_ROWS]
+
+    def detail_items(self, r):
+        """What can be selected in the detail pane, in the order it's drawn: (kind, item) for each open
+        sub-project, Session, Handoff, and note its sections list."""
+        if r.kind not in ("project", "sub"):
+            return []
+        p = r.item
+        subs = [s for s in p.get("subs") or [] if not s["closed"]] if r.kind == "project" else []
+        return ([("sub", s) for s in subs] + [("session", s) for s in self.recent_sessions(p)]
+                + [("handoff", h) for h in (p.get("handoffs") or [])[:self.DETAIL_ROWS]]
+                + [("note", n) for n in (p.get("notes") or [])[:self.DETAIL_ROWS]])
+
+    def detail_actions(self, r, kind, x):
+        """An item of the detail pane: its name, and its actions."""
+        if kind == "sub":
+            return label_of(x), self.sub_actions(x)
+        if kind == "session":
+            return x["name"], self.session_actions(x)
+        if kind == "note":
+            note = read_note(Path(x[2]), r.item["id"])
+            return note["name"], self.note_actions(note)
+        return x[1], self.handoff_actions(x[2])
+
+    def handoff_actions(self, path):
+        return [("Open it", lambda: self.edit(path)), ("Show it in Finder", lambda: self.show_in_finder(path, reveal=True))]
+
+    def keys_detail(self, k, r):
+        """The detail pane's keys, with the keys in it: ↑↓ through its items, enter for one's actions."""
+        items = self.detail_items(r) if r else []
+        if isinstance(k, tuple):
+            _, mx, my, bstate = k
+            if my not in getattr(self, "drow_y", {}) or not items:
+                return None
+            idx = self.drow_y[my]
+            self.focus = "pane"
+            how = self.click(k, idx)
+            if how:
+                self.dsel = idx
+            if how == "menu":
+                return self.menu(*self.detail_actions(r, *items[idx]))
+            if how == "double":
+                fn = first_action(self.detail_actions(r, *items[idx])[1])
+                return fn() if fn else None
+            return None
+        to = self.move(k, self.dsel, len(items))
+        if to is not None:
+            self.dsel = to
+        elif k == "enter" and items:
+            return self.menu(*self.detail_actions(r, *items[min(self.dsel, len(items) - 1)]))
+        return None
 
     def month_line(self, p):
         """This month's spend on p (its Sessions', or logged under its name) and how many of its Sessions ran."""
@@ -491,6 +545,8 @@ class ProjectsTab:
         self.load_stats()  # the detail pane's Stats; read in the background, at most once a minute
         rows = self.prows = self.project_rows()
         self.psel = max(0, min(self.psel, len(rows) - 1))
+        if getattr(self, "dfor", None) != (self.psel, self.entry):  # another row: its items start at the top
+            self.dfor, self.dsel = (self.psel, self.entry), 0
         ps = self.projects or []
         closed = sum(p["closed"] for p in ps)
         self.corner = (f"{len(ps) - closed} projects · {closed} closed", self.DIM)
@@ -829,10 +885,10 @@ class ProjectsTab:
 
     def keys_projects(self, k, rows):
         r = rows[self.psel] if rows and self.psel < len(rows) else None
+        if (isinstance(k, tuple) and k[1] >= SIDEBAR_W) or self.focus == "pane":  # the detail pane's
+            return self.keys_detail(k, r)
         if isinstance(k, tuple):
             _, mx, my, bstate = k
-            if mx >= SIDEBAR_W:  # the detail pane has nothing to click yet
-                return None
             if my in self.prow_y:
                 idx = self.prow_y[my]
                 how = self.click(k, idx)
@@ -925,7 +981,8 @@ if Region:
                 out.append(pos)
             out.append(self.line())
             ui.entry_y = {}
-            counts = {"Sessions": sum(s["state"] != "closed" for s in ui.sessions), "Notes": len(ui.notes or [])}
+            counts = {"Unfiled": len(ui.unfiled(0, search=False)), "Sessions": sum(s["state"] != "closed" for s in ui.sessions),
+                      "Notes": len(ui.notes or [])}
             for name in ENTRIES:
                 row = self.line()
                 ui.entry_y[y0 + len(out)] = name
@@ -960,6 +1017,9 @@ if Region:
                 out.append(row)
             r = ui.prows[ui.psel]
             room = self.size.height - 1  # the last row is the key hints
+            picks = ui.detail_items(r)
+            kinds = {"Sub-projects": "sub", "Sessions": "session", "Handoffs": "handoff", "Notes": "note"}
+            ui.drow_y, at, y0 = {}, 0, self.region.y
             for head, items in ui.detail_sections(r):
                 if len(out) + 2 > room:
                     break
@@ -967,14 +1027,24 @@ if Region:
                 row = self.line()
                 row.put(2, head, curses.A_BOLD)
                 out.append(row)
-                for item in items[:max(room - len(out), 0)]:
+                n = sum(kind == kinds.get(head) for kind, _ in picks)  # its lines that are items, not "none yet"
+                for i, item in enumerate(items[:max(room - len(out), 0)]):
                     row = self.line()
-                    row.put(4, clip(item, w - 6), 0)
+                    idx = at + i if i < n else None
+                    hl = idx is not None and idx == ui.dsel and ui.focus == "pane"
+                    look = ui.selected if hl else (lambda a: a)
+                    if idx is not None:
+                        ui.drow_y[y0 + len(out)] = idx
+                    if hl:
+                        row.put(1, " " * (w - 2), look(0))
+                        row.put(2, "›", look(curses.A_BOLD | ui.ACCENT))
+                    row.put(4, clip(item, w - 6), look(0))
                     out.append(row)
+                at += n
             if r.kind in ("project", "sub"):
                 while len(out) < room:
                     out.append(self.line())
-                hint = "enter actions"
+                hint = "enter actions" + ("   tab its items" if picks and ui.focus == "side" else "")
                 if r.kind == "project" and any(not s["closed"] for s in r.item.get("subs") or []):
                     hint += "   ← hide sub-projects" if r.item["id"] in ui.subs_open else "   → sub-projects"
                 row = self.line()

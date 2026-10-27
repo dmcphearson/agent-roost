@@ -198,7 +198,8 @@ def demo_projects(sessions):
                     "handed": now - hours * 3600 if hours is not None else None,
                     "readme": True, "adopted": pid not in DEMO_NOT_ADOPTED,
                     "covered": {ids[i]: last_of.get(ids[i], 0) + 60 for i in linked if i in DEMO_WRAPPED},
-                    "handoffs": [(now - hours * 3600, next((s["name"] for s in sessions if s["id"] in sids), "Handoff"))]
+                    "handoffs": [(now - hours * 3600, next((s["name"] for s in sessions if s["id"] in sids), "Handoff"),
+                                  f"{HOME}/.roost/projects/{pid}/handoffs/demo.md")]
                     if hours is not None else [],
                     "notes": [], "repo": "", "subs": []})
     return out

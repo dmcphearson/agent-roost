@@ -458,6 +458,18 @@ class Projects(unittest.TestCase):
         ps = roost.demo_projects(roost.demo_sessions())
         self.assertTrue(any(p["closed"] for p in ps) and any(not p["last"] for p in ps))
 
+    def test_demo_has_an_unfiled_session_and_its_handoffs_carry_a_path(self):
+        """roost --demo shows the Unfiled entry with something in it, and its Handoffs are (time, title, path)."""
+        sessions = roost.demo_sessions()
+        ps = roost.demo_projects(sessions)
+        listed = {i for p in ps for x in [p] + list(p.get("subs") or []) for i in x["sessions"]}
+        self.assertTrue([s for s in sessions if not set(s.get("ids") or [s["id"]]) & listed], "no demo Session is unfiled")
+        handoffs = [h for p in ps for h in p["handoffs"]]
+        self.assertTrue(handoffs)
+        for h in handoffs:
+            self.assertEqual(len(h), 3, h)
+            self.assertIsInstance(h[2], str, h)
+
 
 class ProjectArrows(unittest.TestCase):
     def test_tags_are_read_from_a_list_or_a_line(self):
@@ -2053,7 +2065,7 @@ def no_spend_reads(test):
 
 
 class SectionData(unittest.TestCase):
-    """read_project's "handoffs" (time, title), newest first; "notes" (mtime, title, path), newest edit
+    """read_project's "handoffs" (time, title, path), newest first; "notes" (mtime, title, path), newest edit
     first; and "repo", the README's repo: line. Sub-projects get them too."""
     setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
 
@@ -2085,8 +2097,9 @@ class SectionData(unittest.TestCase):
                                        (now - 5 * 86400, None),
                                        (now - 2 * 86400, "session: bb2c0000-0000\n")])
         p = roost.read_project(folder)
-        want = [(roost.handoff_time(paths[1]), "Roll-up of alpha"), (roost.handoff_time(paths[3]), paths[3].stem),
-                (roost.handoff_time(paths[0]), "Printer fix"), (roost.handoff_time(paths[2]), paths[2].stem)]
+        # each Handoff carries its file's path (a str) too, since step 3b-1: the detail pane opens it from there
+        want = [(roost.handoff_time(paths[1]), "Roll-up of alpha", str(paths[1])), (roost.handoff_time(paths[3]), paths[3].stem, str(paths[3])),
+                (roost.handoff_time(paths[0]), "Printer fix", str(paths[0])), (roost.handoff_time(paths[2]), paths[2].stem, str(paths[2]))]
         self.assertEqual([tuple(h) for h in p["handoffs"]], want)
 
     def test_notes_are_listed_newest_edit_first_titled_as_read_note_gives_them(self):
@@ -2122,7 +2135,8 @@ class SectionData(unittest.TestCase):
         [h] = self.handoffs(alpha, [(now - 3600, "name: Badge work\n")])
         [n] = self.notes(alpha, [("idea.md", "# Badge idea\n", now - 60)])
         [s] = [x for x in roost.read_subprojects(self.root / "rollout") if x["slug"] == "alpha"]
-        self.assertEqual([tuple(x) for x in s["handoffs"]], [(roost.handoff_time(h), "Badge work")])
+        # a Handoff is (time, title, path) since step 3b-1: the detail pane opens it from its path
+        self.assertEqual([tuple(x) for x in s["handoffs"]], [(roost.handoff_time(h), "Badge work", str(h))])
         self.assertEqual([(title, str(path)) for _, title, path in s["notes"]], [("Badge idea", str(n))])
         self.assertEqual(s["repo"], "~/code/badges")
 
@@ -2499,6 +2513,362 @@ class SectionsOnScreen(unittest.TestCase):
             lines, bold = seen[when]
             self.assert_under(lines, bold, "Stats", want)
         self.assertFalse([l for l in seen["loaded"][0] if "loading…" in l])
+
+
+class DetailItems(unittest.TestCase):
+    """ui.detail_items(r): what can be selected in a project's or sub-project's detail pane, in the order
+    it's drawn: ("sub", sub dict) for each Sub-projects line, ("session", s) for each Sessions line,
+    ("handoff", (time, title, path)) for each Handoffs line, and ("note", (mtime, title, path)) for each
+    Notes line, exactly the ones detail_sections shows. [] for headers, + New project, and when there are none."""
+    setUp_base, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    setUp, ui, readme = DetailSections.setUp, ProjectMarkers.ui, staticmethod(ProjectMarkers.readme)
+    handoffs, notes, row = SectionData.handoffs, SectionData.notes, staticmethod(DetailSections.row)
+    SECTION_OF = {"sub": "Sub-projects", "session": "Sessions", "handoff": "Handoffs", "note": "Notes"}
+
+    @staticmethod
+    def text_of(kind, item):
+        """The text an item's line shows: a sub-project's label, a Session's name, a Handoff's or note's title."""
+        if kind == "sub":
+            return item.get("title") or item["slug"]
+        return item["name"] if kind == "session" else item[1]
+
+    def items(self, ui, kind, rid):
+        return [(k, tuple(x) if k in ("handoff", "note") else x) for k, x in ui.detail_items(self.row(ui, kind, rid))]
+
+    def assert_matches_the_drawn_lines(self, ui, kind, rid):
+        """Each kind's items are the lines its section draws, one for one, in order."""
+        r = self.row(ui, kind, rid)
+        drawn = dict(ui.detail_sections(r))
+        items = self.items(ui, kind, rid)
+        for k, heading in self.SECTION_OF.items():
+            mine = [x for kk, x in items if kk == k]
+            if not mine:
+                continue
+            lines = list(drawn.get(heading) or [])
+            self.assertEqual(len(mine), len(lines), (heading, lines, mine))
+            for x, line in zip(mine, lines):
+                self.assertIn(self.text_of(k, x), line, heading)
+
+    def fixture(self):
+        """rollout: open sub-projects alpha (Badge Printers) and beta, gamma done; Sessions Live one (running),
+        Closed recent (an hour ago) and Ancient (9 days ago); Handoffs Toner check (a day ago) and Driver
+        push (3 days); notes Badge idea (a minute ago) and Cable plan (2 hours)."""
+        ids = ["aa000000-0000", "bb000000-0000", "cc000000-0000"]
+        folder = self.project("rollout", self.readme(ids))
+        alpha = self.sub("rollout", "alpha")
+        (alpha / "README.md").write_text((alpha / "README.md").read_text().replace("\n# alpha\n", "\n# Badge Printers\n"))
+        self.sub("rollout", "beta")
+        self.sub("rollout", "gamma", status="done")
+        now = time.time()
+        hs = self.handoffs(folder, [(now - 86400, "name: Toner check\n"), (now - 3 * 86400, "name: Driver push\n")])
+        ns = self.notes(folder, [("a.md", "# Badge idea\n", now - 60), ("b.md", "# Cable plan\n", now - 7200)])
+        closed = lambda name, mins, sid: dict(session(name, state="closed", kind=None, mins=mins), id=sid, attach=None)
+        ui = self.ui([dict(session("Live one", mins=3), id=ids[0]), closed("Closed recent", 60, ids[1]),
+                      closed("Ancient", 9 * 1440, ids[2])])
+        return ui, hs, ns
+
+    def test_a_projects_items_are_its_sub_projects_sessions_handoffs_and_notes_in_the_order_drawn(self):
+        ui, hs, ns = self.fixture()
+        items = self.items(ui, "project", "rollout")
+        self.assertEqual([k for k, _ in items], ["sub", "sub", "session", "session", "handoff", "handoff", "note", "note"], items)
+        subs = [x for k, x in items if k == "sub"]
+        self.assertEqual(sorted(s["slug"] for s in subs), ["alpha", "beta"])  # gamma is done
+        self.assertEqual([s["name"] for k, s in items if k == "session"], ["Live one", "Closed recent"])
+        self.assertEqual([x for k, x in items if k == "handoff"],
+                         [(roost.handoff_time(h), title, str(h)) for h, title in zip(hs, ("Toner check", "Driver push"))])
+        self.assertEqual([x for k, x in items if k == "note"],
+                         [(os.stat(n).st_mtime, title, str(n)) for n, title in zip(ns, ("Badge idea", "Cable plan"))])
+        self.assert_matches_the_drawn_lines(ui, "project", "rollout")
+
+    def test_a_handoffs_path_is_its_file_as_a_str(self):
+        ui, hs, _ = self.fixture()
+        paths = [x[2] for k, x in self.items(ui, "project", "rollout") if k == "handoff"]
+        self.assertTrue(all(isinstance(p, str) for p in paths), paths)
+        self.assertEqual(paths, [str(h) for h in hs])
+
+    def test_a_sub_projects_items_are_its_own_sessions_handoffs_and_notes(self):
+        self.project("rollout", self.readme(["aa000000-0000"]))
+        alpha = self.sub("rollout", "alpha", sessions=[("Badge work", "cc000000-0000")])
+        now = time.time()
+        [h] = self.handoffs(alpha, [(now - 3600, "name: Badge handoff\n")])
+        [n] = self.notes(alpha, [("idea.md", "# Badge idea\n", now - 60)])
+        ui = self.ui([dict(session("Parent work"), id="aa000000-0000"), dict(session("Badge work", mins=30), id="cc000000-0000")])
+        ui.subs_open.add("rollout")
+        items = self.items(ui, "sub", "rollout/alpha")
+        self.assertEqual([(k, x["name"] if k == "session" else x[1]) for k, x in items],
+                         [("session", "Badge work"), ("handoff", "Badge handoff"), ("note", "Badge idea")])
+        self.assertEqual(dict(items)["handoff"][2], str(h))
+        self.assertEqual(dict(items)["note"][2], str(n))
+        self.assert_matches_the_drawn_lines(ui, "sub", "rollout/alpha")
+
+    def test_at_most_5_of_each_list_the_ones_drawn(self):
+        ids = [f"{i:02d}000000-0000" for i in range(7)]
+        folder = self.project("b", self.readme(ids))
+        now = time.time()
+        self.handoffs(folder, [(now - (d + 1) * 86400, f"name: Handoff {d}\n") for d in range(7)])
+        self.notes(folder, [(f"n{i}.md", f"# Note {i}\n", now - i * 3600) for i in range(7)])
+        ui = self.ui([dict(session(f"Run {i}", mins=i + 1), id=sid) for i, sid in enumerate(ids)])
+        items = self.items(ui, "project", "b")
+        for k in ("session", "handoff", "note"):
+            self.assertEqual(sum(kk == k for kk, _ in items), 5, (k, items))
+        self.assertEqual([x[1] for k, x in items if k == "handoff"], [f"Handoff {d}" for d in range(5)])
+        self.assertEqual([x[1] for k, x in items if k == "note"], [f"Note {i}" for i in range(5)])
+        self.assertEqual([x["name"] for k, x in items if k == "session"], [f"Run {i}" for i in range(5)])
+        self.assert_matches_the_drawn_lines(ui, "project", "b")
+
+    def test_none_for_headers_new_project_and_a_project_with_nothing_to_list(self):
+        self.project("b", self.readme(["aa000000-0000"]))  # its one Session is older than the Sessions list's 7 days
+        ui = self.ui([dict(session("Ancient one", state="closed", kind=None, mins=8 * 1440), id="aa000000-0000", attach=None)])
+        rows = ui.project_rows()
+        self.assertEqual(sorted({r.kind for r in rows}), ["head", "new", "project"])  # the fixture
+        for r in rows:
+            self.assertEqual(list(ui.detail_items(r)), [], r.kind)
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class DetailPane(unittest.TestCase):
+    """The detail pane's items, on a real screen (SectionsOnScreen's folder): on a project or sub-project
+    row with items, tab moves the keys into the pane; there ↑↓ (home/end) move ui.dsel through
+    detail_items, its line drawn selected; enter, a right-click, or a double-click acts on it; tab or esc
+    goes back to the sidebar."""
+    run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
+    select, keys = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys)
+    SIZE, read_project, setUp = TwoPanes.SIZE, staticmethod(SectionsOnScreen.read_project), SectionsOnScreen.setUp
+    text_of, DESCRIPTION = staticmethod(DetailItems.text_of), TwoPanes.DESCRIPTION
+
+    def state(self, seen, label):
+        """A step that keeps, under label: the focus, dsel, the selected row's items, the screen's lines, the
+        pane's rows drawn selected, the menu up (its title and labels), and the view shown."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            ui = pilot.app.ui
+            r = ui.project_rows()[ui.psel]
+            c = ui.choosing
+            seen[label] = {"focus": ui.focus, "dsel": getattr(ui, "dsel", None), "psel": ui.psel,
+                           "items": ui.detail_items(r) if hasattr(ui, "detail_items") else [],
+                           "lines": screen_text(pilot.app), "raised": pane_raised(pilot.app),
+                           "menu": c and (c["title"], [o[0] for o in ui.choice_options() if not is_divider(o)]),
+                           "view": ui.TABS[ui.tab].name, "alert": ui.alerting}
+        return step
+
+    def item_ys(self, got):
+        """The screen row of each item's line in the pane, top to bottom."""
+        W, ys, last = roost.SIDEBAR_W, [], 0
+        for kind, item in got["items"]:
+            t = self.text_of(kind, item)
+            y = next((i for i in range(last, len(got["lines"])) if t in got["lines"][i][W:]), None)
+            self.assertIsNotNone(y, (t, got["lines"]))
+            ys.append(y)
+            last = y + 1
+        return ys
+
+    @staticmethod
+    def labels(acts):
+        return [label for label, fn in acts if (label, fn) != roost.DIVIDER]
+
+    def index_of(self, kind, text):
+        """A step that sets dsel on the item of kind whose line shows text."""
+        def at(ui):
+            r = ui.project_rows()[ui.psel]
+            ui.dsel = next(i for i, (k, x) in enumerate(ui.detail_items(r)) if k == kind and self.text_of(k, x) == text)
+        return self.select(at)
+
+    def fleet_items(self):
+        """The fixture: Printer fleet's items, as detail_items gives them."""
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.state(seen, "x")], size=self.SIZE)
+        self.assertTrue(seen["x"]["items"], "no detail items for Printer fleet (ui.detail_items)")
+        return seen["x"]
+
+    # focus
+
+    def test_tab_moves_the_keys_into_the_pane_on_a_project_with_items_and_tab_shift_tab_or_esc_back(self):
+        seen, keys = {}, ["tab", "tab", "shift+tab", "escape", "shift+tab", "shift+tab", "tab", "escape"]
+        steps = [self.on_project("fleet"), self.state(seen, "start")]
+        for i, k in enumerate(keys):
+            steps += [self.keys(k), self.state(seen, i)]
+        self.run_on(self.projects, steps, size=self.SIZE)
+        self.assertTrue(seen["start"]["items"], "the fixture: Printer fleet has items")
+        self.assertEqual(seen["start"]["focus"], "side")
+        self.assertEqual([seen[i]["focus"] for i in range(len(keys))],
+                         ["pane", "side", "pane", "side", "pane", "side", "pane", "side"])
+        self.assertEqual({seen[i]["view"] for i in range(len(keys))}, {"Projects"})
+        self.assertEqual({seen[i]["psel"] for i in range(len(keys))}, {seen["start"]["psel"]}, "the sidebar's selection stays")
+
+    def test_tab_does_nothing_on_a_project_with_no_items(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("quiet"), self.state(seen, "start"), self.keys("tab"), self.state(seen, "tab"),
+                                    self.keys("shift+tab"), self.state(seen, "shift+tab")], size=self.SIZE)
+        self.assertTrue(hasattr(roost.UI, "detail_items"), "no ui.detail_items")
+        self.assertEqual(seen["start"]["items"], [], "the fixture: Quiet one has nothing to list")
+        self.assertEqual((seen["tab"]["focus"], seen["shift+tab"]["focus"]), ("side", "side"))
+
+    def test_tab_moves_the_keys_into_the_pane_on_a_sub_project_with_items(self):
+        seen = {}
+
+        def on_alpha(ui):
+            ui.subs_open.add("rollout")
+            ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "sub" and r.item["slug"] == "alpha")
+        self.run_on(self.projects, [self.select(on_alpha), self.state(seen, "start"), self.keys("tab"), self.state(seen, "tab")],
+                    size=self.SIZE)
+        self.assertEqual([k for k, _ in seen["start"]["items"]], ["session"], "the fixture: Badge Printers lists Laptop refresh")
+        self.assertEqual(seen["tab"]["focus"], "pane")
+
+    # moving in the pane
+
+    def test_up_down_home_and_end_move_dsel_through_the_items_without_wrapping(self):
+        seen, keys = {}, ["down", "down", "down", "down", "down", "up", "home", "up", "end", "down"]
+        steps = [self.on_project("fleet"), self.keys("tab"), self.state(seen, "tab")]
+        for i, k in enumerate(keys):
+            steps += [self.keys(k), self.state(seen, i)]
+        self.run_on(self.projects, steps, size=self.SIZE)
+        n = len(seen["tab"]["items"])
+        self.assertEqual(n, 4, "the fixture: Printer fix, two Handoffs, and Driver shortlist")
+        self.assertEqual(seen["tab"]["dsel"], 0)
+        self.assertEqual([seen[i]["dsel"] for i in range(len(keys))], [1, 2, 3, 3, 3, 2, 0, 0, 3, 3])
+        self.assertEqual({seen[i]["focus"] for i in range(len(keys))}, {"pane"})
+        self.assertEqual({seen[i]["psel"] for i in range(len(keys))}, {seen["tab"]["psel"]}, "↑↓ move in the pane, not the sidebar")
+
+    def test_the_selected_items_line_is_drawn_selected_only_while_the_pane_has_the_keys(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.state(seen, "side"), self.keys("tab"), self.state(seen, 0),
+                                    self.keys("down"), self.state(seen, 1), self.keys("down"), self.state(seen, 2),
+                                    self.keys("down"), self.state(seen, 3), self.keys("escape"), self.state(seen, "back")],
+                    size=self.SIZE)
+        ys = self.item_ys(seen["side"])
+        self.assertEqual(len(ys), 4, seen["side"]["items"])
+        self.assertFalse(seen["side"]["raised"] & set(ys), "no item line is selected while the sidebar has the keys")
+        for i in range(4):
+            self.assertEqual(self.item_ys(seen[i]), ys, "the lines stay put")
+            self.assertEqual(seen[i]["raised"] & set(ys), {ys[i]}, (i, seen[i]["lines"][ys[i]]))
+        self.assertFalse(seen["back"]["raised"] & set(ys), "esc: back to the sidebar, nothing selected in the pane")
+
+    def test_changing_the_sidebars_selection_resets_dsel(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("tab", "down", "down"), self.state(seen, "moved"),
+                                    self.keys("escape", "down"), self.state(seen, "next row"), self.keys("up"), self.state(seen, "back"),
+                                    self.keys("tab"), self.state(seen, "pane")], size=self.SIZE)
+        self.assertEqual(seen["moved"]["dsel"], 2)
+        self.assertNotEqual(seen["next row"]["psel"], seen["moved"]["psel"])
+        self.assertEqual(seen["next row"]["dsel"], 0)
+        self.assertEqual(seen["back"]["psel"], seen["moved"]["psel"])
+        self.assertEqual((seen["pane"]["focus"], seen["pane"]["dsel"]), ("pane", 0))
+
+    # enter: the item's menu
+
+    def test_enter_on_a_session_opens_its_session_actions(self):
+        seen, want = {}, {}
+
+        async def expect(pilot):
+            ui = pilot.app.ui
+            s = next(s for s in ui.sessions if s["name"] == "Printer fix")
+            want["labels"] = self.labels(ui.session_actions(s))
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("tab"), self.index_of("session", "Printer fix"),
+                                    expect, self.keys("enter"), self.state(seen, "menu")], size=self.SIZE)
+        self.assertEqual(seen["menu"]["menu"], ("Printer fix", want["labels"]))
+
+    def test_enter_on_a_note_opens_that_notes_actions_with_its_project(self):
+        seen, want = {}, {}
+
+        async def expect(pilot):
+            ui = pilot.app.ui
+            path = self.root / "fleet" / "notes" / "idea.md"
+            want["labels"] = self.labels(ui.note_actions(roost.read_note(path, "fleet")))
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("tab"), self.index_of("note", "Driver shortlist"),
+                                    expect, self.keys("enter"), self.state(seen, "menu")], size=self.SIZE)
+        title, labels = seen["menu"]["menu"]
+        self.assertEqual((title, labels), ("Driver shortlist", want["labels"]))
+        self.assertIn("Move to another project", labels, "a project's note moves to another one")
+        self.assertNotIn("Make it a project", labels, "it's in a project already")
+
+    def test_enter_on_a_sub_project_opens_its_sub_project_actions(self):
+        seen, want = {}, {}
+
+        async def expect(pilot):
+            ui = pilot.app.ui
+            p = next(p for p in ui.projects if p["id"] == "rollout")
+            alpha = next(s for s in p["subs"] if s["slug"] == "alpha")
+            # titled as its own row's menu in the sidebar is (label_of), or by the label its line shows
+            want["titles"], want["labels"] = {roost.label_of(alpha), alpha.get("title")}, self.labels(ui.sub_actions(alpha))
+        self.run_on(self.projects, [self.on_project("rollout"), self.keys("tab"), self.index_of("sub", "Badge Printers"),
+                                    expect, self.keys("enter"), self.state(seen, "menu")], size=self.SIZE)
+        self.assertIsNotNone(seen["menu"]["menu"])
+        title, labels = seen["menu"]["menu"]
+        self.assertIn(title, want["titles"])
+        self.assertEqual(labels, want["labels"])
+
+    def test_enter_on_a_handoff_opens_open_it_and_show_it_in_finder(self):
+        import unittest.mock
+        path = str(next((self.root / "fleet" / "handoffs").glob("*-cc000000.md")))  # Toner check
+        edited, shown = [], []
+        for label, got in (("Open it", edited), ("Show it in Finder", shown)):
+            seen = {}
+
+            async def pick(pilot, label=label):
+                ui = pilot.app.ui
+                at = next((i for i, o in enumerate(ui.choice_options()) if o[0] == label), None) if ui.choosing else None
+                if at is not None:  # else the menu's assertion below says what came up instead
+                    ui.choosing["sel"] = at
+                    await pilot.press("enter")
+            with unittest.mock.patch.object(roost.UI, "edit", lambda ui, p: edited.append(str(p))), \
+                    unittest.mock.patch.object(roost.UI, "show_in_finder", lambda ui, p, reveal=False: shown.append(str(p))):
+                self.run_on(self.projects, [self.on_project("fleet"), self.keys("tab"), self.index_of("handoff", "Toner check"),
+                                            self.keys("enter"), self.state(seen, "menu"), pick], size=self.SIZE)
+            self.assertEqual(seen["menu"]["menu"], ("Toner check", ["Open it", "Show it in Finder"]))
+            self.assertEqual(got, [path], label)
+        self.assertEqual((edited, shown), ([path], [path]), "each action did only its own thing")
+
+    # the mouse
+
+    def test_a_click_on_an_items_line_selects_it_and_moves_the_keys_into_the_pane(self):
+        before = self.fleet_items()
+        ys = self.item_ys(before)
+        note = next(i for i, (k, _) in enumerate(before["items"]) if k == "note")
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, ys[note])),
+                                    self.state(seen, "clicked")], size=self.SIZE)
+        got = seen["clicked"]
+        self.assertEqual((got["focus"], got["dsel"], got["menu"]), ("pane", note, None))
+        self.assertEqual(got["raised"] & set(ys), {ys[note]})
+
+    def test_a_double_click_on_an_items_line_runs_its_first_action(self):
+        import unittest.mock
+        before = self.fleet_items()
+        ys = self.item_ys(before)
+        at = next(i for i, (k, x) in enumerate(before["items"]) if k == "handoff" and x[1] == "Toner check")
+        edited = []
+        with unittest.mock.patch.object(roost.UI, "edit", lambda ui, p: edited.append(str(p))):
+            self.run_on(self.projects, [self.on_project("fleet"),
+                                        lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, ys[at]), times=2)], size=self.SIZE)
+        self.assertEqual(edited, [before["items"][at][1][2]], "Open it: the Handoff's file in the editor")
+
+    def test_a_right_click_on_an_items_line_opens_its_menu(self):
+        before = self.fleet_items()
+        ys = self.item_ys(before)
+        at = next(i for i, (k, x) in enumerate(before["items"]) if k == "session")
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, ys[at]), button=3),
+                                    self.state(seen, "menu")], size=self.SIZE)
+        self.assertIsNotNone(seen["menu"]["menu"])
+        self.assertEqual(seen["menu"]["menu"][0], "Printer fix")
+        self.assertEqual(seen["menu"]["dsel"], at)
+
+    def test_a_click_on_a_line_that_isnt_an_item_does_nothing_harmful(self):
+        before = self.fleet_items()
+        W = roost.SIDEBAR_W
+        heading = next(i for i, l in enumerate(before["lines"]) if l[W:].strip() == "Handoffs")
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), lambda pilot: pilot.click(offset=(W + 6, heading)),
+                                    self.state(seen, "heading")], size=self.SIZE)
+        got = seen["heading"]
+        self.assertEqual((got["menu"], got["alert"], got["view"]), (None, None, "Projects"))
+        self.assertIn(got["dsel"], (None, 0), "the selection stays where it was")
+        seen = {}
+        self.run_on(self.projects, [self.on_project("quiet"), lambda pilot: pilot.click(offset=(W + 6, heading)),
+                                    self.state(seen, "quiet")], size=self.SIZE)
+        got = seen["quiet"]
+        self.assertEqual((got["focus"], got["menu"], got["alert"]), ("side", None, None), "nothing to select: the keys stay in the sidebar")
 
 
 class StatusLine(unittest.TestCase):

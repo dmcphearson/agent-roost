@@ -8,7 +8,7 @@ import importlib
 MODULES = ["core.config", "core.wren", "core.github", "core.formatting", "core.mdfiles", "core.pricing", "core.sessiondata",
            "core.notedata", "core.projectdata", "core.statsdata", "core.plugin", "core.handoffs", "core.summaries", "core.advice",
            "core.adopt", "core.terminals", "core.install", "app.shell", "app.widgets", "tabs.sessions", "tabs.projects",
-           "tabs.notes", "tabs.stats", "app.ui", "app.screen", "demo", "cli"]
+           "tabs.notes", "tabs.stats", "tabs.unfiled", "app.ui", "app.screen", "demo", "cli"]
 
 
 def modules():

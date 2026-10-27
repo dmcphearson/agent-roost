@@ -51,7 +51,7 @@ CLICK = curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON1_DOUBLE_
 RIGHT_CLICK = curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED
 BAR_KEYS = "↑↓ move   ←→ views   enter actions   / search   ctrl+n new   tab switch pane   ? help   ctrl+q quit"
 SIDEBAR_W = 34  # the sidebar's columns, on every view; the right pane takes the rest
-ENTRIES = ("Sessions", "Notes", "Stats")  # the sidebar's entries under the projects, each a view in the right pane
+ENTRIES = ("Unfiled", "Sessions", "Notes", "Stats")  # the sidebar's entries under the projects, each a view in the right pane
 PIN = "\uf435"  # a pinned Session's mark: Nerd Font's pin (nf-oct-pin), which Ghostty ships
 TAB_X = 12  # where the first tab's name starts: the views and searches under the tabs line up with it
 SEARCH_KEYS = "type to search · enter keep it · esc clear"
@@ -77,7 +77,7 @@ class Shell:
     """The screens' shell: what every tab shares. Each tab's module adds its own draw, keys, and actions (see roost.app.ui)."""
     reading, fresh, told = False, None, None  # a refresh's reads in a thread (see read_later)
     keys_seen = 0  # keys so far: a read that a key came during may be out of date
-    entry, focus, entry_y = None, "side", {}  # the sidebar entry shown (None: a project), and where keys go
+    entry, focus, entry_y, dsel = None, "side", {}, 0  # the sidebar entry shown (None: a project), where keys go
 
     def setup(self, sessions, query):
         """Everything the screens keep, read once at start: no terminal is touched."""
@@ -481,8 +481,10 @@ class Shell:
         tab = self.TABS[self.tab]
         if not tab.typing(self):  # a confirmation or the category picker takes every key
             if k in ("tab", "shift+tab"):
-                if self.entry:  # a project's detail has nothing to move to yet
+                if self.entry or self.focus == "pane":
                     self.focus = "side" if self.focus == "pane" else "pane"
+                elif self.selected_items():  # a project's detail, when it lists anything to pick
+                    self.focus = "pane"
                 return None
             if k == "?":
                 self.helping = True
@@ -516,7 +518,8 @@ class Shell:
                 if k[1] < SIDEBAR_W:
                     self.focus = "side"
                     return self.keys_sidebar(k)
-                self.focus = "pane" if self.entry else "side"
+                if self.entry:
+                    self.focus = "pane"
                 return tab.keys(self, k, drawn)
             if self.focus == "side":
                 return self.keys_sidebar(k)
@@ -524,7 +527,7 @@ class Shell:
 
     def query_attr(self):
         """Each tab keeps its own search."""
-        return {"Sessions": "query", "Notes": "nquery", "Stats": "squery"}.get(self.TABS[self.tab].name, "pquery")
+        return {"Unfiled": "uquery", "Sessions": "query", "Notes": "nquery", "Stats": "squery"}.get(self.TABS[self.tab].name, "pquery")
 
     def keys_search(self, k):
         attr = self.query_attr()
@@ -747,6 +750,13 @@ class Shell:
             self.focus = "side"
         else:
             self.open_entry(name)
+
+    def selected_items(self):
+        """The selected project row's detail items, or none."""
+        rows = getattr(self, "prows", None)
+        if self.entry or not rows or self.psel >= len(rows) or not hasattr(self, "detail_items"):
+            return []
+        return self.detail_items(rows[self.psel])
 
     def show_entry(self, name):
         """Select the sidebar entry name (None: the projects) and show its view, remembered for the next start."""
