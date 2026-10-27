@@ -1,5 +1,6 @@
 """The Projects tab."""
 import curses, os, textwrap, threading, time
+from datetime import date, datetime
 from pathlib import Path
 
 from roost.core.statsdata import log_spend
@@ -356,6 +357,52 @@ class ProjectsTab:
         marks = (("●", any(map(self.running, items))), ("◆", any(map(self.ready, items))))
         return " ".join(m for m, on in marks if on)
 
+    DETAIL_ROWS = 5  # lines in each of the detail pane's lists
+    RECENT_SESSION_DAYS = 7
+
+    def detail_sections(self, r):
+        """The detail pane's sections under the fields, as (heading, lines): a project's open sub-projects,
+        then its Sessions, Handoffs, notes, and this month's spend."""
+        if r.kind not in ("project", "sub"):
+            return []
+        p, out = r.item, []
+        subs = [s for s in p.get("subs") or [] if not s["closed"]] if r.kind == "project" else []
+        if subs:
+            lines = []
+            for s in subs:
+                state = ("running" if self.running(s) else
+                         f"ready · Handoff {short_when(s['handed'])}" if self.ready(s) else "")
+                lines.append(f"{self.markers(Row(r.sec, 'sub', s, 0)):3} {s.get('title') or s['slug']}  "
+                             f"{s.get('type') or ''}  {s.get('status') or ''}  {state}".rstrip())
+            out.append(("Sub-projects", lines))
+        linked, since = self.linked(p), time.time() - self.RECENT_SESSION_DAYS * 86400
+        recent = ([s for s in linked if s["state"] != "closed"]
+                  + [s for s in linked if s["state"] == "closed" and s["last"] >= since])[:self.DETAIL_ROWS]
+        out.append(("Sessions", [f"{s['name']}  {short_when(s['last'])}" for s in recent]
+                    or [f"none in the last {self.RECENT_SESSION_DAYS} days"]))
+        out.append(("Handoffs", [f"{short_when(t)}  {title}" for t, title in (p.get("handoffs") or [])[:self.DETAIL_ROWS]]
+                    or ["No Handoffs yet"]))
+        out.append(("Notes", [title for _, title, _ in (p.get("notes") or [])[:self.DETAIL_ROWS]] or ["No notes"]))
+        out.append(("Stats", [self.month_line(p)]))
+        return out
+
+    def month_line(self, p):
+        """This month's spend on p (its Sessions', or logged under its name) and how many of its Sessions ran."""
+        job = getattr(self, "sjob", None)
+        if not job or not job.get("data"):
+            return "loading…"
+        start = date.today().replace(day=1)
+        key = (id(job["data"]), p["id"], start, tuple(p["sessions"]))
+        first = start.isoformat()  # spend rows' days are YYYY-MM-DD
+        cache = self.__dict__.setdefault("_month_spend", {})
+        if key not in cache:
+            names, sids = {p["id"], label_of(p)}, set(p["sessions"])
+            cache.clear()
+            cache[key] = sum(c for d, _, sid, proj, c in self.stats_rows(job["data"])["rows"]
+                             if d and d >= first and (proj in names or sid in sids))
+        n = sum(datetime.fromtimestamp(s["last"]).date() >= start for s in self.linked(p))
+        return f"This month  ${cache[key]:.2f} · {plural(n, 'Session')}"
+
     def show_sessions(self, p):
         """The Sessions tab, on All, searching for project:<id>: exactly the Sessions p lists. Esc clears it."""
         self.view, self.query, self.sel, self.top, self.searching = VIEWS.index("All"), f"project:{p['id']}", 0, 0, False
@@ -441,6 +488,7 @@ class ProjectsTab:
         """What the Projects tab shows: its rows, the selected one's panel, the corner note, the search
         row, and the key bar. ProjectsView draws them."""
         h, w = self.scr.getmaxyx()
+        self.load_stats()  # the detail pane's Stats; read in the background, at most once a minute
         rows = self.prows = self.project_rows()
         self.psel = max(0, min(self.psel, len(rows) - 1))
         ps = self.projects or []
@@ -471,6 +519,7 @@ class ProjectsTab:
             fields = [("Status", f"{item['status'] or 'none set'}   Last worked  {last}   Sessions  {n}"
                        + ("" if item["readme"] else "   (no README.md)")),
                       ("Sessions", self.sessions_field(item)),
+                      *([("Repo", short(item["repo"]))] if item.get("repo") else []),
                       ("Category", item.get("category") or "none"),
                       ("Tags", ", ".join(item.get("tags") or []) or "none"),
                       ("Folder", short(item["path"]) + f"   Id  {item['id']}")]
@@ -487,6 +536,7 @@ class ProjectsTab:
             fields = [("Type", item["type"] or "none"),
                       ("Status", f"{item['status'] or 'none set'}   Last worked  {last}   Sessions  {n}"),
                       ("Sessions", self.sessions_field(item)),
+                      *([("Repo", short(item["repo"]))] if item.get("repo") else []),
                       ("Folder", short(item["path"]))]
         elif r.kind == "session":
             text, _ = self.status_cell(item)
@@ -873,7 +923,7 @@ if Region:
             return out
 
     class ProjectPanel(Region):
-        """The detail pane: the selected row's name, then its labeled fields."""
+        """The detail pane: the selected row's name, its labeled fields, its sections, and its key hints."""
         def lines(self):
             ui, w = self.ui, self.size.width
             out = []
@@ -886,6 +936,28 @@ if Region:
                 row = self.line()
                 row.put(2, label, ui.DIM)
                 row.put(16, clip(value, w - 18), 0 if label in ("Summary", "Description", "Last message") and value != "no description yet" or not label else ui.DIM)
+                out.append(row)
+            r = ui.prows[ui.psel]
+            room = self.size.height - 1  # the last row is the key hints
+            for head, items in ui.detail_sections(r):
+                if len(out) + 2 > room:
+                    break
+                out.append(self.line())
+                row = self.line()
+                row.put(2, head, curses.A_BOLD)
+                out.append(row)
+                for item in items[:max(room - len(out), 0)]:
+                    row = self.line()
+                    row.put(4, clip(item, w - 6), 0)
+                    out.append(row)
+            if r.kind in ("project", "sub"):
+                while len(out) < room:
+                    out.append(self.line())
+                hint = "enter actions"
+                if r.kind == "project" and any(not s["closed"] for s in r.item.get("subs") or []):
+                    hint += "   ← hide sub-projects" if r.item["id"] in ui.subs_open else "   → sub-projects"
+                row = self.line()
+                row.put(2, hint, ui.DIM)
                 out.append(row)
             return out
 

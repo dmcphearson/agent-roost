@@ -15,7 +15,10 @@ class TextualScreens(unittest.TestCase):
                      check_compat=lambda: "", plugin_registered=lambda s=None: True, taken_plugin_change=lambda: "",
                      retention=lambda: (30, None), update_available=lambda: "", chosen_terminal=lambda: "ghostty",
                      mark_open=lambda ss, term: ss, regather=lambda old: old, read_config=lambda: {},
-                     save_config=lambda **kw: None, NOTES=Path(tmp.name) / "notes")
+                     save_config=lambda **kw: None, NOTES=Path(tmp.name) / "notes",
+                     # the Projects tab reads spend too: never from the person's transcripts
+                     gather_spend=lambda table=None, now=None: {"rows": [], "hours": {}, "tokens": {},
+                                                                "unpriced": [], "priced": True})
         patcher = unittest.mock.patch.multiple(roost, **stubs)
         patcher.start()
         self.addCleanup(patcher.stop)

@@ -1,6 +1,7 @@
 from support import *  # noqa: F401,F403 (the shared namespace, helpers, and fixtures)
 from support import _SCRATCH, own_tests  # noqa: F401
 from test_screens import TextualScreens  # for their helpers; their tests run in test_screens.py
+from datetime import date, timedelta
 
 load_tests = own_tests(__name__)
 
@@ -2028,6 +2029,475 @@ class SessionsField(unittest.TestCase):
         self.project("b", self.readme(), handoffs=[TODAY()])
         ui = self.ui()
         self.assertNotIn("Sessions", [label for label, _ in self.fields(ui, "head", "Recent")])
+
+
+def handoff_name(ts, sid="aaaaaaaa"):
+    """A Handoff's file name for a time: YYYY-MM-DD-HHMM-<session8>.md."""
+    return time.strftime("%Y-%m-%d-%H%M", time.localtime(ts)) + f"-{sid}.md"
+
+
+def month_start():
+    """Midnight on the first of this month, as a datetime."""
+    return datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def no_spend_reads(test):
+    """Patch statsdata.gather_spend for one test: spend is never read from the person's transcripts."""
+    import unittest.mock
+    patcher = unittest.mock.patch.object(importlib.import_module("roost.core.statsdata"), "gather_spend",
+                                         lambda table=None, now=None: {"rows": [], "hours": {}, "tokens": {},
+                                                                       "unpriced": [], "priced": True})
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
+class SectionData(unittest.TestCase):
+    """read_project's "handoffs" (time, title), newest first; "notes" (mtime, title, path), newest edit
+    first; and "repo", the README's repo: line. Sub-projects get them too."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+
+    def handoffs(self, folder, specs):
+        """Write (ts, frontmatter text or None) Handoffs into folder/handoffs; returns their paths."""
+        out = []
+        for i, (ts, meta) in enumerate(specs):
+            path = folder / "handoffs" / handoff_name(ts, f"{i:08x}")
+            path.write_text((f"---\n{meta}---\n\n" if meta else "") + "Did the work.\n")
+            out.append(path)
+        return out
+
+    def notes(self, folder, specs):
+        """Write (name, text, mtime) notes into folder/notes; returns their paths."""
+        (folder / "notes").mkdir(exist_ok=True)
+        out = []
+        for name, text, mtime in specs:
+            path = folder / "notes" / name
+            path.write_text(text)
+            os.utime(path, (mtime, mtime))
+            out.append(path)
+        return out
+
+    def test_handoffs_are_listed_newest_first_titled_by_rollup_then_name_then_file_stem(self):
+        folder = self.project("rollout")
+        now = time.time()
+        paths = self.handoffs(folder, [(now - 3 * 86400, "session: aa1b9a71-0000\nname: Printer fix\n"),
+                                       (now - 86400, "rollup: alpha\nname: Ignored name\n"),
+                                       (now - 5 * 86400, None),
+                                       (now - 2 * 86400, "session: bb2c0000-0000\n")])
+        p = roost.read_project(folder)
+        want = [(roost.handoff_time(paths[1]), "Roll-up of alpha"), (roost.handoff_time(paths[3]), paths[3].stem),
+                (roost.handoff_time(paths[0]), "Printer fix"), (roost.handoff_time(paths[2]), paths[2].stem)]
+        self.assertEqual([tuple(h) for h in p["handoffs"]], want)
+
+    def test_notes_are_listed_newest_edit_first_titled_as_read_note_gives_them(self):
+        folder = self.project("rollout")
+        now = time.time()
+        paths = self.notes(folder, [("budget.md", "---\ntitle: Toner budget\n---\n\nFigures.\n", now - 7200),
+                                    ("check.md", "# Driver checklist\n\n- one\n", now - 60),
+                                    ("plain.md", "", now - 86400)])
+        p = roost.read_project(folder)
+        got = [(t, title, str(path)) for t, title, path in p["notes"]]
+        want = [(os.stat(x).st_mtime, roost.read_note(x)["name"], str(x)) for x in (paths[1], paths[0], paths[2])]
+        self.assertEqual(got, want)
+        self.assertEqual([title for _, title, _ in got], ["Driver checklist", "Toner budget", "plain"])
+
+    def test_a_project_with_no_notes_folder_has_no_notes(self):
+        folder = self.project("rollout")
+        self.assertFalse((folder / "notes").exists())
+        self.assertEqual(list(roost.read_project(folder)["notes"]), [])
+        self.assertEqual(list(roost.read_project(folder)["handoffs"]), [])
+
+    def test_repo_is_the_readmes_repo_line_or_empty(self):
+        with_repo = self.project("tools", README.replace("status: active\n", "status: active\nrepo: ~/code/printer-tools\n"))
+        without = self.project("other")
+        self.assertEqual(roost.read_project(with_repo)["repo"], "~/code/printer-tools")
+        self.assertEqual(roost.read_project(without)["repo"], "")
+
+    def test_sub_projects_get_handoffs_notes_and_repo(self):
+        self.project("rollout")
+        alpha = self.sub("rollout", "alpha")
+        (alpha / "README.md").write_text((alpha / "README.md").read_text().replace("status: active\n",
+                                                                                   "status: active\nrepo: ~/code/badges\n"))
+        now = time.time()
+        [h] = self.handoffs(alpha, [(now - 3600, "name: Badge work\n")])
+        [n] = self.notes(alpha, [("idea.md", "# Badge idea\n", now - 60)])
+        [s] = [x for x in roost.read_subprojects(self.root / "rollout") if x["slug"] == "alpha"]
+        self.assertEqual([tuple(x) for x in s["handoffs"]], [(roost.handoff_time(h), "Badge work")])
+        self.assertEqual([(title, str(path)) for _, title, path in s["notes"]], [("Badge idea", str(n))])
+        self.assertEqual(s["repo"], "~/code/badges")
+
+
+class DetailSections(unittest.TestCase):
+    """detail_sections(r): (heading, lines) under a project's or sub-project's fields: Sub-projects (a
+    project's open ones), Sessions, Handoffs, Notes, and Stats; none for headers and + New project."""
+    setUp_base, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    ui, readme = ProjectMarkers.ui, staticmethod(ProjectMarkers.readme)
+    handoffs, notes = SectionData.handoffs, SectionData.notes
+
+    def setUp(self):
+        self.setUp_base()
+        no_spend_reads(self)
+
+    @staticmethod
+    def row(ui, kind, rid):
+        return next(r for r in ui.project_rows() if r.kind == kind and r.item["id"] == rid)
+
+    def sections(self, ui, kind, rid):
+        return [(h, list(lines)) for h, lines in ui.detail_sections(self.row(ui, kind, rid))]
+
+    def section(self, ui, kind, rid, heading):
+        got = [lines for h, lines in self.sections(ui, kind, rid) if h == heading]
+        self.assertEqual(len(got), 1, (heading, self.sections(ui, kind, rid)))
+        return got[0]
+
+    @staticmethod
+    def spend(ui, rows):
+        """Spend data as load_stats leaves it, loaded."""
+        ui.sjob = {"state": "done", "at": time.time(), "data": {"rows": rows, "hours": {}, "tokens": {},
+                                                                 "unpriced": [], "priced": True}}
+
+    # which sections, in order
+
+    def test_headers_and_new_project_have_no_sections(self):
+        self.project("b", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        rows = [r for r in ui.project_rows() if r.kind in ("head", "new")]
+        self.assertEqual([r.kind for r in rows], ["head", "new"])
+        self.assertEqual([list(ui.detail_sections(r)) for r in rows], [[], []])
+
+    def test_a_projects_sections_in_order_with_sub_projects_only_when_it_has_open_ones(self):
+        self.project("rollout", self.readme(), handoffs=[TODAY()])
+        self.sub("rollout", "alpha")
+        self.project("plain", self.readme(), handoffs=[TODAY()])
+        self.project("finished", self.readme(), handoffs=[TODAY()])
+        self.sub("finished", "gamma", status="done")
+        ui = self.ui()
+        heads = lambda rid: [h for h, _ in self.sections(ui, "project", rid)]
+        self.assertEqual(heads("rollout"), ["Sub-projects", "Sessions", "Handoffs", "Notes", "Stats"])
+        ui.subs_open.add("rollout")  # opened in the sidebar: still listed
+        self.assertEqual(heads("rollout"), ["Sub-projects", "Sessions", "Handoffs", "Notes", "Stats"])
+        self.assertEqual(heads("plain"), ["Sessions", "Handoffs", "Notes", "Stats"])
+        self.assertEqual(heads("finished"), ["Sessions", "Handoffs", "Notes", "Stats"])  # only a done one
+
+    def test_a_sub_projects_sections_are_the_same_without_sub_projects(self):
+        self.project("rollout", self.readme(), handoffs=[TODAY()])
+        self.sub("rollout", "alpha")
+        ui = self.ui()
+        ui.subs_open.add("rollout")
+        self.assertEqual([h for h, _ in self.sections(ui, "sub", "rollout/alpha")], ["Sessions", "Handoffs", "Notes", "Stats"])
+
+    # 1. Sub-projects
+
+    def test_sub_projects_lines_give_marks_label_type_status_and_state(self):
+        self.project("rollout", self.readme(), handoffs=[TODAY()])
+        alpha = self.sub("rollout", "alpha", type="feature", status="active", sessions=[("Live", "cc3d0000-0000")])
+        (alpha / "README.md").write_text((alpha / "README.md").read_text().replace("\n# alpha\n", "\n# Badge Printers\n"))
+        handed = time.time() - 2 * 86400
+        self.sub("rollout", "beta", type="bugfix", status="blocked", handoffs=[(handoff_name(handed), "x")])
+        self.sub("rollout", "delta", type="research", status="waiting-on-vendor")
+        self.sub("rollout", "gamma", type="chore", status="done", handoffs=[(TODAY(), "x")])
+        ui = self.ui([dict(session("Live"), id="cc3d0000-0000")])
+        lines = self.section(ui, "project", "rollout", "Sub-projects")
+        self.assertEqual(len(lines), 3, lines)  # the open ones; gamma is done
+        subs = {s["slug"]: s for s in self.row(ui, "project", "rollout").item["subs"]}
+        line = {slug: next((l for l in lines if label in l), None)
+                for slug, label in (("alpha", "Badge Printers"), ("beta", "beta"), ("delta", "delta"))}
+        for slug, l in line.items():
+            self.assertIsNotNone(l, (slug, lines))
+            mark = ui.markers(roost.Row("Recent", "sub", subs[slug], 0))
+            self.assertIn(mark, l)
+            self.assertIn(subs[slug]["type"], l)
+            self.assertIn(subs[slug]["status"], l)
+        self.assertEqual([ui.markers(roost.Row("Recent", "sub", subs[s], 0)) for s in ("alpha", "beta", "delta")],
+                         ["●", "◆", ""])  # the fixture
+        self.assertIn("●", line["alpha"])
+        self.assertIn("running", line["alpha"])
+        self.assertIn("◆", line["beta"])
+        self.assertIn(f"ready · Handoff {roost.short_when(subs['beta']['handed'])}", line["beta"])
+        self.assertNotIn("running", line["beta"])
+        for word in ("running", "ready", "●", "◆"):
+            self.assertNotIn(word, line["delta"])
+
+    # 2. Sessions
+
+    def test_sessions_lists_running_then_closed_in_the_last_7_days_newest_first_at_most_5(self):
+        ids = [f"{i:02d}000000-0000" for i in range(8)]
+        self.project("b", self.readme(ids), handoffs=[TODAY()])
+        closed = lambda name, mins, sid: dict(session(name, state="closed", kind=None, mins=mins), id=sid, attach=None)
+        listed = [dict(session("Toner order", state="busy", mins=2), id=ids[0]),
+                  dict(session("Driver push", mins=4), id=ids[1]),
+                  closed("Badge audit", 10, ids[2]), closed("Cable survey", 600, ids[3]),
+                  closed("Paper restock", 3 * 1440, ids[4]), closed("Old fleet", 6 * 1440, ids[5]),
+                  closed("Ancient one", 8 * 1440, ids[6])]
+        ui = self.ui(listed + [dict(session("Not listed"), id="ff000000-0000")])
+        lines = self.section(ui, "project", "b", "Sessions")
+        want = listed[:5]  # the two running, then the three newest closed; Old fleet is cut by the 5
+        self.assertEqual(len(lines), 5, lines)
+        for l, s in zip(lines, want):
+            self.assertIn(s["name"], l)
+            self.assertIn(roost.short_when(s["last"]), l)
+        self.assertFalse([l for l in lines if "Ancient one" in l or "Not listed" in l], lines)
+
+    def test_running_sessions_come_before_newer_closed_ones(self):
+        ids = ["aa000000-0000", "bb000000-0000"]
+        self.project("b", self.readme(ids), handoffs=[TODAY()])
+        ui = self.ui([dict(session("Just closed", state="closed", kind=None, mins=1), id=ids[0], attach=None),
+                      dict(session("Still going", mins=90), id=ids[1])])
+        lines = self.section(ui, "project", "b", "Sessions")
+        self.assertEqual(len(lines), 2, lines)
+        self.assertIn("Still going", lines[0])
+        self.assertIn("Just closed", lines[1])
+
+    def test_sessions_says_none_in_the_last_7_days(self):
+        self.project("b", self.readme(["aa000000-0000"]), handoffs=[TODAY()])
+        self.project("c", self.readme(), handoffs=[TODAY()])
+        ui = self.ui([dict(session("Ancient one", state="closed", kind=None, mins=8 * 1440), id="aa000000-0000", attach=None)])
+        self.assertEqual(self.section(ui, "project", "b", "Sessions"), ["none in the last 7 days"])
+        self.assertEqual(self.section(ui, "project", "c", "Sessions"), ["none in the last 7 days"])
+
+    def test_a_sub_projects_sessions_are_its_own(self):
+        self.project("rollout", self.readme(["aa000000-0000"]), handoffs=[TODAY()])
+        self.sub("rollout", "alpha", sessions=[("Badge work", "cc000000-0000")])
+        ui = self.ui([dict(session("Parent work"), id="aa000000-0000"), dict(session("Badge work", mins=30), id="cc000000-0000")])
+        ui.subs_open.add("rollout")
+        lines = self.section(ui, "sub", "rollout/alpha", "Sessions")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("Badge work", lines[0])
+
+    # 3. Handoffs
+
+    def test_handoffs_lists_the_newest_5_each_its_time_then_its_title(self):
+        folder = self.project("b", self.readme())
+        now = time.time()
+        specs = [(now - (d + 1) * 86400, f"name: Handoff {d}\n") for d in range(6)]  # Handoff 0 is the newest
+        paths = self.handoffs(folder, list(reversed(specs)))
+        ui = self.ui()
+        lines = self.section(ui, "project", "b", "Handoffs")
+        self.assertEqual(len(lines), 5, lines)
+        for d, l in enumerate(lines):
+            when = roost.short_when(roost.handoff_time(next(p for p in paths if f"Handoff {d}" in p.read_text())))
+            self.assertIn(when, l)
+            self.assertIn(f"Handoff {d}", l)
+            self.assertLess(l.index(when), l.index(f"Handoff {d}"), l)
+        self.assertFalse([l for l in lines if "Handoff 5" in l])
+
+    def test_no_handoffs_yet(self):
+        self.project("b", self.readme())
+        ui = self.ui()
+        self.assertEqual(self.section(ui, "project", "b", "Handoffs"), ["No Handoffs yet"])
+
+    # 4. Notes
+
+    def test_notes_lists_the_newest_5_titles(self):
+        folder = self.project("b", self.readme(), handoffs=[TODAY()])
+        now = time.time()
+        self.notes(folder, [(f"n{i}.md", f"# Note {i}\n", now - i * 3600) for i in range(6)])  # Note 0 is the newest
+        ui = self.ui()
+        lines = self.section(ui, "project", "b", "Notes")
+        self.assertEqual(len(lines), 5, lines)
+        for i, l in enumerate(lines):
+            self.assertIn(f"Note {i}", l)
+        self.assertFalse([l for l in lines if "Note 5" in l])
+
+    def test_no_notes(self):
+        self.project("b", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        self.assertEqual(self.section(ui, "project", "b", "Notes"), ["No notes"])
+
+    # 5. Stats
+
+    def test_stats_this_months_spend_on_the_project_or_its_sessions_and_its_sessions_this_month(self):
+        listed = ["aa000000-0000", "bb000000-0000", "cc000000-0000"]
+        self.project("fleet", self.readme(listed).replace("# Title", "# Printer fleet"), handoffs=[TODAY()])
+        self.project("other", self.readme(), handoffs=[TODAY()])
+        start = month_start()
+        before = start - timedelta(days=1)
+        ui = self.ui([dict(session("This month"), id=listed[0]),
+                      dict(session("Early this month", state="closed", kind=None), id=listed[1], last=start.timestamp() + 60),
+                      dict(session("Last month", state="closed", kind=None), id=listed[2], last=before.timestamp())])
+        today, live = date.today().isoformat(), "Live work"  # days as gather_spend writes them
+        self.spend(ui, [(today, live, "zz000000-0000", "fleet", 1.25),          # by its id
+                        (today, live, "yy000000-0000", "Printer fleet", 2.00),  # by its label
+                        (today, live, listed[1], None, 0.75),                   # by a Session it lists
+                        (start.date().isoformat(), "Wrap-ups", listed[0], None, 0.50),      # the 1st counts
+                        (before.date().isoformat(), live, listed[0], "fleet", 9.00),        # last month
+                        (today, live, "xx000000-0000", "other", 4.00),          # another project
+                        (today, live, "ww000000-0000", None, 3.00)])            # a Session it doesn't list
+        lines = self.section(ui, "project", "fleet", "Stats")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(lines[0], r"This month\s+\$4\.50 · 2 Sessions")
+
+    def test_a_sub_projects_stats_are_its_own(self):
+        self.project("rollout", self.readme(), handoffs=[TODAY()])
+        self.sub("rollout", "alpha", sessions=[("A", "aa000000-0000"), ("B", "bb000000-0000")])
+        ui = self.ui([dict(session("A"), id="aa000000-0000"), dict(session("B", mins=30), id="bb000000-0000")])
+        ui.subs_open.add("rollout")
+        today = date.today().isoformat()
+        self.spend(ui, [(today, "Live work", "aa000000-0000", None, 0.40), (today, "Live work", "zz000000-0000", "rollout/alpha", 0.60),
+                        (today, "Live work", "yy000000-0000", "rollout", 5.00)])
+        self.assertRegex(self.section(ui, "sub", "rollout/alpha", "Stats")[0], r"This month\s+\$1\.00 · 2 Sessions")
+
+    def test_a_spend_row_with_no_day_is_skipped(self):
+        """local_day gives None for a timestamp it can't read: that row counts toward no month."""
+        self.project("fleet", self.readme(["aa000000-0000"]), handoffs=[TODAY()])
+        ui = self.ui([dict(session("A"), id="aa000000-0000")])
+        self.spend(ui, [(None, "Live work", "aa000000-0000", "fleet", 7.00),
+                        (date.today().isoformat(), "Live work", "aa000000-0000", "fleet", 0.25)])
+        self.assertRegex(self.section(ui, "project", "fleet", "Stats")[0], r"This month\s+\$0\.25 · ")
+
+    def test_stats_says_loading_until_spend_data_is_loaded(self):
+        self.project("b", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        self.assertFalse(hasattr(ui, "sjob"))  # the fixture: never loaded
+        self.assertEqual(self.section(ui, "project", "b", "Stats"), ["loading…"])
+        ui.sjob = {"state": "running", "at": time.time(), "data": None}  # the first read, still running
+        self.assertEqual(self.section(ui, "project", "b", "Stats"), ["loading…"])
+
+    # the Repo field
+
+    def test_a_repo_shows_as_a_field_when_the_readme_names_one(self):
+        repo = str(Path.home() / "code" / "printer-tools")
+        self.project("tools", self.readme().replace("status: active\n", f"status: active\nrepo: {repo}\n"), handoffs=[TODAY()])
+        self.project("plain", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        fields = SessionsField.fields(self, ui, "project", "tools")
+        self.assertIn(("Repo", roost.short(repo)), [(label, v) for label, v in fields])
+        self.assertTrue(roost.short(repo).startswith("~/"))  # the fixture: short() shortens it
+        self.assertNotIn("Repo", [label for label, _ in SessionsField.fields(self, ui, "project", "plain")])
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class SectionsOnScreen(unittest.TestCase):
+    """The detail pane at 120x40: the fields, then a blank line and each section, its heading bold and its
+    lines indented under it; a key-hints line at the pane's bottom; the Stats line fills in once spend loads."""
+    run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
+    select, keys, sidebar = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(ProjectRows.sidebar)
+    at, grab, SIZE, DESCRIPTION = staticmethod(TwoPanes.at), staticmethod(TwoPanes.grab), TwoPanes.SIZE, TwoPanes.DESCRIPTION
+    read_project = staticmethod(importlib.import_module("roost.core.projectdata").read_project)  # before the stand-ins
+
+    def setUp(self):
+        """TwoPanes' folder, plus on Printer fleet: a named Handoff, a note, and a repo; spend that names it."""
+        import threading, unittest.mock
+        TwoPanes.setUp(self)
+        fleet = self.root / "fleet"
+        (fleet / "handoffs" / handoff_name(time.time() - 86400, "cc000000")).write_text("---\nname: Toner check\n---\n\nDone.\n")
+        (fleet / "notes").mkdir()
+        (fleet / "notes" / "idea.md").write_text("# Driver shortlist\n")
+        readme = fleet / "README.md"
+        readme.write_text(readme.read_text().replace("status: awaiting-vendor\n", "status: awaiting-vendor\nrepo: ~/code/fleet-tools\n"))
+        p = next(p for p in self.projects if p["id"] == "fleet")
+        p.update(self.read_project(fleet, self.sessions))
+        self.release, self.reads = threading.Event(), []
+        self.release.set()
+        self.addCleanup(self.release.set)
+
+        def gather(table=None, now=None):
+            self.reads.append(1)
+            self.release.wait(10)
+            return {"rows": [(date.today().isoformat(), "Live work", "zz000000-0000", "fleet", 1.25)], "hours": {}, "tokens": {},
+                    "unpriced": [], "priced": True}
+        patcher = unittest.mock.patch.object(importlib.import_module("roost.core.statsdata"), "gather_spend", gather)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    async def loaded(pilot):
+        """Wait for the spend read to finish, then draw again."""
+        import asyncio
+        for _ in range(200):
+            job = getattr(pilot.app.ui, "sjob", None)
+            if job and job["state"] != "running":
+                break
+            await asyncio.sleep(0.01)
+        pilot.app.redraw()
+        await pilot.pause()
+
+    @staticmethod
+    def pane_bottom(lines):
+        """The last screen row the sidebar's border runs down to: the detail pane's bottom row."""
+        W = roost.SIDEBAR_W
+        return max(i for i, l in enumerate(lines) if len(l) >= W and l[W - 1] in "▕│┃▏")
+
+    def heading_at(self, bold, heading):
+        """(y, x) of the bold heading right of the sidebar."""
+        got = [(y, x) for y, x, t in bold if t == heading and x >= roost.SIDEBAR_W]
+        self.assertEqual(len(got), 1, (heading, bold))
+        return got[0]
+
+    def assert_under(self, lines, bold, heading, text, before=None):
+        """text is on a line under heading (and above the next heading, before), indented past it."""
+        y, x = self.heading_at(bold, heading)
+        stop = before or len(lines)
+        i = next((i for i in range(y + 1, stop) if text in lines[i][roost.SIDEBAR_W:]), None)
+        self.assertIsNotNone(i, (heading, text, lines[y:stop]))
+        self.assertGreater(lines[i].index(text, roost.SIDEBAR_W), x, (heading, lines[i]))
+        self.assertEqual(lines[y - 1][roost.SIDEBAR_W:].strip(), "", f"no blank line above {heading}")
+
+    def test_the_detail_pane_draws_each_section_under_the_fields(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet")], size=self.SIZE)
+        lines, bold = seen["fleet"]
+        W = roost.SIDEBAR_W
+        described = self.at(lines, TwoPanes.DESCRIPTION[:30])
+        self.assertIsNotNone(described, lines)
+        repo = next((l for l in lines if "~/code/fleet-tools" in l[W:]), "")
+        self.assertIn("Repo", repo[W:], lines)
+        heads = ["Sessions", "Handoffs", "Notes", "Stats"]
+        ys = [self.heading_at(bold, h)[0] for h in heads]
+        self.assertEqual(ys, sorted(ys), "the sections in order")
+        self.assertGreater(ys[0], described, "the sections come after the fields")
+        self.assertFalse([t for y, x, t in bold if t == "Sub-projects" and x >= W], "Printer fleet has no sub-projects")
+        nxt = dict(zip(heads, ys[1:] + [None]))
+        self.assert_under(lines, bold, "Sessions", "Printer fix", nxt["Sessions"])
+        self.assert_under(lines, bold, "Handoffs", "Toner check", nxt["Handoffs"])
+        self.assert_under(lines, bold, "Notes", "Driver shortlist", nxt["Notes"])
+        self.assert_under(lines, bold, "Stats", "This month", nxt["Stats"])
+        stats = next(l for l in lines[ys[3]:] if "This month" in l)
+        self.assertRegex(stats, r"This month\s+\$1\.25 · 1 Sessions?")
+
+    def test_a_projects_sub_projects_section_on_screen(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("rollout"), self.loaded, self.grab(seen, "rollout")], size=self.SIZE)
+        lines, bold = seen["rollout"]
+        y, _ = self.heading_at(bold, "Sub-projects")
+        sessions_y, _ = self.heading_at(bold, "Sessions")
+        self.assertLess(y, sessions_y, "Sub-projects comes first")
+        self.assert_under(lines, bold, "Sub-projects", "Badge Printers", sessions_y)
+        self.assert_under(lines, bold, "Sub-projects", "beta", sessions_y)
+        row = next(l for l in lines[y:sessions_y] if "Badge Printers" in l[roost.SIDEBAR_W:])
+        self.assertIn("running", row)
+        row = next(l for l in lines[y:sessions_y] if "beta" in l[roost.SIDEBAR_W:])
+        self.assertIn("ready · Handoff", row)
+
+    def test_the_pane_ends_with_a_key_hints_line(self):
+        seen = {}
+        W = roost.SIDEBAR_W
+        self.run_on(self.projects, [self.on_project("rollout"), self.grab(seen, "folded"), self.keys("right"),
+                                    self.grab(seen, "open"), self.on_project("fleet"), self.grab(seen, "none")], size=self.SIZE)
+        for when, want, never in (("folded", "→ sub-projects", "hide sub-projects"), ("open", "← hide sub-projects", "→ sub-projects"),
+                                  ("none", None, "sub-projects")):
+            lines = seen[when][0]
+            bottom = self.pane_bottom(lines)
+            self.assertGreater(bottom, 30, lines)  # the fixture: the pane runs down the screen
+            hints = lines[bottom][W:]
+            self.assertIn("enter actions", hints, (when, lines))
+            if want:
+                self.assertIn(want, hints, when)
+            self.assertNotIn(never, hints, when)
+            self.assertFalse([l for l in lines[bottom - 3:bottom] if "enter actions" in l[W:]], "one hints line, at the bottom")
+
+    def test_drawing_the_tab_starts_the_spend_read_and_stats_fill_in(self):
+        self.release.clear()  # the read waits until the test lets it finish
+        seen = {}
+
+        async def finish(pilot):
+            self.release.set()
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "loading"), finish, self.loaded,
+                                    self.grab(seen, "loaded")], size=self.SIZE)
+        self.assertTrue(self.reads, "drawing the Projects tab didn't start the spend read")
+        for when, want in (("loading", "loading…"), ("loaded", "This month")):
+            lines, bold = seen[when]
+            self.assert_under(lines, bold, "Stats", want)
+        self.assertFalse([l for l in seen["loaded"][0] if "loading…" in l])
 
 
 class StatusLine(unittest.TestCase):
