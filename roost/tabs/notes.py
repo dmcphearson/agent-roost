@@ -263,9 +263,16 @@ class NotesTab:
         return None
 
 
+# Laying out a whole long note in Textual's Markdown widget on every move through the list took about a
+# second a move for a 200-line note, holding up every key. In the list the card shows the note's start,
+# and only once the selection stops moving.
+NOTE_PREVIEW_LINES = 80  # lines of a note the card shows until → reads it
+NOTE_SETTLE = 0.15  # seconds the selection stays on a note before the card shows it
+
 if Region:
-    def note_markdown(r):
-        """What the reading card shows for a row: the note's Markdown, a line break where the file has one."""
+    def note_markdown(r, limit=None):
+        """What the reading card shows for a row: the note's Markdown, a line break where the file has one.
+        With limit, its first limit lines and how many more there are."""
         if r.get("head"):
             return f"*{r['head']}: {NOTE_SECTIONS[r['head']]}. Enter, a click, or → and ← open and close it.*"
         if r.get("new"):
@@ -279,6 +286,10 @@ if Region:
                 line = re.sub(r"^(\s*(?:[-*+]|\d+[.)])\s+)\[([ xX])\](?=\s)",
                               lambda m: m.group(1) + ("☐" if m.group(2) == " " else "☑"), line)
             out.append(line)
+        if limit is not None and len(out) > limit:
+            more = len(out) - limit
+            fence = sum(l.lstrip().startswith(("```", "~~~")) for l in out[:limit]) % 2  # cut inside a code block
+            out = out[:limit] + (["```"] if fence else []) + ["", f"*… {plural(more, 'more line')}: → reads the whole note*"]
         return "\n".join(out) or "*Empty. Enter, then Edit, to write it.*"
 
     def line_breaks(md):
@@ -386,14 +397,24 @@ if Region:
 
         def __init__(self):
             super().__init__(Markdown(parser_factory=lambda: line_breaks(MarkdownIt("gfm-like"))))
-            self.shown = None
+            self.shown = self.wanted = self.timer = None
 
-        def show(self, r):
-            """Show the note r, re-reading its Markdown only when it changed."""
-            key = (r.get("path"), r.get("last"), r.get("new"), r.get("head"))
-            if key != self.shown:
-                self.shown = key
-                self.app.call_later(self.query_one(Markdown).update, note_markdown(r))
+        def show(self, r, reading=False):
+            """Show the note r (its start, unless reading) once the selection has stayed on it for
+            NOTE_SETTLE, laying out its Markdown again only when it changed."""
+            key = (r.get("path"), r.get("last"), r.get("new"), r.get("head"), reading)
+            if key == self.wanted:
+                return
+            self.wanted = key
+            if self.timer:
+                self.timer.stop()
+
+            def render():
+                self.timer = None
+                if key != self.shown:
+                    self.shown = key
+                    self.query_one(Markdown).update(note_markdown(r, None if reading else NOTE_PREVIEW_LINES))
+            self.timer = self.set_timer(NOTE_SETTLE, render)
 
         def watch_scroll_y(self, old, new):  # the wheel, or a scrollbar drag: the screens keep track
             super().watch_scroll_y(old, new)
@@ -469,7 +490,7 @@ if Region:
             if not rows:
                 return
             reader = self.query_one(Reader)
-            reader.show(rows[ui.nsel])
+            reader.show(rows[ui.nsel], bool(ui.nreading))
             card = self.query_one(NoteCard)
             ui.npane = (card.region.y, card.region.x, card.region.height, card.region.width)
             ui.nroom = max(reader.size.height, 1)
