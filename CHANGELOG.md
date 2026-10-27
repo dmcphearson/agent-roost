@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Unfiled:** the first entry under your projects lists the Sessions no project lists and your notes, Recent or All, so each can be added to a project, made one, or let go
+- **Pick from a project's details:** tab moves into a project's details, where its sub-projects, Sessions, Handoffs, and notes each have their actions
 - **No more tabs:** the sidebar shows on every view, with your projects and then Sessions, Notes, and Stats, each shown in the right pane. Tab (or Enter on an entry) moves into the pane and Tab or Esc moves back. A click on the status bar's running count lists every running Session. roost opens where you left it
 - **Notes no longer lag:** moving through the Notes list shows a long note's first 80 lines (→ reads the whole note), and only once the selection stops, so long notes and recaps no longer hold up every key
 - **Projects in a sidebar:** the Projects tab lists projects in a sidebar, each marked ● when a Session runs in it and ◆ when it's ready to pick up, with the selected one's details beside it. The columns are gone; the details' Sessions field has the running and unwrapped counts. A status bar above the keys, on every tab, says how many Sessions are running
