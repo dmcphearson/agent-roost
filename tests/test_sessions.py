@@ -25,24 +25,69 @@ class Sections(unittest.TestCase):
         rows = [session("zeta", kind="interactive"), session("alpha"), session("mid", pinned=True)]
         for col in roost.SORTS:
             for desc in (False, True):
-                got = roost.visible(rows, ALL, "", (col, desc))
+                got = roost.visible(rows, RUNNING, "", (col, desc))  # all three are running
                 self.assertEqual([roost.group(s) for s in got], sorted(roost.group(s) for s in got), (col, desc))
 
 
 class Sorting(unittest.TestCase):
     def test_default_is_most_recent_first(self):
-        rows = roost.visible([session("old", mins=50), session("new", mins=1)], ALL, "")
+        rows = roost.visible([session("old", mins=50), session("new", mins=1)], RUNNING, "")
         self.assertEqual([s["name"] for s in rows], ["new", "old"])
 
     def test_sort_by_context_descending(self):
         rows = [session("small", tokens=10), session("big", tokens=900)]
-        got = roost.visible(rows, ALL, "", ("CONTEXT", True))
+        got = roost.visible(rows, RUNNING, "", ("CONTEXT", True))
         self.assertEqual([s["name"] for s in got], ["big", "small"])
 
     def test_sort_by_name_ascending_ignores_case(self):
         rows = [session("bravo"), session("Alpha")]
-        got = roost.visible(rows, ALL, "", ("NAME", False))
+        got = roost.visible(rows, RUNNING, "", ("NAME", False))
         self.assertEqual([s["name"] for s in got], ["Alpha", "bravo"])
+
+
+class Views(unittest.TestCase):
+    """The Sessions entry is a simple history: Running and Closed, and nothing else."""
+    def test_the_views_are_running_then_closed(self):
+        self.assertEqual(roost.VIEWS, ["Running", "Closed"])
+
+    def test_every_session_is_in_exactly_one_view(self):
+        """Running: every Session that isn't closed, and one roost is wrapping up (keep). Closed: every
+        other closed Session, however long ago it closed and however big it is."""
+        now = time.time()
+        rows = [session("idle"), session("asks", state="waiting"), session("works", state="busy"),
+                dict(session("wrapping", state="closed", kind=None), id="keep-0000"),
+                session("just closed", state="closed", kind=None),
+                session("closed weeks ago", state="closed", kind=None, mins=60 * 24 * 40),
+                dict(session("big and cold", state="closed", kind=None, tokens=900_000), last=now - 9 * 86400)]
+        keep = {"keep-0000"}
+        running, closed = roost.VIEWS.index("Running"), roost.VIEWS.index("Closed")
+        for s in rows:
+            views = [roost.VIEWS[i] for i in range(len(roost.VIEWS)) if roost.in_view(s, i, keep)]
+            want = "Closed" if s["state"] == "closed" and s["id"] not in keep else "Running"
+            self.assertEqual(views, [want], s["name"])
+        self.assertEqual({s["name"] for s in roost.visible(rows, running, "", keep=keep)}, {"idle", "asks", "works", "wrapping"})
+        self.assertEqual({s["name"] for s in roost.visible(rows, closed, "", keep=keep)},
+                         {"just closed", "closed weeks ago", "big and cold"})
+
+    def test_closed_lists_newest_first_under_the_default_sort(self):
+        rows = [session("middle", state="closed", kind=None, mins=60 * 24 * 3),
+                session("newest", state="closed", kind=None, mins=5),
+                session("oldest", state="closed", kind=None, mins=60 * 24 * 30), session("running", mins=1)]
+        got = roost.visible(rows, roost.VIEWS.index("Closed"), "")
+        self.assertEqual([s["name"] for s in got], ["newest", "middle", "oldest"])
+
+    def starting_view(self, sessions):
+        """The view setup() opens Sessions on, by its label."""
+        import unittest.mock
+        ui = object.__new__(roost.UI)
+        with unittest.mock.patch.multiple(roost, read_config=lambda: {}):
+            ui.setup(sessions, "")
+        return roost.VIEWS[ui.view]
+
+    def test_roost_opens_sessions_on_running_when_one_is_running_else_on_closed(self):
+        closed = [session("gone", state="closed", kind=None), session("long gone", state="closed", kind=None, mins=60 * 24 * 20)]
+        self.assertEqual(self.starting_view(closed + [session("live", state="waiting")]), "Running")
+        self.assertEqual(self.starting_view(closed), "Closed")
 
 
 class Search(unittest.TestCase):
@@ -261,15 +306,9 @@ class Governor(unittest.TestCase):
         closed = self.sess(id="old", state="closed", kind=None, last=now - 120)
         self.assertEqual(roost.SECTIONS[roost.group(wrapping, keep={"abc"})], "Wrapping up")
         self.assertEqual(roost.SECTIONS[roost.group(wrapping)], "Closed")  # once the run ends, it moves to Closed
-        rows = roost.visible([wrapping, bg, closed], ALL, "", keep={"abc"})
-        self.assertEqual([s["id"] for s in rows], ["bg", "old", "abc"])
+        rows = roost.visible([wrapping, bg, closed], CLOSED, "", keep={"abc"})
+        self.assertEqual([s["id"] for s in rows], ["old"])  # while roost wraps it up it counts as running, not closed
         self.assertEqual([s["id"] for s in roost.visible([wrapping, bg, closed], RUNNING, "", keep={"abc"})], ["bg", "abc"])
-
-    def test_stale_tab(self):
-        i = roost.VIEWS.index("Stale")
-        old = time.time() - 3 * 86400
-        self.assertTrue(roost.in_view(self.sess(last=old), i))
-        self.assertFalse(roost.in_view(self.sess(last=time.time()), i))
 
     def test_parse_reads_cache_lifetime_and_times(self):
         recs = [{"type": "user", "uuid": "u1", "timestamp": "2026-10-06T10:00:00.000Z"},
@@ -757,7 +796,7 @@ class SubProjectSessions(unittest.TestCase):
 
     def test_project_search_matches_a_sub_projects_sessions_by_its_id_or_its_parents(self):
         ui = self.fixture()
-        ui.view, ui.sort, ui.summaries, ui.update_note, ui.warning = ALL, ("LAST ACTIVE", True), {}, "", ""
+        ui.view, ui.sort, ui.summaries, ui.update_note, ui.warning = RUNNING, ("LAST ACTIVE", True), {}, "", ""  # the fixture's are all running
         ui.DIM = ui.GREEN = ui.YELLOW = ui.RED = ui.CYAN = ui.ACCENT = 0
         ui.scr = type("Screen", (), {"getmaxyx": lambda self: (40, 120)})()  # draw_sessions only asks its size
         for q, want in [("project:rollout/alpha", {"cc3d0000-1111"}), ("project:rollout", {"cc3d0000-1111", "aa1b9a71-0000"})]:
@@ -1060,7 +1099,7 @@ class SessionColumns(unittest.TestCase):
 
         async def where(pilot):
             seen["x"] = pilot.app.query_one(roost.SessionList).region.x
-        lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", ALL)), where], size=(160, 30), tab="Sessions").lines
+        lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", CLOSED)), where], size=(160, 30), tab="Sessions").lines
         lines = [l[seen["x"]:] for l in lines]  # the list's part of each line, right of the sidebar
         h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
         x = self.starts(lines[h])
