@@ -320,7 +320,7 @@ class SessionsTab:
         self.refresh()
 
     SESSIONS_HELP = [
-        ("Views", "Running · Recently closed (3 hours) · Closed · Stale (big, untouched 2 days) · All"),
+        ("Views", "←→ Running · Closed (newest first)"),
         ("Sort", "click a column header to sort by it, again to reverse"),
         ("Status", "● working · ◆ needs input · ○ idle · ◔ expires in 8m: next prompt cheap 8 more min · ✕ cache expired: costs ~2× · ○ compacted: small again · ✓ wrapped up: its Handoff or recap has it all"),
     ]
@@ -544,7 +544,7 @@ class SessionsTab:
 
 if Region:
     class ViewRow(Region):
-        """Running · Recently closed · All, each with its count, then the search."""
+        """Running and Closed, each with its count, then the search."""
         def lines(self):
             ui = self.ui
             row, x, ui.tabs = self.line(), TAB_X - 1, []  # each view's label starts with a space, as the tab names do

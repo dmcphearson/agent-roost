@@ -458,8 +458,10 @@ class ProjectsTab:
         return f"This month  ${cache[key]:.2f} · {plural(n, 'Session')}"
 
     def show_sessions(self, p):
-        """The Sessions tab, on All, searching for project:<id>: exactly the Sessions p lists. Esc clears it."""
-        self.view, self.query, self.sel, self.top, self.searching = VIEWS.index("All"), f"project:{p['id']}", 0, 0, False
+        """The Sessions entry searching for project:<id>: exactly the Sessions p lists, on Running if one of
+        them runs, else Closed. Esc clears it."""
+        view = VIEWS.index("Running" if any(s["state"] != "closed" for s in self.linked(p)) else "Closed")
+        self.view, self.query, self.sel, self.top, self.searching = view, f"project:{p['id']}", 0, 0, False
         self.switch_tab([t.name for t in self.TABS].index("Sessions"))
         return None
 

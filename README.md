@@ -67,7 +67,7 @@ Clone this repo and run `./dev-link.sh`. It links `~/.local/bin/roost` and `~/.r
 
 ### Views and sections
 
-Tabs: **Running**, **Recently closed** (last 3 hours), **Closed**, **Stale**, and **All**. **Stale** lists sessions over 150k tokens that nobody has touched in 2 days or more. Their knowledge belongs in files, not in a session you pay to rebuild. Running sessions are grouped into:
+Sessions has two views: **Running** and **Closed** (newest first, a history to dig through). Running sessions are grouped into:
 
 - **Open**: a terminal window has the session
 - **Pinned**: running in the background and never closed for being idle
@@ -84,7 +84,7 @@ roost is a sidebar and a right pane. The sidebar lists your projects, then Sessi
 | ↑ ↓ | Move |
 | Page Up, Page Down / Option+↑ ↓ | Move a screen |
 | Home / End | Top / bottom |
-| ← → | Sessions: switch views (Running, Recently closed, Closed, Stale, All) · Projects: open or close a section · Notes: read the note |
+| ← → | Sessions: switch views (Running, Closed) · Projects: open or close a section · Notes: read the note |
 | Enter / right-click | Open the selected row's actions |
 | Double-click | Run the row's first action: open a Session, start one for a project, or edit a note |
 | / | Search the view in the right pane |

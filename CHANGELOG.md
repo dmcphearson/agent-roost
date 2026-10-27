@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Sessions is Running and Closed:** two views instead of five. Closed lists every closed Session, newest first; Recently closed, Stale, and All are gone. A project's Show its Sessions opens on Running when one of its Sessions runs, else on Closed
 - **Unfiled:** the first entry under your projects lists the Sessions no project lists and your notes, Recent or All, so each can be added to a project, made one, or let go
 - **Pick from a project's details:** tab moves into a project's details, where its sub-projects, Sessions, Handoffs, and notes each have their actions
 - **No more tabs:** the sidebar shows on every view, with your projects and then Sessions, Notes, and Stats, each shown in the right pane. Tab (or Enter on an entry) moves into the pane and Tab or Esc moves back. A click on the status bar's running count lists every running Session. roost opens where you left it

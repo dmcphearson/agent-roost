@@ -16,8 +16,7 @@ JOBS = Path.home() / ".claude" / "jobs"
 PINS = JOBS / "pins.json"
 HOME = str(Path.home())
 TITLE_KEYS = ('"agent-name"', '"custom-title"', '"ai-title"')
-VIEWS = ["Running", "Recently closed", "Closed", "Stale", "All"]
-RECENT_HOURS = 3
+VIEWS = ["Running", "Closed"]
 STATE_ORDER = {"waiting": 0, "blocked": 0, "busy": 1, "opening": 1, "watching": 2, "idle": 2, "live": 2, "closed": 3}
 
 
