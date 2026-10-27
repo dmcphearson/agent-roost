@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Notes no longer lag:** moving through the Notes list shows a long note's first 80 lines (→ reads the whole note), and only once the selection stops, so long notes and recaps no longer hold up every key
 - **Projects in a sidebar:** the Projects tab lists projects in a sidebar, each marked ● when a Session runs in it and ◆ when it's ready to pick up, with the selected one's details beside it. The columns are gone; the details' Sessions field has the running and unwrapped counts. A status bar above the keys, on every tab, says how many Sessions are running
 - **Project details:** under a project's fields, its open sub-projects and their state, its recent Sessions, newest Handoffs, notes, and this month's spend, with the keys at the bottom
 - **Sub-projects:** a project's work splits into sub-projects (feature, bugfix, research, chore) in its `sub/` folder, each with its own README and Handoffs. `roost project new <project>/<slug> --type <type>` makes one; picking one up reads the parent project's README first, then the sub-project's own, then the project's other open sub-projects; wrap-up writes into the sub-project; `roost project list` shows them under their project. On the Projects tab, → shows a project's open sub-projects under it and ← hides them; a project's actions add New sub-project and Start a Session in a sub-project, and search finds sub-projects (`type:bugfix` by type). Sessions know their sub-project: PROJECT, `project:` search, and Add to or Move to a project
