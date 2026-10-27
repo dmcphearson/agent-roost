@@ -173,19 +173,13 @@ if Widget:
             return [row]
 
     class TopBar(Region):
-        """The top row: Agent Roost, the tabs (the current one in green), and the tab's own note at the right."""
+        """The top row: Agent Roost, and the view's own note at the right."""
         NAME = "Agent Roost"
 
         def lines(self):
             ui, w = self.ui, self.size.width
             row = self.line()
             row.put(1, self.NAME, curses.A_BOLD | ui.ACCENT)
-            x, ui.tab_x = len(self.NAME) + 3, []
-            for i, tab in enumerate(ui.TABS):
-                label = f" {tab.name} "
-                ui.tab_x.append((x, x + len(label), i))
-                row.put(x, label, curses.A_REVERSE | curses.A_BOLD if i == ui.tab else ui.DIM)
-                x += len(label) + 1
             text, attr = getattr(ui, "corner", None) or ("", 0)
             if text:
                 row.put(w - len(text) - 2, text, attr)
@@ -203,6 +197,14 @@ if Widget:
                 row.put(2, clip(left, w - len(right) - 6), ui.YELLOW | curses.A_BOLD)
             row.put(w - len(right) - 3, right, ui.DIM)
             return [row]
+
+        def on_click(self, event):
+            """A click on the running count lists every running Session."""
+            event.stop()
+            right = self.ui.status_line()[1]
+            if event.x >= self.size.width - len(right) - 3:
+                self.ui.open_running()
+                self.app.redraw()
 
     class KeyBar(Region):
         """The bottom rows: each key in green, what it does in grey, and the message or warning at the

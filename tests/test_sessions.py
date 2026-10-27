@@ -464,6 +464,7 @@ class StartingSessions(unittest.TestCase):
     def open_here(self, ui):
         """Enter on the Sessions tab's only Session, then enter on Open here, through dispatch."""
         ui.tab, ui.view, ui.top, ui.quit_anyway = 1, 0, 0, False
+        ui.focus = "pane"  # the Sessions view focused, so enter goes to it
         ui.dispatch("enter", ui.sessions)
         opts = ui.choosing["options"]
         ui.choosing["sel"] = next(i for i, (l, _) in enumerate(opts) if l == "Open here")
@@ -934,8 +935,9 @@ class SessionColumns(unittest.TestCase):
         return [self.proj("p1", self.sessions[:2], label=label)]
 
     def drawn(self, projects, w, sort=None, config=None):
-        """The Sessions tab w wide: its lines, the list's lines (header first), the list's width, and
-        each Session's status text, LAST ACTIVE value and PROJECT label as roost works them out."""
+        """The Sessions view in a pane w wide (the window w + SIDEBAR_W): its lines from the list's left
+        edge, the list's lines (header first), the list's width, and each Session's status text, LAST
+        ACTIVE value and PROJECT label as roost works them out."""
         seen = {}
 
         async def look(pilot):
@@ -945,8 +947,10 @@ class SessionColumns(unittest.TestCase):
             pilot.app.redraw()
             await pilot.pause()
             seen["list"] = pilot.app.query_one(roost.SessionList).region.width
+            seen["x"] = pilot.app.query_one(roost.SessionList).region.x
             seen["cells"] = {s["name"]: (ui.status_cell(s)[0], roost.ago(s), s.get("proj") or "") for s in ui.srows}
-        lines = self.run_on(projects, [look], size=(w, 30), tab="Sessions", config=config).lines
+        lines = self.run_on(projects, [open_view("Sessions"), look], size=(w + roost.SIDEBAR_W, 30), tab="Sessions", config=config).lines
+        lines = [l[seen["x"]:] for l in lines]  # the list's part of each line
         h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
         edge = next(i for i in range(h + 1, len(lines)) if lines[i].strip() and set(lines[i].strip()) == {"─"})
         return lines[h:edge], seen["list"], seen["cells"]
@@ -1051,7 +1055,12 @@ class SessionColumns(unittest.TestCase):
         old = dict(session("Old printer audit", state="closed", kind=None, mins=120), attach=None)
         self.sessions = self.sessions + [old]
         proj = self.proj("printer-fleet", [old], covered=[old])
-        lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", ALL))], size=(160, 30), tab="Sessions").lines
+        seen = {}
+
+        async def where(pilot):
+            seen["x"] = pilot.app.query_one(roost.SessionList).region.x
+        lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", ALL)), where], size=(160, 30), tab="Sessions").lines
+        lines = [l[seen["x"]:] for l in lines]  # the list's part of each line, right of the sidebar
         h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
         x = self.starts(lines[h])
         row = next(l for l in lines[h + 1:] if "Old printer audit" in l)

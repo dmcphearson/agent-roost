@@ -38,6 +38,7 @@ class Notes(unittest.TestCase):
         ui.term, ui.tab, ui.helping, ui.sel, ui.query, ui.warning = "ghostty", 2, False, 0, "", ""
         ui.nsel, ui.ntop, ui.nrow_y, ui.nquery, ui.quit_anyway, ui.nfolded = 0, 0, {}, "", False, {"Recaps"}
         ui.nreading, ui.nscroll, ui.npane, ui.nlist_w, ui.TABS = False, 0, (4, 40, 10, 40), 200, roost.UI.TABS
+        ui.focus = "pane"  # the Notes view shown (tab 2) and focused, so the keys go to it
         ui.edited = []
         ui.edit = lambda path: ui.edited.append(path)  # no editor in tests
         return ui
@@ -457,6 +458,7 @@ class NoteCardRendering(unittest.TestCase):
             return real(md, text)
         patches = [unittest.mock.patch.object(Markdown, "update", spy),
                    unittest.mock.patch.multiple(roost, read_config=lambda: {"tab": "Notes"})]
+        steps = [open_view("Notes")] + list(steps)  # roost starts on the sidebar's Notes entry: the keys go to its pane
         if settle is not None:
             # in the module that defines it; create: before the fix there's none, and the test fails on what the card does
             patches.append(unittest.mock.patch.object(importlib.import_module("roost.tabs.notes"), "NOTE_SETTLE", settle, create=True))

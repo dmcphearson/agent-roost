@@ -122,7 +122,7 @@ class ProjectSpendCard(unittest.TestCase):
             async def go():
                 async with app.run_test(size=size) as pilot:
                     await pilot.pause()
-                    await pilot.press("tab", "tab", "tab")
+                    await open_view("Stats")(pilot)
                     await pilot.pause()
                     await look(pilot)
             asyncio.run(go())

@@ -84,6 +84,26 @@ def bold_text(app):
     return out
 
 
+ENTRIES = ("Sessions", "Notes", "Stats")  # the sidebar's entries, under the projects, top to bottom
+
+
+def open_view(name):
+    """A pilot step that shows the view name in the right pane, as the sidebar does. An entry (Sessions,
+    Notes, Stats): ui.open_entry(name) selects it and focuses the pane, so the keys that follow go to
+    that view. Projects: the focus goes back to the sidebar and home puts its selection on the top row."""
+    async def step(pilot):
+        ui = pilot.app.ui
+        if name == "Projects":
+            ui.focus = "side"
+            pilot.app.redraw()
+            await pilot.press("home")
+        else:
+            ui.open_entry(name)
+            pilot.app.redraw()
+        await pilot.pause()
+    return step
+
+
 def session(name, state="idle", kind="background", pinned=False, attached=False, mins=0, tokens=0, cwd="/tmp"):
     sid = f"{abs(hash(name)) % 16**8:08x}-test"
     return {"id": sid, "name": name, "state": state, "kind": kind, "pinned": pinned, "attached": attached,

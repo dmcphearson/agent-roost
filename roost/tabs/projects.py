@@ -19,7 +19,8 @@ from roost.core.adopt import (
     plan_problems,
 )
 from roost.core.formatting import clip, plain_text, short, short_when, slug
-from roost.app.shell import BAR_KEYS, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES, first_action, grouped
+from roost.app.shell import (BAR_KEYS, ENTRIES, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES, SIDEBAR_W,
+                             first_action, grouped)
 from roost.core.config import VIEWS
 from roost.app.widgets import Widget
 from roost.core import config
@@ -31,7 +32,6 @@ from roost.core import summaries
 from roost.core import terminals
 from roost.core import adopt as adopting
 
-SIDEBAR_W = 34  # the Projects sidebar's columns; the detail pane takes the rest
 
 if Widget:
     from textual.containers import Horizontal, Vertical
@@ -831,6 +831,8 @@ class ProjectsTab:
         r = rows[self.psel] if rows and self.psel < len(rows) else None
         if isinstance(k, tuple):
             _, mx, my, bstate = k
+            if mx >= SIDEBAR_W:  # the detail pane has nothing to click yet
+                return None
             if my in self.prow_y:
                 idx = self.prow_y[my]
                 how = self.click(k, idx)
@@ -867,11 +869,14 @@ class ProjectsTab:
 
 if Region:
     class ProjectList(Region):
-        """The sidebar: the sections and their projects, each with its marks at the right."""
+        """The sidebar, on every view: the sections and their projects, each with its marks at the right,
+        then the entries (Sessions, Notes, Stats) whose views show in the right pane."""
         def lines(self):
             ui, w, y0 = self.ui, self.size.width, self.region.y
             rows = getattr(ui, "prows", [])
-            page = ui.page = max(self.size.height - 1, 1)  # the position at the bottom
+            page = max(self.size.height - 1 - (len(ENTRIES) + 1), 1)  # the position, a blank line, and the entries
+            if ui.tab == 0:
+                ui.page = page
             lines = ui.project_lines(rows, page)
             out = []
             if not rows:
@@ -887,11 +892,11 @@ if Region:
                     continue
                 r = rows[idx]
                 ui.prow_y[y0 + i] = idx
-                hl = idx == ui.psel
+                hl = idx == ui.psel and not ui.entry
                 look = ui.selected if hl else (lambda a: a)
                 if hl:
                     row.put(0, " " * (w - 1), look(0))
-                    row.put(0, "›", look(curses.A_BOLD | ui.ACCENT))
+                    row.put(0, "›", look(curses.A_BOLD | (ui.ACCENT if ui.focus == "side" else ui.DIM)))
                 if r.kind == "head":
                     label = f"{'▸' if r.sec in ui.folded else '▾'} {r.sec} ({r.item['count']}) "
                     row.put(2, clip(label, w - 3), look(curses.A_BOLD | (ui.ACCENT if r.sec == "Recent" else 0)))
@@ -913,11 +918,27 @@ if Region:
                 if marks:
                     row.put(w - 1 - len(marks), marks, look(ui.ACCENT))
             if len(lines) > page:
-                while len(out) < self.size.height - 1:
+                while len(out) < page:
                     out.append(self.line())
                 pos = self.line()
                 pos.put(w - 10, f"{ui.psel + 1}/{len(rows)}", ui.DIM)
                 out.append(pos)
+            out.append(self.line())
+            ui.entry_y = {}
+            counts = {"Sessions": sum(s["state"] != "closed" for s in ui.sessions), "Notes": len(ui.notes or [])}
+            for name in ENTRIES:
+                row = self.line()
+                ui.entry_y[y0 + len(out)] = name
+                on = name == ui.entry
+                look = ui.selected if on else (lambda a: a)
+                if on:
+                    row.put(0, " " * (w - 1), look(0))
+                    row.put(0, "›", look(curses.A_BOLD | (ui.ACCENT if ui.focus == "side" else ui.DIM)))
+                row.put(2, name, look(curses.A_BOLD if on else 0))
+                if counts.get(name):
+                    n = str(counts[name])
+                    row.put(w - 2 - len(n), n, look(ui.DIM))
+                out.append(row)
             if all(r.kind == "new" for r in rows):  # no projects (or none matching): just + New project, or nothing
                 wren_below(self, out)
             return out
@@ -962,18 +983,12 @@ if Region:
             return out
 
     class ProjectsView(Vertical):
-        """The Projects tab: the search row, then the sidebar and the detail pane side by side."""
-        DEFAULT_CSS = f"""
-        ProjectsView Horizontal {{ height: 1fr; }}
-        ProjectsView ProjectList {{ width: {SIDEBAR_W}; height: 1fr; border-right: vkey #2c313a; }}
-        ProjectsView ProjectPanel {{ width: 1fr; height: 1fr; padding: 0 0 0 1; }}
-        """
+        """A project's view in the right pane: the search row, then the selected row's details."""
+        DEFAULT_CSS = "ProjectsView ProjectPanel { height: 1fr; padding: 0 0 0 1; }"
 
         def compose(self):
             yield SearchRow()
-            with Horizontal():
-                yield ProjectList()
-                yield ProjectPanel()
+            yield ProjectPanel()
 
 else:
     ProjectsView = None

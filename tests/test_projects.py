@@ -103,6 +103,7 @@ class Projects(unittest.TestCase):
         ui.folded, ui.expanded = {"Inactive", "Closed"}, set()
         ui.choosing = ui.confirm = ui.term = None
         ui.summaries, ui.plugin_ok = {}, True
+        ui.focus = "side"  # as roost starts: the keys go to the sidebar
         ui.load_projects()
         return ui
 
