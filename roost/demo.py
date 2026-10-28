@@ -129,6 +129,17 @@ DEMO_LABELS = {  # each README's heading: the name the screens show
     "2026-10-asset-inventory": "Asset inventory", "2026-09-data-sharing-cleanup": "Shared link cleanup",
     "2026-07-endpoint-encryption": "Laptop encryption"}
 DEMO_WRAPPED = {10, 16, 19, 20, 21, 22}  # closed Sessions whose project's newest Handoff covers their last message
+DEMO_README = {  # a README's Current state and Next, and its newest Handoff's first lines
+    "2026-10-access-review-q4": (
+        "12 of 17 apps reviewed. Removals filed for 9 accounts; 3 owners still owe sign-off on finance tools.",
+        "Chase the 3 finance sign-offs, then export the evidence pack for the auditors.",
+        ["Reviewed the CRM, wiki, and payroll exports.", "Filed removal tickets for 9 stale accounts.",
+         "Flagged 2 shared logins to replace with SSO."]),
+    "2026-09-backup-restore-drill": (
+        "File server restored in 4h 10m, inside the 12-hour target. The database restore failed on a missing key.",
+        "Rotate the backup encryption key into the vault, then rerun the database restore.",
+        ["Restored the file server to a scratch VM.", "Timed each step against the runbook."]),
+}
 DEMO_NOT_ADOPTED = {"2026-09-data-sharing-cleanup"}  # no handoffs/ yet: its actions offer Adopt it
 DEMO_CATEGORIES = {"2026-10-access-review-q4": "access", "2026-09-vendor-security-reviews": "vendors",
                    "2026-09-backup-restore-drill": "hardening", "2026-08-network-refresh": "infrastructure",
@@ -201,7 +212,8 @@ def demo_projects(sessions):
                     "handoffs": [(now - hours * 3600, next((s["name"] for s in sessions if s["id"] in sids), "Handoff"),
                                   f"{HOME}/.roost/projects/{pid}/handoffs/demo.md")]
                     if hours is not None else [],
-                    "notes": [], "repo": "", "subs": []})
+                    "notes": [], "repo": "", "subs": [],
+                    **dict(zip(("state", "next", "handoff_lines"), DEMO_README.get(pid, ("", "", [])))) })
     return out
 
 

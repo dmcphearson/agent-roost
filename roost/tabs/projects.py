@@ -629,7 +629,7 @@ class ProjectsTab:
                        self.YELLOW | curses.A_BOLD if self.projects is None else self.DIM)
         self.subhead = None
         self.pcolumn = self.column_x(w - SIDEBAR_W, r)
-        self.pname, self.pfields = self.panel_of(r, h, self.pcolumn or w - SIDEBAR_W)
+        self.pname, self.pfields = self.panel_of(r, h, self.pcolumn - 3 if self.pcolumn else w - SIDEBAR_W)  # the left column's width
         self.pstatus = self.name_note(r)
         self.key_bar(BAR_KEYS.replace("←→ views", "←→ open/close"), self.msg or self.warning, self.ACCENT | curses.A_BOLD)
         return rows
