@@ -33,6 +33,14 @@ from roost.core import terminals
 from roost.core import adopt as adopting
 
 
+RECENT_ROWS = 10  # the sidebar lists this many open projects, the most recently worked; All projects has every one
+
+
+def newest(ps):
+    """Projects by when they were last worked, newest first; never-worked ones last."""
+    return sorted(ps, key=lambda p: (p["last"] is None, -(p["last"] or 0)))
+
+
 if Widget:
     from textual.containers import Horizontal, Vertical
     from roost.app.widgets import Region, SearchRow, wren_below
@@ -42,6 +50,9 @@ else:
 
 class ProjectsTab:
     """The Projects tab."""
+
+    # All projects: its search, its selected project, whether → opened that one's detail, and its rows' screen y
+    aquery, asel, adetail, arow_y, drow = "", 0, False, {}, None
 
     # roost adopt, from a project's actions: plan (one model call, in the background), read and edit
     # the plan in the editor, apply it, then write Handoffs for the Sessions it lists. Each step asks.
@@ -489,25 +500,74 @@ class ProjectsTab:
             open_ = [s for s in p.get("subs") or [] if not s["closed"]]
             return [s for s in open_ if hit("sub", s)] if q else open_ if p["id"] in self.subs_open else []
 
+        every = ps
         ps = [p for p in ps if hit("project", p) or (q and subs(p))]
-        sections = [  # one list: Closed comes last, folded until opened
-            ("Recent", [("project", p) for p in ps if not p["closed"] and (p["last"] or 0) >= cutoff]),
-            ("Inactive", [("project", p) for p in ps if not p["closed"] and (p["last"] or 0) < cutoff]),
-            ("Closed", [("project", p) for p in ps if p["closed"]]),
-        ]
+        open_ = newest(p for p in ps if not p["closed"])
         rows = []
-        for sec, items in sections:
-            if not items:
-                continue
-            rows.append(Row(sec, "head", {"id": sec, "count": len(items)}, 0))
-            if sec in self.folded and not q:
-                continue
-            for kind, item in items:
-                rows.append(Row(sec, kind, item, 0))
-                rows += [Row(sec, "sub", s, 0) for s in subs(item)]
+        for p in open_ + newest(p for p in ps if p["closed"]) if q else open_[:RECENT_ROWS]:
+            sec = "Closed" if p["closed"] else "Recent"
+            rows.append(Row(sec, "project", p, 0))
+            rows += [Row(sec, "sub", s, 0) for s in subs(p)]
         if not q:
+            if every:
+                rows.append(Row("All", "all", {"id": "All projects", "count": len(every)}, 0))
             rows.append(Row("New", "new", {"id": "+ New project"}, 0))
         return rows
+
+    def all_sections(self):
+        """The All projects view's sections, each (name, projects) newest first: Active (worked in the last
+        RECENT_PROJECT_DAYS days), Inactive, then Closed; the ones with nothing in them left out. Its own
+        search (/) keeps the projects whose name, description, tags, or folder holds it."""
+        cutoff, q = time.time() - RECENT_PROJECT_DAYS * 86400, self.aquery.lower()
+
+        def hit(p):
+            fields = [p.get("id"), p.get("label"), p.get("summary"), p.get("category"), " ".join(p.get("tags") or []), p.get("path")]
+            return not q or any(q in (f or "").lower() for f in fields)
+        ps = [p for p in self.projects or [] if hit(p)]
+        secs = [("Active", newest(p for p in ps if not p["closed"] and (p["last"] or 0) >= cutoff)),
+                ("Inactive", newest(p for p in ps if not p["closed"] and (p["last"] or 0) < cutoff)),
+                ("Closed", newest(p for p in ps if p["closed"]))]
+        return [(name, xs) for name, xs in secs if xs]
+
+    def all_items(self):
+        """The All projects view's projects, in the order it lists them."""
+        return [p for _, xs in self.all_sections() for p in xs]
+
+    def detail_row(self, rows):
+        """The row the detail pane shows: the sidebar's selected row, or on All projects the project → opened
+        there (None while its list shows)."""
+        if self.entry == "All projects":
+            items = self.all_items()
+            return Row("All", "project", items[min(self.asel, len(items) - 1)], 0) if self.adetail and items else None
+        return rows[self.psel] if rows else None
+
+    def keys_all(self, k):
+        """The All projects list's keys: ↑↓ over its projects, enter for one's actions, → its detail."""
+        items = self.all_items()
+        self.asel = max(0, min(self.asel, len(items) - 1))
+        if isinstance(k, tuple):
+            _, mx, my, bstate = k
+            if my not in getattr(self, "arow_y", {}):
+                return None
+            idx = self.arow_y[my]
+            self.focus = "pane"
+            how = self.click(k, idx)
+            if how:
+                self.asel = idx
+            if how == "menu":
+                return self.menu(label_of(items[idx]), self.project_actions(items[idx]))
+            if how == "double":
+                fn = first_action(self.project_actions(items[idx]))
+                return fn() if fn else None
+            return None
+        to = self.move(k, self.asel, len(items))
+        if to is not None:
+            self.asel = to
+        elif k == "enter" and items:
+            return self.menu(label_of(items[self.asel]), self.project_actions(items[self.asel]))
+        elif k == "right" and items:
+            self.adetail = True
+        return None
 
     def row_status(self, r, dim):
         """STATUS for a Projects row: a Session's live status, a project's status field, or recap."""
@@ -547,25 +607,31 @@ class ProjectsTab:
         self.load_stats()  # the detail pane's Stats; read in the background, at most once a minute
         rows = self.prows = self.project_rows()
         self.psel = max(0, min(self.psel, len(rows) - 1))
-        if getattr(self, "dfor", None) != (self.psel, self.entry):  # another row: its items start at the top
-            self.dfor, self.dsel = (self.psel, self.entry), 0
+        shown = (self.psel, self.entry, self.adetail, self.asel)
+        if getattr(self, "dfor", None) != shown:  # another row: its items start at the top
+            self.dfor, self.dsel = shown, 0
+        self.drow = self.detail_row(rows)
         ps = self.projects or []
         closed = sum(p["closed"] for p in ps)
         self.corner = (f"{len(ps) - closed} projects · {closed} closed", self.DIM)
         root = short(str(config.projects_dir()))
         self.subhead = (f"folder {root}" + (" · missing: run roost setup" if self.projects is None else ""),
                         self.YELLOW | curses.A_BOLD if self.projects is None else self.DIM)
-        self.pname, self.pfields = self.project_panel(rows, h, w - SIDEBAR_W)
+        self.pname, self.pfields = self.panel_of(self.drow, h, w - SIDEBAR_W)
         self.key_bar(BAR_KEYS.replace("←→ views", "←→ open/close"), self.msg or self.warning, self.ACCENT | curses.A_BOLD)
         return rows
 
     def project_panel(self, rows, h, w):
         """The detail pane, w wide: the selected row's name and its labeled fields, with the whole
         description when there's room."""
-        if not rows:
+        return self.panel_of(rows[self.psel] if rows else None, h, w)
+
+    def panel_of(self, r, h, w):
+        if not r:
             return "", []
-        r = rows[self.psel]
         item = r.item
+        if r.kind == "all":
+            return "All projects", []
         if r.kind == "new":
             return "+ New project", [("", "enter or a click: give it a name, its folder, and a one-sentence description if you like")]
         if r.kind == "head":
@@ -623,7 +689,7 @@ class ProjectsTab:
         first. Scrolls self.ptop so the selected row is in the page."""
         lines, sel_line, sel_end = [], None, None
         for idx, r in enumerate(rows):
-            if r.kind in ("head", "new") and idx:
+            if r.kind in ("head", "all") and idx:
                 lines.append(None)
             if idx == self.psel:
                 sel_line = len(lines)
@@ -639,8 +705,8 @@ class ProjectsTab:
         return lines
 
     PROJECTS_HELP = [
-        ("Sections", f"Recent (active in {RECENT_PROJECT_DAYS} days), Inactive, then Closed, folded until opened"),
-        ("Open", "→ opens a section, or a project's sub-projects (▸), ← closes it · enter or a click on a header opens a section too"),
+        ("Projects", f"the {RECENT_ROWS} most recently worked open projects, then All projects: every one, Active (worked in {RECENT_PROJECT_DAYS} days), Inactive, and Closed, with its own / search · → there shows a project's detail, esc goes back"),
+        ("Open", "→ opens a project's sub-projects (▸), ← closes them"),
         ("Sub-projects", "pieces of a project's work (feature, bugfix, research, chore), each with its own README and Handoffs; New sub-project is in a project's actions"),
         ("Columns", "SESSIONS counts the project's running Sessions (◆ need input · ● working · ○ idle), and under them its unwrapped ones: closed, no Handoff covers them, not dismissed · LAST WORKED is a time today, else a date"),
         ("Sessions", "listed on the Sessions tab only: a project's Show its Sessions opens it on just that project's, searching project:<its id>"),
@@ -671,7 +737,7 @@ class ProjectsTab:
         elif r.kind == "sub" and not open_:
             self.subs_open.discard(r.item["parent"])
             self.select_key(("project", str(Path(r.item["path"]).parent.parent), r.sec))
-        else:
+        elif r.kind == "head":
             self.toggle(r, open_)
 
     def start_folders(self, p):
@@ -887,6 +953,8 @@ class ProjectsTab:
 
     def keys_projects(self, k, rows):
         r = rows[self.psel] if rows and self.psel < len(rows) else None
+        if self.entry == "All projects" and ((isinstance(k, tuple) and k[1] >= SIDEBAR_W) or self.focus == "pane"):
+            return self.keys_detail(k, self.drow) if self.adetail else self.keys_all(k)
         if (isinstance(k, tuple) and k[1] >= SIDEBAR_W) or self.focus == "pane":  # the detail pane's
             return self.keys_detail(k, r)
         if isinstance(k, tuple):
@@ -897,7 +965,9 @@ class ProjectsTab:
                 if how:
                     self.psel = idx
                 row = rows[idx]
-                if row.kind == "new":
+                if row.kind == "all":
+                    pass  # a click shows its view (keys_sidebar)
+                elif row.kind == "new":
                     if how:  # + New project works like a button
                         return self.new_project()
                 elif row.kind == "head":
@@ -950,7 +1020,7 @@ if Region:
                     continue
                 r = rows[idx]
                 ui.prow_y[y0 + i] = idx
-                hl = idx == ui.psel and not ui.entry
+                hl = idx == ui.psel and (not ui.entry or (ui.entry == "All projects" and r.kind == "all"))
                 look = ui.selected if hl else (lambda a: a)
                 if hl:
                     row.put(0, " " * (w - 1), look(0))
@@ -960,6 +1030,9 @@ if Region:
                     row.put(2, clip(label, w - 3), look(curses.A_BOLD | (ui.ACCENT if r.sec == "Recent" else 0)))
                     if not hl and w - 3 - len(label) > 0:
                         row.rule(2 + len(label), w - 3 - len(label), ui.DIM)
+                    continue
+                if r.kind == "all":
+                    row.put(2, f"All projects ({r.item['count']})", look(curses.A_BOLD if hl else 0))
                     continue
                 if r.kind == "new":
                     row.put(2, "+ New project", look(ui.ACCENT | (curses.A_BOLD if hl else 0)))
@@ -1009,6 +1082,10 @@ if Region:
             out = []
             if not getattr(ui, "prows", None):
                 return out
+            if ui.entry == "All projects" and not ui.adetail:
+                return self.all_lines()
+            if not ui.drow:
+                return out
             name = self.line()
             name.put(2, clip(ui.pname, w - 4), curses.A_BOLD)
             out.append(name)
@@ -1017,7 +1094,7 @@ if Region:
                 row.put(2, label, ui.DIM)
                 row.put(16, clip(value, w - 18), 0 if label in ("Summary", "Description", "Last message") and value != "no description yet" or not label else ui.DIM)
                 out.append(row)
-            r = ui.prows[ui.psel]
+            r = ui.drow
             room = self.size.height - 1  # the last row is the key hints
             picks = ui.detail_items(r)
             kinds = {"Sub-projects": "sub", "Sessions": "session", "Handoffs": "handoff", "Notes": "note"}
@@ -1053,6 +1130,36 @@ if Region:
                 row.put(2, hint, ui.DIM)
                 out.append(row)
             return out
+
+        def all_lines(self):
+            """The All projects list: each section's header and count, then its projects."""
+            ui, w, y0 = self.ui, self.size.width, self.region.y
+            out, ui.arow_y, idx = [], {}, 0
+            for name, ps in ui.all_sections():
+                if out:
+                    out.append(self.line())
+                row = self.line()
+                row.put(2, f"{name} ({len(ps)})", curses.A_BOLD)
+                out.append(row)
+                for p in ps:
+                    row = self.line()
+                    ui.arow_y[y0 + len(out)] = idx
+                    hl = idx == ui.asel and ui.focus == "pane"
+                    look = ui.selected if hl else (lambda a: a)
+                    if hl:
+                        row.put(1, " " * (w - 2), look(0))
+                        row.put(2, "›", look(curses.A_BOLD | ui.ACCENT))
+                    marks = ui.markers(Row(name, "project", p, 0))
+                    row.put(4, clip(label_of(p), w - 8 - len(marks)), look(ui.DIM if p["closed"] else 0))
+                    if marks:
+                        row.put(w - 2 - len(marks), marks, look(ui.ACCENT))
+                    out.append(row)
+                    idx += 1
+            if not out:
+                row = self.line()
+                row.put(2, "No projects." + (" Esc clears the search." if ui.aquery else ""), ui.DIM)
+                out.append(row)
+            return out[:self.size.height]
 
     class ProjectsView(Vertical):
         """A project's view in the right pane: the search row, then the selected row's details."""

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Recent projects and All projects:** the sidebar lists your 10 most recently worked open projects, with no section headers, then **All projects (N)**: every project in the right pane, under Active, Inactive, and Closed, with its own search. Enter opens a project's actions there, → its detail, esc goes back. A search in the sidebar still lists every match
 - **Sessions is Running and Closed:** two views instead of five. Closed lists every closed Session, newest first; Recently closed, Stale, and All are gone. A project's Show its Sessions opens on Running when one of its Sessions runs, else on Closed
 - **Unfiled:** the first entry under your projects lists the Sessions no project lists and your notes, Recent or All, so each can be added to a project, made one, or let go
 - **Pick from a project's details:** tab moves into a project's details, where its sub-projects, Sessions, Handoffs, and notes each have their actions
