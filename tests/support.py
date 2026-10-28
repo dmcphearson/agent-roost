@@ -84,6 +84,22 @@ def bold_text(app):
     return out
 
 
+def dim_text(app):
+    """Where the screen draws text in the dim grey (the muted color secondary text uses): (row, column,
+    text) for each run."""
+    from rich.cells import cell_len
+    muted = importlib.import_module("roost.app.widgets").MUTED.lower()
+    out = []
+    for y, strip in enumerate(app.screen._compositor.render_strips()):
+        x = 0
+        for seg in strip:
+            fg = seg.style and seg.style.color
+            if fg and fg.triplet and fg.triplet.hex.lower() == muted and seg.text.strip():
+                out.append((y, x + len(seg.text) - len(seg.text.lstrip()), seg.text.strip()))
+            x += cell_len(seg.text)
+    return out
+
+
 # the sidebar's entries, under the projects, top to bottom; Unfiled (the Sessions no project lists, and the
 # notes in ~/.roost/notes) comes first
 ENTRIES = ("Unfiled", "Sessions", "Notes", "Stats")
