@@ -523,7 +523,7 @@ class StartingSessions(unittest.TestCase):
         repo = Path(self.tmp.name) / "my repo"  # a space: the folder comes out quoted
         repo.mkdir()
         ui = self.ui(term=None)
-        ui.quit_anyway, ui.psel = False, 1
+        ui.quit_anyway, ui.psel = False, 0  # the project: no header above it
         ui.sessions = [dict(session("Mine", cwd=str(repo)), id="aa1b9a71-0000", home=str(repo))]
         ui.load_projects()
         ide, clip = self.in_ide("vscode")
@@ -580,7 +580,7 @@ class StartingSessions(unittest.TestCase):
     def test_s_starts_in_the_only_folder_or_asks_which(self):
         folder = self.project("p", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
         ui = self.ui()
-        ui.psel = 1
+        ui.psel = 0  # the project: no header above it
         act(ui, ui.keys_projects, ui.project_rows(), "Start a Session")
         self.assertEqual((len(self.scripts), ui.choosing), (1, None))
         repo = Path(self.tmp.name) / "repo"
@@ -596,7 +596,7 @@ class StartingSessions(unittest.TestCase):
     def test_s_on_a_closed_project_starts_nothing(self):
         self.project("p", README.replace("status: active", "status: closed"))
         ui = self.ui()
-        ui.folded.discard("Closed")
+        ui.pquery = "title"  # closed: only a search lists it in the sidebar
         rows = ui.project_rows()
         ui.psel = next(i for i, r in enumerate(rows) if r.kind == "project")
         self.assertNotIn("Start a Session", labels(ui, ui.keys_projects, rows))
@@ -656,7 +656,7 @@ class StartingSessions(unittest.TestCase):
             ui.sessions = [dict(session("Live"), id="aa1b9a71-0000"), dict(session("Old", state="closed", kind=None, mins=60), id="bb2c0000-0000")]
             ui.load_projects()
             rows = ui.project_rows()
-            ui.psel = 1
+            ui.psel = 0  # the project: no header above it
             self.assertFalse([a for a in labels(ui, ui.keys_projects, rows)  # no Session Stop or Delete: the project's own Delete is allowed
                               if a.startswith(("Stop", "Delete")) and a != "Delete"])
             live, old = 0, 1  # on the Sessions tab: the Projects tab lists no Sessions

@@ -679,15 +679,16 @@ class TextualScreens(unittest.TestCase):
                     seen[label] = get(pilot.app.ui)
                 return step
 
-            async def pick_header(pilot):  # ←→ act on the selected row: the Recent header, folded to start
+            async def pick_header(pilot):  # ←→ act on the selected row: the project, given an open sub-project, closed to start
                 ui = pilot.app.ui
-                ui.folded.add("Recent")
-                ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "head" and r.sec == "Recent")
+                p = next(p for p in ui.projects if p["id"] == self.pid)
+                p["subs"] = [dict(self.proj(f"{self.pid}/alpha", []), slug="alpha", parent=self.pid, title="alpha", type="feature")]
+                ui.subs_open.discard(self.pid)
+                ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "project" and r.item["id"] == self.pid)
                 pilot.app.redraw()
 
-            async def pick_project(pilot):  # enter acts on the selected row: the project, under Recent opened again
+            async def pick_project(pilot):  # enter acts on the selected row: the project
                 ui = pilot.app.ui
-                ui.folded.discard("Recent")
                 ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "project" and r.item["id"] == self.pid)
                 pilot.app.redraw()
 
@@ -700,7 +701,7 @@ class TextualScreens(unittest.TestCase):
             at = lambda ui: getattr(ui, sel[name])
             async def catch_exit(pilot):  # what ctrl+q leads to: the app exits (run_test would end it anyway)
                 pilot.app.exit = lambda *a, **k: seen.setdefault("exits", []).append(a)
-            arrows = {"Projects": lambda ui: "Recent" not in ui.folded, "Sessions": lambda ui: ui.view,
+            arrows = {"Projects": lambda ui: self.pid in ui.subs_open, "Sessions": lambda ui: ui.view,
                       "Notes": lambda ui: ui.nreading}[name]
             steps = [look("tab", lambda ui: ui.TABS[ui.tab].name), look("rows", lambda ui: len(ui.draw())),
                      look("at", at), self.keys("down"), look("down", at), self.keys("up"), look("up", at)]
@@ -727,7 +728,7 @@ class TextualScreens(unittest.TestCase):
                 self.assertEqual((seen["down"], seen["up"]), (seen["at"] + 1, seen["at"]), "↑↓ move")
                 if name == "Sessions":
                     self.assertEqual((seen["right"], seen["left"]), ((seen["arrows"] + 1) % len(roost.VIEWS), seen["arrows"]), "←→ views")
-                else:  # Projects: → unfolds the Recent header, ← folds it · Notes: → reads the note, ← goes back to the list
+                else:  # Projects: → opens the project's sub-projects, ← closes them · Notes: → reads the note, ← goes back to the list
                     self.assertEqual((seen["arrows"], seen["right"], seen["left"]), (False, True, False), "←→")
                 self.assertTrue(seen["actions"])
                 self.assertEqual(seen["menu"], seen["actions"], "enter actions")

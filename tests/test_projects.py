@@ -108,7 +108,7 @@ class Projects(unittest.TestCase):
         return ui
 
     def shown(self, ui):
-        return [(r.kind, r.item["id"]) for r in ui.project_rows()]
+        return [(r.kind, None if r.kind == "all" else r.item["id"]) for r in ui.project_rows()]
 
     def test_a_click_where_a_projects_arrow_was_only_selects_it(self):
         """Spec 1: a project row never expands, so a click at its left edge (where ▸ was) adds no rows,
@@ -117,14 +117,14 @@ class Projects(unittest.TestCase):
         ui = self.ui()
         ui.sessions = [dict(session("Password Manager Review"), id="aa1b9a71-0000")]
         ui.load_projects()
-        ui.prow_y = {6: 1}  # the project's row, as draw left it
+        ui.prow_y = {6: 0}  # the project's row, as draw left it
         click = ("mouse", 3, 6, roost.curses.BUTTON1_CLICKED)
         for _ in range(2):  # two separate single clicks: a quick second one would be a double-click
             ui.last_click = (0, -1)
             ui.keys_projects(click, ui.project_rows())
-            self.assertEqual((self.shown(ui), ui.choosing), ([("head", "Recent"), ("project", "b"), ("new", "+ New project")], None))
+            self.assertEqual((self.shown(ui), ui.choosing), ([("project", "b"), ("all", None), ("new", "+ New project")], None))
         ui.keys_projects(("mouse", 20, 6, roost.curses.BUTTON1_CLICKED), ui.project_rows())  # the name only selects it
-        self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
 
     def test_no_session_rows_under_a_project_even_once_marked_open(self):
         """Spec 1: no Session row under a project in any state of the UI, even with the project in
@@ -141,10 +141,10 @@ class Projects(unittest.TestCase):
                        dict(session("Second look", state="closed", kind=None), id="bb2c0000-0000", active=end)]  # worked on after
         ui.load_projects()
         ui.expanded = {"b"}
-        self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("new", "+ New project")])
-        ui.psel = 1
+        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
+        ui.psel = 0
         ui.keys_projects("left", ui.project_rows())
-        self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
 
     def wrapped_project(self, ids):
         """Project b listing ids, with a Handoff that covers aa1b9a71-0000 to its last message (an hour ago)
@@ -172,8 +172,8 @@ class Projects(unittest.TestCase):
                        dict(session("Asking", state="waiting", mins=1), id="ee5f0000-0000")]
         ui.load_projects()
         self.assertEqual([ui.wrapped_up(ui.projects[0], s) for s in ui.sessions], [True, False, False, False, False])
-        only = [("head", "Recent"), ("project", "b"), ("new", "+ New project")]
-        ui.psel = 1
+        only = [("project", "b"), ("all", None), ("new", "+ New project")]
+        ui.psel = 0
         ui.keys_projects("right", ui.project_rows())
         self.assertEqual(self.shown(ui), only)
         ui.keys_projects("enter", ui.project_rows())  # its actions, a menu: no rows
@@ -188,14 +188,14 @@ class Projects(unittest.TestCase):
         ui.sessions = [dict(session("Wrapped", state="closed", kind=None, mins=60), id="aa1b9a71-0000", active=end)]
         ui.load_projects()
         self.assertTrue(ui.wrapped_up(ui.projects[0], ui.sessions[0]))  # the fixture really is wrapped up
-        ui.psel = 1
+        ui.psel = 0
         ui.keys_projects("right", ui.project_rows())
         acts = labels(ui, ui.keys_projects, ui.project_rows())
         self.assertIn("Show its Sessions", acts)
         self.assertNotIn("Hide its Sessions", acts)
-        ui.prow_y = {6: 1}  # the project's row, as draw left it
+        ui.prow_y = {6: 0}  # the project's row, as draw left it
         ui.keys_projects(("mouse", 3, 6, roost.curses.BUTTON1_CLICKED), ui.project_rows())
-        self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
 
     def test_a_wrapped_up_session_doesnt_change_the_sessions_column(self):
         """SESSIONS counts running Sessions; a wrapped-up one is closed, so linking it changes nothing."""
@@ -208,29 +208,13 @@ class Projects(unittest.TestCase):
         self.assertEqual(ui.live_counts(ui.projects[0]), ui.live_counts({"sessions": ["cc3d0000-0000"]}))
         self.assertEqual(ui.live_counts(ui.projects[0]), [("input", 1)])
 
-    def test_recent_projects_show_and_the_rest_fold_away(self):
-        self.project("a", README.replace("status: active", "status: closed"))
-        self.project("b", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
-        self.project("c")
-        ui = self.ui()
-        self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("head", "Inactive"), ("head", "Closed"),
-                                          ("new", "+ New project")])  # + New project, last
-        ui.psel = 2
-        ui.keys_projects("enter", ui.project_rows())  # enter on a header opens it
-        self.assertIn(("project", "c"), self.shown(ui))
-        ui.psel = 4
-        ui.keys_projects("right", ui.project_rows())  # → opens Closed, at the bottom
-        self.assertEqual(self.shown(ui)[-3:-1], [("head", "Closed"), ("project", "a")])
-        ui.keys_projects("left", ui.project_rows())  # ← closes it
-        self.assertEqual(self.shown(ui)[-2], ("head", "Closed"))
-
     def test_search_keeps_matching_rows_unfolded(self):
         self.project("printers", README.replace("Two password managers compared: cost and rollout.", "Fix the office printers."))
         self.project("vpn")
         ui = self.ui()
         ui.notes = []
         ui.pquery = "PRINTER"
-        self.assertEqual(self.shown(ui), [("head", "Inactive"), ("project", "printers")])
+        self.assertEqual(self.shown(ui), [("project", "printers")])
 
     def test_show_its_sessions_opens_the_sessions_tab_on_running_searching_for_the_project(self):
         """Spec 3: Show its Sessions switches to the Sessions tab, on Running when one of its Sessions is
@@ -242,10 +226,10 @@ class Projects(unittest.TestCase):
         ui.sessions = [dict(session("Mine"), id="aa1b9a71-0000"), dict(session("Old one", state="closed", kind=None, mins=60), id="bb2c0000-0000"),
                        session("Loose", state="waiting")]
         ui.load_projects()
-        ui.psel = 1
+        ui.psel = 0
         act(ui, ui.keys_projects, ui.project_rows(), "Show its Sessions")
         self.assertEqual((ui.TABS[ui.tab].name, roost.VIEWS[ui.view], ui.query), ("Sessions", "Running", "project:b"))
-        self.assertEqual(self.shown(ui), [("head", "Recent"), ("project", "b"), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
         self.assertFalse([l for l in labels(ui, ui.keys_projects, ui.project_rows()) if l.startswith("Hide its Sessions")])
 
     def test_show_its_sessions_opens_on_closed_when_none_of_its_sessions_is_running(self):
@@ -269,7 +253,7 @@ class Projects(unittest.TestCase):
         self.project("b", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
         self.project("c", README.replace("status: active", "status: closed"))
         ui = self.ui()
-        ui.folded = set()
+        ui.pquery = "rollout"  # both summaries hold it; c is closed, and only a search lists a closed one in the sidebar
         ui.sessions = [dict(session("Mine"), id="aa1b9a71-0000")]
         ui.load_projects()
         rows = ui.project_rows()
@@ -379,7 +363,7 @@ class Projects(unittest.TestCase):
         (roost.DONE / "b.md").write_text("closed")
         self.project("taken")
         ui = self.ui()
-        ui.folded = set()  # its close-out record puts it under Closed
+        ui.pquery = "rollout"  # its close-out record closes it: only a search lists it in the sidebar (every README here holds it)
         ui.psel = [r.item["id"] for r in ui.project_rows()].index("b")
         act(ui, ui.keys_projects, ui.project_rows(), "Rename")
         self.assertIn("label", ui.asking["title"].lower())  # two prompts: its label, then its folder's name
@@ -439,8 +423,7 @@ class Projects(unittest.TestCase):
     def test_a_project_with_no_sessions_doesnt_expand(self):
         self.project("b", "---\nsummary: s\n---\n")
         ui = self.ui()
-        ui.folded = set()
-        ui.psel = 1
+        ui.psel = 0
         acts = labels(ui, ui.keys_projects, ui.project_rows())
         self.assertNotIn("Show its Sessions", acts)
         self.assertEqual(acts[0], "Start a Session")
@@ -512,7 +495,7 @@ class ProjectRows(unittest.TestCase):
             async def go():
                 async with app.run_test(size=size) as pilot:
                     await pilot.pause()
-                    for step in [self.select(lambda ui: ui.folded.discard("Inactive"))] + list(steps):  # past dates list as Inactive
+                    for step in [self.select(lambda ui: None)] + list(steps):  # a draw first, then the test's steps
                         await step(pilot)
                         await pilot.pause()
                     app.lines = screen_text(app)
@@ -609,7 +592,8 @@ class ProjectRows(unittest.TestCase):
             pilot.app.redraw()
             await pilot.pause()
             seen.append((self.chosen(pilot.app), self.sidebar(screen_text(pilot.app))))
-        steps = [self.on_project("proj-00"), look]
+        search = self.select(lambda ui: setattr(ui, "pquery", "proj-"))  # every one: no cap of ten in a search
+        steps = [search, self.on_project("proj-00"), look]
         for _ in range(40):
             steps += [self.keys("down"), look]
         self.run_on(projects, steps, size=(120, 30))
@@ -620,7 +604,7 @@ class ProjectRows(unittest.TestCase):
             self.assertTrue([l for l in side if f"Project {pid[-2:]}" in l], (pid, side))
             scrolled = scrolled or not any("Project 00" in l for l in side)
         self.assertTrue(scrolled, "the list never scrolled: the fixture needs more projects")
-        self.assertEqual(seen[-1][0], "new")  # down reached + New project, at the bottom
+        self.assertEqual(seen[-1][0], "proj-39")  # down reached the last match, at the bottom (a search has no + New project)
 
     def test_the_name_width_setting_doesnt_change_the_sidebar(self):
         names = ["Printer fleet consolidation for every office", "Laptop refresh"]
@@ -737,10 +721,10 @@ class TwoPanes(unittest.TestCase):
             self.assertNotRegex(l, r"\d:\d\d (AM|PM)")
         ui, last = app.ui, -1
         rows = ui.project_rows()
-        self.assertEqual([r.kind for r in rows if r.kind in ("head", "new")], ["head", "head", "head", "new"])
+        self.assertEqual([r.kind for r in rows if r.kind in ("head", "all", "new")], ["all", "new"])
         for r in rows:  # top to bottom, as project_rows() lists them
-            if r.kind == "head":
-                want = f"{'▸' if r.sec in ui.folded else '▾'} {r.sec} ({r.item['count']})"
+            if r.kind == "all":
+                want = f"All projects ({len(self.projects)})"
             elif r.kind == "project":
                 want = ("▸ " if any(not s["closed"] for s in r.item.get("subs") or []) else "") + roost.label_of(r.item)
             else:
@@ -1060,7 +1044,7 @@ class SubProjectRows(unittest.TestCase):
         at = rows.index(("project", rid))
         out = []
         for kind, i in rows[at + 1:]:
-            if kind in ("project", "head", "new"):
+            if kind in ("project", "head", "all", "new"):
                 break
             out.append((kind, i))
         return out
@@ -1242,7 +1226,7 @@ class ProjectMenuGroups(unittest.TestCase):
         actions start with the New sub-project group: a double-click runs that, never a divider."""
         self.project("shut", "---\nsummary: Finished work.\nstatus: closed\nsessions: []\n---\n\n# Shut\n")
         ui = self.ui()
-        ui.folded = set()
+        ui.pquery = "shut"  # closed: only a search lists it in the sidebar
         rows = self.select(ui, "project", "shut")
         self.assertEqual(labels(ui, ui.keys_projects, rows)[0], "New sub-project")
         ui.prow_y = {6: ui.psel}  # the project's row, as draw left it
@@ -1911,7 +1895,7 @@ class ProjectMarkers(unittest.TestCase):
     @staticmethod
     def marks(ui):
         """{(kind, id): its markers} for every row the tab lists."""
-        return {(r.kind, r.item["id"]): ui.markers(r) for r in ui.project_rows()}
+        return {(r.kind, None if r.kind == "all" else r.item["id"]): ui.markers(r) for r in ui.project_rows()}
 
     @staticmethod
     def readme(ids=(), status="active"):
@@ -1945,14 +1929,16 @@ class ProjectMarkers(unittest.TestCase):
     def test_a_closed_project_is_never_ready(self):
         self.project("b", self.readme(status="closed"), handoffs=[TODAY()])
         self.project("c", self.readme(["cc3d0000-0000"], status="closed"), handoffs=[TODAY()])
-        m = self.marks(self.ui([dict(session("Live"), id="cc3d0000-0000")]))
+        ui = self.ui([dict(session("Live"), id="cc3d0000-0000")])
+        ui.pquery = "title"  # both READMEs' heading: closed projects are only in a search's rows
+        m = self.marks(ui)
         self.assertEqual((m[("project", "b")], m[("project", "c")]), ("", "●"))
 
-    def test_headers_and_new_project_have_no_marker(self):
-        self.project("b", self.readme(), handoffs=[TODAY()])
+    def test_the_all_projects_row_and_new_project_have_no_marker(self):
+        self.project("b", self.readme(), handoffs=[TODAY()])  # ready: ◆ on its own row
         ui = self.ui()
-        rows = [r for r in ui.project_rows() if r.kind in ("head", "new")]
-        self.assertEqual([r.kind for r in rows], ["head", "new"])
+        rows = [r for r in ui.project_rows() if r.kind in ("head", "all", "new")]
+        self.assertEqual([r.kind for r in rows], ["all", "new"])
         self.assertEqual([ui.markers(r) for r in rows], ["", ""])
 
     def test_a_sub_project_row_has_its_own_marker_and_an_opened_project_only_its_own(self):
@@ -2053,11 +2039,6 @@ class SessionsField(unittest.TestCase):
         self.assertEqual(self.field(ui, "sub", "rollout/alpha"), "○1")
         self.assertEqual(self.field(ui, "sub", "rollout/beta"), "none running")
         self.assertEqual(self.field(ui, "project", "rollout"), "none running")  # a sub-project's Sessions are its own
-
-    def test_a_header_has_no_sessions_field(self):
-        self.project("b", self.readme(), handoffs=[TODAY()])
-        ui = self.ui()
-        self.assertNotIn("Sessions", [label for label, _ in self.fields(ui, "head", "Recent")])
 
 
 def handoff_name(ts, sid="aaaaaaaa"):
@@ -2188,12 +2169,12 @@ class DetailSections(unittest.TestCase):
 
     # which sections, in order
 
-    def test_headers_and_new_project_have_no_sections(self):
+    def test_new_project_has_no_sections(self):
         self.project("b", self.readme(), handoffs=[TODAY()])
         ui = self.ui()
         rows = [r for r in ui.project_rows() if r.kind in ("head", "new")]
-        self.assertEqual([r.kind for r in rows], ["head", "new"])
-        self.assertEqual([list(ui.detail_sections(r)) for r in rows], [[], []])
+        self.assertEqual([r.kind for r in rows], ["new"])
+        self.assertEqual([list(ui.detail_sections(r)) for r in rows], [[]])
 
     def test_a_projects_sections_in_order_with_sub_projects_only_when_it_has_open_ones(self):
         self.project("rollout", self.readme(), handoffs=[TODAY()])
@@ -2636,9 +2617,10 @@ class DetailItems(unittest.TestCase):
         self.project("b", self.readme(["aa000000-0000"]))  # its one Session is older than the Sessions list's 7 days
         ui = self.ui([dict(session("Ancient one", state="closed", kind=None, mins=8 * 1440), id="aa000000-0000", attach=None)])
         rows = ui.project_rows()
-        self.assertEqual(sorted({r.kind for r in rows}), ["head", "new", "project"])  # the fixture
+        self.assertEqual(sorted({r.kind for r in rows}), ["all", "new", "project"])  # the fixture
         for r in rows:
-            self.assertEqual(list(ui.detail_items(r)), [], r.kind)
+            if r.kind != "all":  # the All projects row shows its own view, not a row's detail
+                self.assertEqual(list(ui.detail_items(r)), [], r.kind)
 
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
@@ -2900,6 +2882,283 @@ class StatusLine(unittest.TestCase):
         self.assertEqual(ui.status_line(), ("", "nothing running"))
         ui.sessions = []
         self.assertEqual(ui.status_line(), ("", "nothing running"))
+
+
+class RecentProjects(unittest.TestCase):
+    """The sidebar's projects with no search: the ten most recently active open ones, newest first (one never
+    worked on after those that were), each followed by its open sub-projects once → opens it; then the All
+    projects row; then + New project. No section headers, and no closed project. A search lists every match,
+    open ones newest first then closed ones, with no cap, no headers, and no All projects row."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    ui, shown = Projects.ui, Projects.shown
+    DAY = 86400
+
+    @staticmethod
+    def readme(label, summary="Printer work.", status="active"):
+        return f"---\nsummary: {json.dumps(summary)}\nstatus: {status}\nsessions: []\n---\n\n# {label}\n"
+
+    def many(self):
+        """Thirteen open projects: open-00 to open-11, worked on 0, 3, 6, … 33 days ago (so Active and
+        Inactive ones mix), and never-one, never worked on; shut-a, closed, worked on an hour ago (newer than
+        most open ones); shut-b, closed, 40 days ago; decoy, open, worked on 50 days ago, the one whose summary
+        holds no "printer". Fifteen projects in all; ids open-NN in the order they should list."""
+        now = time.time()
+        for i in range(12):
+            self.project(f"open-{i:02d}", self.readme(f"Open {i:02d}"), handoffs=[handoff_name(now - i * 3 * self.DAY - 60)])
+        self.project("never-one", self.readme("Never one"))
+        self.project("shut-a", self.readme("Shut a", status="closed"), handoffs=[handoff_name(now - 3600)])
+        self.project("shut-b", self.readme("Shut b", status="closed"), handoffs=[handoff_name(now - 40 * self.DAY)])
+        self.project("decoy", self.readme("Decoy", "Laptop work."), handoffs=[handoff_name(now - 50 * self.DAY)])
+        ui = self.ui()
+        ui.notes = []
+        self.assertEqual(len(ui.projects), 16)  # the fixture
+        return ui
+
+    def test_the_sidebar_lists_the_ten_most_recent_open_projects_then_all_projects_then_new_project(self):
+        ui = self.many()
+        self.assertEqual(self.shown(ui), [("project", f"open-{i:02d}") for i in range(10)]
+                         + [("all", None), ("new", "+ New project")])
+
+    def test_ten_or_fewer_open_projects_all_show_and_all_projects_still_follows(self):
+        now = time.time()
+        self.project("older", self.readme("Older"), handoffs=[handoff_name(now - 30 * self.DAY)])
+        self.project("newer", self.readme("Newer"), handoffs=[handoff_name(now - 60)])
+        self.project("never-one", self.readme("Never one"))  # never worked on: after the ones that were
+        self.project("shut", self.readme("Shut", status="closed"), handoffs=[handoff_name(now - 30)])  # closed: not listed
+        ui = self.ui()
+        self.assertEqual(self.shown(ui), [("project", "newer"), ("project", "older"), ("project", "never-one"),
+                                          ("all", None), ("new", "+ New project")])
+
+    def test_an_opened_projects_sub_projects_follow_it_and_dont_count_toward_the_ten(self):
+        ui = self.many()
+        self.sub("open-03", "alpha")
+        self.sub("open-03", "beta")
+        ui.load_projects()
+        ui.psel = self.shown(ui).index(("project", "open-03"))
+        ui.keys_projects("right", ui.project_rows())
+        self.assertEqual(self.shown(ui), [("project", f"open-{i:02d}") for i in range(4)]
+                         + [("sub", "open-03/alpha"), ("sub", "open-03/beta")]
+                         + [("project", f"open-{i:02d}") for i in range(4, 10)]
+                         + [("all", None), ("new", "+ New project")])
+
+    def test_a_search_lists_every_match_open_newest_first_then_closed_with_no_all_projects_row(self):
+        ui = self.many()
+        ui.pquery = "printer"
+        self.assertEqual(self.shown(ui), [("project", f"open-{i:02d}") for i in range(12)]
+                         + [("project", "never-one"), ("project", "shut-a"), ("project", "shut-b")])
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class AllProjects(unittest.TestCase):
+    """The All projects row under the sidebar's projects, All projects (N) with N every project open or
+    closed, and the view it shows in the right pane (ui.entry "All projects"): Active (N), Inactive (N), and
+    Closed (N), each newest first, with ↑↓ over the projects, enter for one's actions, → for its detail, esc
+    back, / to filter."""
+    run_on, chosen, sidebar = ProjectRows.run_on, staticmethod(ProjectRows.chosen), staticmethod(ProjectRows.sidebar)
+    select, keys, proj = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(TextualScreens.proj)
+    grab, detail_name = staticmethod(TwoPanes.grab), staticmethod(TwoPanes.detail_name)
+    SIZE = (120, 40)
+    DAY = 86400
+    LISTED = ["Active (3)", "Toner order", "Printer fleet", "Badge rollout", "Inactive (2)", "VPN refresh", "Wiki cleanup",
+              "Closed (2)", "Laptop refresh", "Old audit"]  # what the view lists for the fixture, top to bottom
+
+    def setUp(self):
+        TextualScreens.setUp(self)
+        now = time.time()
+
+        def project(pid, label, days, closed=False, summary="", tags=()):
+            p = self.proj(pid, [], label=label)
+            p.update(last=now - days * self.DAY, closed=closed, status="closed" if closed else "active",
+                     summary=summary, tags=list(tags))
+            return p
+        # Active: worked on in the last RECENT_PROJECT_DAYS days; Inactive: open, older; Closed. Laptop refresh is
+        # closed but newer than two Active ones; Wiki cleanup's summary and Old audit's tag hold "toner".
+        self.projects = [project("toner", "Toner order", 0.05), project("laptops", "Laptop refresh", 0.1, closed=True),
+                         project("fleet", "Printer fleet", 2), project("badges", "Badge rollout", 5),
+                         project("vpn", "VPN refresh", 20), project("wiki", "Wiki cleanup", 60, summary="Toner budget notes."),
+                         project("audit", "Old audit", 90, closed=True, tags=["toner-vendor"])]
+
+    @staticmethod
+    def all_row(ui):
+        """The index of the All projects row in the sidebar's rows."""
+        rows = ui.project_rows()
+        at = [i for i, r in enumerate(rows) if r.kind == "all"]
+        assert at, f"no All projects row in the sidebar: {[r.kind for r in rows]}"
+        return at[0]
+
+    def above_all(self):
+        """A step that selects the sidebar row just above All projects: the last project."""
+        return self.select(lambda ui: setattr(ui, "psel", self.all_row(ui) - 1))
+
+    def to_all(self):
+        """Steps that move the sidebar's selection down onto All projects."""
+        return [self.above_all(), self.keys("down")]
+
+    def into_view(self):
+        """Steps that show All projects and move the keys into its pane (enter on the row)."""
+        return self.to_all() + [self.keys("enter")]
+
+    @staticmethod
+    def state(seen, label):
+        """A step that keeps, under label: the entry shown, the focus, the selected sidebar row, the menu up
+        (its title and labels), the prompt up, and the screen's lines and bold runs."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            ui = pilot.app.ui
+            rows = ui.project_rows()
+            r = rows[ui.psel] if rows and ui.psel < len(rows) else None
+            seen[label] = {"entry": ui.entry, "focus": ui.focus, "row": r and (r.kind, r.item.get("id")),
+                           "menu": ui.choosing and (ui.choosing["title"], [l for l, _ in ui.choosing["options"]]),
+                           "asking": ui.asking, "lines": screen_text(pilot.app), "bold": bold_text(pilot.app)}
+        return step
+
+    @staticmethod
+    def pane(lines):
+        """The right pane's part of each line, stripped, with a selection mark taken off."""
+        return [l[roost.SIDEBAR_W:].strip().lstrip("›").strip() for l in lines]
+
+    def listed(self, lines):
+        """The pane's section headers and project names, top to bottom (the fixture's labels only)."""
+        labels = {p["label"] for p in self.projects}
+        out = []
+        for l in self.pane(lines):
+            if re.fullmatch(r"(Active|Inactive|Closed) \(\d+\)", l):
+                out.append(l)
+            else:
+                out += [n for n in labels if l.startswith(n)]
+        return out
+
+    def test_down_from_the_last_project_selects_all_projects_and_shows_its_view(self):
+        seen = {}
+        self.run_on(self.projects, self.to_all() + [self.state(seen, "on")], size=self.SIZE)
+        got = seen["on"]
+        self.assertEqual((got["entry"], got["focus"]), ("All projects", "side"))
+        self.assertIn("All projects (7)", "\n".join(self.sidebar(got["lines"])), "every project, open and closed")
+        self.assertEqual(self.listed(got["lines"]), self.LISTED)
+        self.assertEqual(roost.ENTRIES, ENTRIES, "All projects isn't one of the entries")
+        side = self.sidebar(got["lines"])
+        ys = [next((i for i, l in enumerate(side) if re.fullmatch(rf"{name}( +\d+)?", l.strip(" ▕"))), None) for name in ENTRIES]
+        self.assertTrue(all(ys) and ys == sorted(ys), (ys, side))  # the entries still follow under the projects
+        self.assertLess(next(i for i, l in enumerate(side) if "All projects (" in l), ys[0])
+
+    def test_up_from_all_projects_goes_back_to_the_last_project(self):
+        seen = {}
+        app = self.run_on(self.projects, self.to_all() + [self.keys("up"), self.state(seen, "up")], size=self.SIZE)
+        self.assertFalse(seen["up"]["entry"])
+        self.assertEqual(self.chosen(app), "wiki")  # the oldest of the five open projects
+
+    def test_down_from_all_projects_goes_to_new_project_then_the_entries_and_up_comes_back(self):
+        seen = {}
+        self.run_on(self.projects, self.to_all() + [self.keys("down"), self.state(seen, "new"), self.keys("up"),
+                                                    self.state(seen, "back"), self.keys("down", "down"),
+                                                    self.state(seen, "entry")], size=self.SIZE)
+        self.assertEqual((seen["new"]["entry"], seen["new"]["row"][0]), (None, "new"))
+        self.assertEqual(seen["back"]["entry"], "All projects")
+        self.assertEqual(seen["entry"]["entry"], ENTRIES[0])
+
+    def test_a_click_on_all_projects_shows_its_view(self):
+        seen = {}
+        self.run_on(self.projects, [self.state(seen, "before")], size=self.SIZE)
+        y = next((i for i, l in enumerate(self.sidebar(seen["before"]["lines"])) if "All projects (" in l), None)
+        self.assertIsNotNone(y, self.sidebar(seen["before"]["lines"]))
+        self.run_on(self.projects, [lambda pilot: pilot.click(offset=(6, y)), self.state(seen, "clicked")], size=self.SIZE)
+        got = seen["clicked"]
+        self.assertEqual((got["entry"], got["menu"], got["asking"]), ("All projects", None, None))
+        self.assertEqual(self.listed(got["lines"]), self.LISTED)
+
+    def test_enter_tab_or_right_on_all_projects_moves_the_keys_into_its_pane(self):
+        for key in ("enter", "tab", "right"):
+            seen = {}
+            self.run_on(self.projects, self.to_all() + [self.keys(key), self.state(seen, key)], size=self.SIZE)
+            got = seen[key]
+            with self.subTest(key=key):
+                self.assertEqual((got["entry"], got["focus"], got["menu"], got["asking"]), ("All projects", "pane", None, None))
+                self.assertEqual(self.listed(got["lines"]), self.LISTED)
+
+    def test_all_projects_lists_active_inactive_and_closed_with_counts_newest_first(self):
+        seen = {}
+        self.run_on(self.projects, self.into_view() + [self.state(seen, "view")], size=self.SIZE)
+        self.assertEqual(self.listed(seen["view"]["lines"]), self.LISTED)
+
+    def test_a_section_with_nothing_in_it_is_left_out(self):
+        seen = {}
+        self.projects = [p for p in self.projects if not p["closed"] and p["id"] not in ("vpn", "wiki")]  # Active only
+        self.run_on(self.projects, self.into_view() + [self.state(seen, "view")], size=self.SIZE)
+        self.assertEqual(self.listed(seen["view"]["lines"]), ["Active (3)", "Toner order", "Printer fleet", "Badge rollout"])
+        pane = "\n".join(self.pane(seen["view"]["lines"]))
+        self.assertNotIn("Inactive (", pane)
+        self.assertNotIn("Closed (", pane)
+
+    def test_up_and_down_move_over_the_projects_not_the_headers_and_enter_opens_its_actions(self):
+        import unittest.mock
+        seen = {}
+        acts = lambda ui, p: [(f"Act on {p['id']}", lambda: None), ("Second", lambda: None)]  # one menu per project
+        with unittest.mock.patch.object(roost.UI, "project_actions", acts):
+            self.run_on(self.projects, self.into_view() + [
+                self.keys("enter"), self.state(seen, "first"), self.keys("escape"),
+                self.keys("down", "down", "down"), self.keys("enter"), self.state(seen, "inactive"), self.keys("escape"),
+                self.keys("up"), self.keys("enter"), self.state(seen, "back"), self.keys("escape"),
+                self.keys("down", "down", "down"), self.keys("enter"), self.state(seen, "closed"), self.keys("escape"),
+                self.keys("up", "up", "up", "up", "up", "up", "up"), self.keys("enter"), self.state(seen, "top")],
+                size=self.SIZE)
+        self.assertEqual(seen["first"]["menu"], ("Toner order", ["Act on toner", "Second"]))  # the newest, at the top
+        self.assertEqual(seen["inactive"]["menu"][0], "VPN refresh", "↓ from the last Active one skips the Inactive header")
+        self.assertEqual(seen["back"]["menu"][0], "Badge rollout")
+        self.assertEqual(seen["closed"]["menu"][0], "Laptop refresh", "↓ skips the Closed header")
+        self.assertEqual(seen["top"]["menu"][0], "Toner order", "↑ stops at the first project, never on the Active header")
+        self.assertEqual(seen["top"]["focus"], "pane")
+
+    def test_enter_offers_the_same_actions_as_the_projects_sidebar_row(self):
+        seen = {}
+
+        async def sidebar_actions(pilot):
+            ui = pilot.app.ui
+            seen["sidebar"] = [l for l, _ in ui.row_actions(next(r for r in ui.project_rows() if r.item.get("id") == "fleet"))]
+        self.run_on(self.projects, [sidebar_actions] + self.into_view() + [self.keys("down"), self.keys("enter"),
+                                                                           self.state(seen, "menu")], size=self.SIZE)
+        self.assertEqual(seen["menu"]["menu"], ("Printer fleet", seen["sidebar"]))
+
+    def test_right_shows_the_selected_projects_detail_and_esc_goes_back_to_the_list_with_it_selected(self):
+        seen = {}
+        self.run_on(self.projects, self.into_view() + [self.keys("down"), self.keys("right"), self.state(seen, "detail"),
+                                                       self.keys("escape"), self.state(seen, "list"), self.keys("enter"),
+                                                       self.state(seen, "menu")], size=self.SIZE)
+        detail = seen["detail"]
+        pane = "\n".join(self.pane(detail["lines"]))
+        self.assertEqual(self.detail_name(detail["bold"])[0], "Printer fleet", "its name first, as the sidebar's detail draws it")
+        self.assertRegex(pane, r"Folder +/nowhere/fleet +Id +fleet")
+        for heading in ("Sessions", "Handoffs", "Notes"):
+            self.assertIn(heading, self.detail_name(detail["bold"]), f"its {heading} section")
+        self.assertNotIn("Active (", pane, "the detail in place of the list")
+        self.assertEqual((detail["entry"], detail["focus"]), ("All projects", "pane"))
+        self.assertEqual(self.listed(seen["list"]["lines"]), self.LISTED)
+        self.assertEqual((seen["list"]["entry"], seen["list"]["focus"]), ("All projects", "pane"))
+        self.assertEqual(seen["menu"]["menu"][0], "Printer fleet", "the same project still selected")
+
+    def test_esc_from_the_list_returns_the_keys_to_the_sidebar(self):
+        seen = {}
+        self.run_on(self.projects, self.into_view() + [self.keys("escape"), self.state(seen, "esc")], size=self.SIZE)
+        self.assertEqual((seen["esc"]["entry"], seen["esc"]["focus"]), ("All projects", "side"))
+
+    def test_slash_filters_the_list_by_name_summary_and_tags(self):
+        seen = {}
+        self.run_on(self.projects, self.into_view() + [self.keys("slash"), self.keys(*"toner"), self.keys("enter"),
+                                                       self.state(seen, "filtered")], size=self.SIZE)
+        self.assertEqual(self.listed(seen["filtered"]["lines"]),
+                         ["Active (1)", "Toner order", "Inactive (1)", "Wiki cleanup", "Closed (1)", "Old audit"])
+
+    def test_a_double_click_on_a_project_in_the_list_runs_its_first_action(self):
+        import unittest.mock
+        seen, ran = {}, []
+        self.run_on(self.projects, self.to_all() + [self.state(seen, "view")], size=self.SIZE)
+        y = next((i for i, l in enumerate(self.pane(seen["view"]["lines"])) if l.startswith("VPN refresh")), None)
+        self.assertIsNotNone(y, self.pane(seen["view"]["lines"]))
+        acts = lambda ui, p: [("First", lambda: ran.append(p["id"])), ("Second", lambda: ran.append("second"))]
+        with unittest.mock.patch.object(roost.UI, "project_actions", acts):
+            self.run_on(self.projects, self.to_all() + [lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, y), times=2)],
+                        size=self.SIZE)
+        self.assertEqual(ran, ["vpn"])
 
 
 if __name__ == "__main__":
