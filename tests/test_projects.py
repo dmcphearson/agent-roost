@@ -3127,7 +3127,7 @@ class AllProjects(unittest.TestCase):
         detail = seen["detail"]
         pane = "\n".join(self.pane(detail["lines"]))
         self.assertEqual(self.detail_name(detail["bold"])[0], "Printer fleet", "its name first, as the sidebar's detail draws it")
-        self.assertRegex(pane, r"Folder +/nowhere/fleet +Id +fleet")
+        self.assertRegex(pane, r"(?m)^ *Folder +/nowhere/fleet *$", "the selected project's folder, on a row of its own")
         for heading in ("Sessions", "Handoffs", "Notes"):
             self.assertIn(heading, self.detail_name(detail["bold"]), f"its {heading} section")
         self.assertNotIn("Active (", pane, "the detail in place of the list")
