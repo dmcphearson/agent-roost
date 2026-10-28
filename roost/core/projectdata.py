@@ -49,6 +49,37 @@ def heading(text):
     return ""
 
 
+def section(text, *names):
+    """The stripped text under the first of these headings (each given with its #s, like "## Next") that
+    has any, up to the next heading at its level or above; "" when none has."""
+    lines = text.splitlines()
+    for name in names:
+        level = len(name) - len(name.lstrip("#"))
+        at = next((i for i, l in enumerate(lines) if l.strip() == name), None)
+        if at is None:
+            continue
+        end = next((i for i in range(at + 1, len(lines))
+                    if re.match(r"#{1,%d} " % level, lines[i])), len(lines))
+        body = "\n".join(lines[at + 1:end]).strip()
+        if body:
+            return body
+    return ""
+
+
+def handoff_lines(path):
+    """Up to 3 lines for the detail pane under a Handoff's row: the first under What I did (a roll-up's
+    What shipped), else under Summary, each up to the next heading."""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return []
+    body = section(text, "### What I did", "## What shipped", "### What shipped")
+    if not body:
+        body = section(text, "## Summary")
+        body = "\n".join(body.splitlines()[:next((i for i, l in enumerate(body.splitlines()) if l.startswith("#")), None)])
+    return [l.strip() for l in body.splitlines() if l.strip()][:3]
+
+
 def label_of(p):
     """What a project is called on screen: its README's heading, else its folder's name."""
     return p.get("label") or p["id"]
@@ -96,7 +127,9 @@ def read_project(folder, sessions=()):
             "readme": (folder / "README.md").exists(), "archives": archives_due(folder),
             "adopted": (folder / "handoffs").is_dir(),  # in roost's shape; roost adopt (or Adopt it) brings it there
             "covered": covered, "handoffs": sorted(handoffs, key=lambda x: -x[0]),
-            "notes": sorted(notes, key=lambda x: -x[0]), "repo": repo}
+            "notes": sorted(notes, key=lambda x: -x[0]), "repo": repo,
+            "state": section(text, "## Current state"), "next": section(text, "## Next"),  # the README's
+            "handoff_lines": handoff_lines(Path(max(handoffs)[2])) if handoffs else []}
 
 
 def plural(n, word):

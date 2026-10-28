@@ -185,7 +185,7 @@ if Widget:
         Screen { background: ansi_default; layers: base over top; }
         TopBar { height: 1; }
         #body { height: 1fr; }
-        #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 3 0 0 0; border-right: vkey #2c313a; }
+        #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 1 0 0 0; border-right: vkey #2c313a; }
         #pane { width: 1fr; height: 100%; }
         KeyBar { height: 1; }
         Prompt { layer: top; position: absolute; display: none; background: #22262d; color: #d6dae0; height: auto; }
