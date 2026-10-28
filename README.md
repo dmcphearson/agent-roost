@@ -84,7 +84,7 @@ roost is a sidebar and a right pane. The sidebar lists your projects, then Sessi
 | ↑ ↓ | Move |
 | Page Up, Page Down / Option+↑ ↓ | Move a screen |
 | Home / End | Top / bottom |
-| ← → | Sessions: switch views (Running, Closed) · Projects: open or close a section · Notes: read the note |
+| ← → | Sessions: switch views (Running, Closed) · Projects: open or close a project's sub-projects; on All projects, → shows a project's detail · Notes: read the note |
 | Enter / right-click | Open the selected row's actions |
 | Double-click | Run the row's first action: open a Session, start one for a project, or edit a note |
 | / | Search the view in the right pane |

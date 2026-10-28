@@ -506,6 +506,9 @@ class Shell:
             if k == "escape" and getattr(self, "nreading", False):  # esc leaves a note's text
                 self.nreading = False
                 return None
+            if k == "escape" and self.entry == "All projects" and self.adetail:  # esc leaves a project's detail
+                self.adetail = False
+                return None
             if k == "escape":  # esc clears the search, then leaves the right pane; it never quits
                 if getattr(self, self.query_attr()):
                     setattr(self, self.query_attr(), "")
@@ -527,6 +530,8 @@ class Shell:
 
     def query_attr(self):
         """Each tab keeps its own search."""
+        if self.entry == "All projects":
+            return "aquery"
         return {"Unfiled": "uquery", "Sessions": "query", "Notes": "nquery", "Stats": "squery"}.get(self.TABS[self.tab].name, "pquery")
 
     def keys_search(self, k):
@@ -541,7 +546,10 @@ class Shell:
             setattr(self, attr, text[:-1])
         elif printable(k):
             setattr(self, attr, text + k)
-            self.sel = self.top = self.psel = self.ptop = 0
+            if attr == "aquery":
+                self.asel = 0
+            else:
+                self.sel = self.top = self.psel = self.ptop = 0
             if attr == "nquery":
                 self.nsel, self.ntop = self.first_note(self.note_rows()), 0  # the first match
         return None
@@ -790,7 +798,13 @@ class Shell:
                 return None
             if my in self.prow_y:
                 self.show_entry(None)
-            return self.keys_projects(k, rows)
+            return self.after_sidebar(self.keys_projects(k, rows))
+        if self.entry == "All projects":
+            if k in ("enter", "right"):
+                self.focus = "pane"
+                return None
+            self.entry = None
+            return self.after_sidebar(self.keys_projects(k, rows))
         if self.entry:
             i = ENTRIES.index(self.entry)
             if k == "up":
@@ -812,7 +826,14 @@ class Shell:
         if k in ("down", "end") and (k == "end" or self.psel >= len(rows) - 1):
             self.show_entry(ENTRIES[-1] if k == "end" else ENTRIES[0])
             return None
-        return self.keys_projects(k, rows)
+        return self.after_sidebar(self.keys_projects(k, rows))
+
+    def after_sidebar(self, out):
+        """Once a key or click lands on the projects: on the All projects row, show its view (its list)."""
+        rows = self.project_rows()
+        if not self.entry and rows and self.psel < len(rows) and rows[self.psel].kind == "all":
+            self.entry, self.adetail, self.asel = "All projects", False, 0
+        return out
 
     def copy_id(self, s):
         self.copy_text(s["id"], f"Copied {s['id'][:8]}… to the clipboard")
