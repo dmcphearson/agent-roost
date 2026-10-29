@@ -190,7 +190,8 @@ class Projects(unittest.TestCase):
         ui.load_projects()
         self.assertTrue(ui.wrapped_up(ui.projects[0], ui.sessions[0]))  # the fixture really is wrapped up
         ui.psel = 0
-        ui.keys_projects("right", ui.project_rows())
+        ui.keys_projects("right", ui.project_rows())  # into the details: it lists the wrapped Session
+        ui.keys_projects("left", ui.project_rows())  # back to the list, where enter is the project's actions
         acts = labels(ui, ui.keys_projects, ui.project_rows())
         self.assertIn("Show its Sessions", acts)
         self.assertNotIn("Hide its Sessions", acts)
@@ -3339,10 +3340,10 @@ class DetailLayout(unittest.TestCase):
         self.assertTrue(lines[0].rstrip().endswith(got["folder"]), f"the projects folder at the top bar's right: {lines[0]!r}")
         self.assertTrue([t for y, x, t in got["dim"] if y == 0 and got["folder"] in t], "the folder is dim")
         self.assertFalse([l for l in lines if re.search(r"\d+ projects · \d+ closed", l)], "no project counts")
-        self.assertEqual(lines[1].strip(" │┃▏▕"), "", "one blank row under the top bar")
-        self.assertEqual(self.first_sidebar_row(lines), 2, self.sidebar(lines)[:5])
+        self.assertEqual([l.strip(" │┃▏▕") for l in lines[1:3]], ["", ""], "two blank rows under the top bar")
+        self.assertEqual(self.first_sidebar_row(lines), 3, self.sidebar(lines)[:5])
         y, x, name = self.name_at(got)
-        self.assertEqual((y, name), (2, "Printer fleet"), "the name line is level with the sidebar's first row")
+        self.assertEqual((y, name), (3, "Printer fleet"), "the name line is level with the sidebar's first row")
         self.assertGreaterEqual(x, W)
 
     def test_the_search_row_shows_only_while_searching_or_with_a_search_set(self):
@@ -3355,7 +3356,7 @@ class DetailLayout(unittest.TestCase):
         self.assertTrue([l for l in seen["kept"]["lines"][top] if "/ fle" in l[W:]], "the search row, with a search set")
         got = seen["cleared"]
         self.assertFalse([l for l in got["lines"][top] if "/ " in l[W:]], "no search row once it's cleared")
-        self.assertEqual(self.name_at(got)[0], 2, got["lines"][:5])
+        self.assertEqual(self.name_at(got)[0], 3, got["lines"][:5])
 
     def test_the_lists_first_row_is_on_the_same_screen_row_after_the_other_tabs(self):
         seen, shown = {}, []
@@ -3368,7 +3369,7 @@ class DetailLayout(unittest.TestCase):
         self.run_on(self.projects, steps, size=self.SIZE)
         self.assertEqual(shown, list(TABS[1:]) + ["Projects"], "round the other tabs and back")
         got = {k: self.first_sidebar_row(seen[k]["lines"]) for k in seen}
-        self.assertEqual(got, {"first": 2, "back": 2})
+        self.assertEqual(got, {"first": 3, "back": 3})
 
     # 2. The name line
 
@@ -3546,7 +3547,9 @@ class DetailLayout(unittest.TestCase):
             with self.subTest(project=pid):
                 self.assertTrue(under and under[0].startswith("Description"), under)
                 self.assertFalse([l for l in under if l.startswith(("Sessions", "Sub-projects"))], under)
-                folder = [i for i, l in enumerate(under) if re.fullmatch(rf"Folder\s+{re.escape(roost.short(project['path']))}", l)]
+                path = roost.short(project["path"])
+                folder = [i for i, l in enumerate(under) if (m := re.fullmatch(r"Folder\s+(\S.*)", l))
+                          and (m.group(1) == path or (m.group(1).endswith("…") and path.startswith(m.group(1)[:-1])))]
                 self.assertEqual(len(folder), 1, under)
                 if pid == "fleet":
                     cat = [i for i, l in enumerate(under) if re.fullmatch(r"Category\s+procurement\s+Tags\s+zq-tag", l)]

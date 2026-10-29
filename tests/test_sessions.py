@@ -47,8 +47,8 @@ class Sorting(unittest.TestCase):
 
 class Views(unittest.TestCase):
     """The Sessions entry is a simple history: Running and Closed, and nothing else."""
-    def test_the_views_are_running_then_closed(self):
-        self.assertEqual(roost.VIEWS, ["Running", "Closed"])
+    def test_the_views_are_running_then_closed_then_unfiled(self):
+        self.assertEqual(roost.VIEWS, ["Running", "Closed", "Unfiled"])
 
     def test_every_session_is_in_exactly_one_view(self):
         """Running: every Session that isn't closed, and one roost is wrapping up (keep). Closed: every

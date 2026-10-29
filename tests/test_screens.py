@@ -954,11 +954,12 @@ class TextualScreens(unittest.TestCase):
 
     def test_the_wren_is_drawn_whole_or_not_at_all(self):
         """A wren taller than the room under the note isn't drawn, not even its top rows. A made-up
-        20-cell-tall art stands in for the wren: a tall window shows all of it (so the stand-in reaches
-        the screen), a window of the minimum size has no room and shows no half block."""
+        30-cell-tall art stands in for the wren, taller than a minimum-size window: a tall window shows
+        all of it (so the stand-in reaches the screen), a window of the minimum size has no room and shows
+        no half block."""
         import unittest.mock
         wren = importlib.import_module("roost.core.wren")
-        tall = ["......" + "5a3a1e" * 4 + "......"] * 40  # 40 pixel rows: 20 cell rows of ▀
+        tall = ["......" + "5a3a1e" * 4 + "......"] * 60  # 60 pixel rows: 30 cell rows of ▀, more than MIN_SIZE's rows
         cases = [("Projects", [], []), ("Projects", [], [self.keys("/", *"zzqx", "enter")]),
                  ("Sessions", [], [open_view("Sessions")])]
         for tab, sessions, steps in cases:
@@ -1137,6 +1138,36 @@ class TopTabs(unittest.TestCase):
                 self.assertEqual(app.ui.focus, "side")
 
     # 4. No sidebar on Sessions, Notes, and Stats
+
+    def test_two_blank_rows_separate_the_top_bar_from_the_content_on_every_tab(self):
+        """Rows 1 and 2 are blank on every tab and the content starts on row 3: on Projects the list's first
+        row and the details' name line, on Sessions the views row, on Notes and Stats their first row."""
+        seen, W = {}, roost.SIDEBAR_W
+
+        def grab(name):
+            async def step(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                seen[name] = (self.shown(pilot.app), screen_text(pilot.app), bold_text(pilot.app))
+            return step
+        steps = [grab("Projects")]
+        for name in TABS[1:]:
+            steps += [open_view(name), grab(name)]
+        self.start(steps, size=(120, 40))
+        blank = lambda l: not l.strip(" │┃▏▕")
+        for name in TABS:
+            shown, lines, bold = seen[name]
+            with self.subTest(tab=name):
+                self.assertEqual(shown, name)
+                first = next((y for y in range(1, len(lines)) if not blank(lines[y])), None)
+                self.assertEqual(first, 3, "two blank rows under the top bar, then the content:\n" + "\n".join(lines[:6]))
+                if name == "Projects":
+                    side = next((y for y in range(1, len(lines)) if not blank(lines[y][:W])), None)
+                    self.assertEqual(side, 3, "the list's first row:\n" + "\n".join(lines[:6]))
+                    nm = min(((y, t) for y, x, t in bold if x >= W and y > 0), default=None)
+                    self.assertEqual(nm and nm[0], 3, ("the details' name line", nm))
+                if name == "Sessions":
+                    self.assertRegex(lines[3], r"^\s*Running \(\d+\)\s+Closed \(\d+\)\s+Unfiled \(\d+\)", "the views row")
 
     def test_sessions_notes_and_stats_take_the_whole_window_with_no_project_list(self):
         widget = {"Sessions": [roost.SessionList], "Notes": [roost.NoteList, roost.NoteCard], "Stats": [roost.StatsView]}

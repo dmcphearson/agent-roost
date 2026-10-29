@@ -158,7 +158,7 @@ class Unfiled(unittest.TestCase):
         self.assertIn(title, ("Laptop refresh", "Badge scan"), "a running Session is on top")
         self.assertEqual(labels, session_labels[title])
         self.assertIn("Add to a project", labels)
-        self.assertIn("Dismiss", labels)
+        self.assertNotIn("Dismiss", labels, "only a closed Session offers Dismiss")
         self.assertTrue([l for l in note_labels if l.startswith(("Make it a project", "Delete"))], note_labels)
 
     def test_slash_searches_the_unfiled_view_by_name_and_esc_clears_it(self):
