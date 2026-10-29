@@ -175,11 +175,15 @@ class TextualScreens(unittest.TestCase):
         seen = []
 
         async def clicks(pilot):
-            x = 10  # a Session's row
-            w, _ = pilot.app.get_widget_at(x, 6)
+            ui, x = pilot.app.ui, 10
+            ys = getattr(ui, "row_y", {})
+            self.assertTrue(ys, "the Sessions list drew no Session rows")
+            y = min(ys)  # the first Session's row, where the list drew it
+            self.assertIn(ui.srows[ys[y]]["name"], screen_text(pilot.app)[y], "the click lands on that Session's row")
+            w, _ = pilot.app.get_widget_at(x, y)
             for chain in (2, 3):
                 pilot.app.screen.selections = {}
-                w.post_message(events.Click(w, x, 6, 0, 0, 1, False, False, False, screen_x=x, screen_y=6, chain=chain))
+                w.post_message(events.Click(w, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y, chain=chain))
                 await pilot.pause()
                 seen.append(dict(pilot.app.screen.selections))
         with unittest.mock.patch.object(roost.UI, "session_actions", lambda ui, s: [("Open", lambda: None)]):
