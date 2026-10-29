@@ -622,3 +622,18 @@ class NoteListLook(unittest.TestCase):
                     if name != sel:
                         self.assertEqual(other["bars"], [], f"{name} has no ▌")
                         self.assertFalse([st for st in other["name"] if color_of(st) == green], f"{name} isn't green")
+
+    def test_while_reading_the_selected_note_keeps_a_dim_bar_and_a_bold_name_that_isnt_green(self):
+        seen = {}
+        self.run_notes([self.keys("right"), self.rows(seen, "reading")])
+        sel, reading, out = seen["reading"]
+        muted, green = roost.MUTED.lower(), roost.GREEN.lower()
+        self.assertTrue(reading, "the fixture: → reads the note, the keys in the card")
+        got = out[sel]
+        self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+        self.assertEqual(len(got["bars"]), 1, got["line"])
+        bx, color = got["bars"][0]
+        self.assertEqual(color, muted, "the ▌ is dim while reading")
+        self.assertEqual(bx, got["first"], f"the ▌ is the first thing on the row: {got['line']!r}")
+        self.assertTrue(all(st and st.bold for st in got["name"]), "the name is bold")
+        self.assertFalse([st for st in got["name"] if color_of(st) == green], "the name isn't green while reading")

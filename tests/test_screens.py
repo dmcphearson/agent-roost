@@ -1164,6 +1164,20 @@ class TopTabs(unittest.TestCase):
                     else:
                         self.assertEqual({color_of(st) for st in letters}, {muted}, f"{n} on the {name} tab is dim")
 
+    def test_the_top_bar_has_no_background_fill_anywhere_on_every_tab(self):
+        """Agent Roost, the tab names, and the corner text all sit on the terminal's own background."""
+        for name in TABS:
+            seen = {}
+
+            async def bar(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                seen["bar"], seen["fills"] = screen_text(pilot.app)[0], backgrounds(pilot.app, 0)
+            self.start([open_view(name), bar])
+            with self.subTest(tab=name):
+                self.assertIn("Agent Roost", seen["bar"])
+                self.assertEqual(seen["fills"], set(), f"no background on the top bar: {seen['bar']!r}")
+
     # 2. Moving between the tabs
 
     def test_tab_and_shift_tab_move_to_the_next_and_previous_tab_wrapping(self):
