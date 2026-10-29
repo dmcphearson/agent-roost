@@ -103,12 +103,13 @@ class Projects(unittest.TestCase):
         ui.folded, ui.expanded = {"Inactive", "Closed"}, set()
         ui.choosing = ui.confirm = ui.term = None
         ui.summaries, ui.plugin_ok = {}, True
-        ui.focus = "side"  # as roost starts: the keys go to the sidebar
+        ui.focus = "side"  # as roost starts: the keys go to the list
         ui.load_projects()
         return ui
 
     def shown(self, ui):
-        return [(r.kind, None if r.kind == "all" else r.item["id"]) for r in ui.project_rows()]
+        """The list's rows as (kind, id), but for the More projects row (MoreProjects reads that one off the screen)."""
+        return [(r.kind, r.item["id"]) for r in ui.project_rows() if r.kind in ("project", "sub", "session", "head", "new")]
 
     def test_a_click_where_a_projects_arrow_was_only_selects_it(self):
         """Spec 1: a project row never expands, so a click at its left edge (where ▸ was) adds no rows,
@@ -122,9 +123,9 @@ class Projects(unittest.TestCase):
         for _ in range(2):  # two separate single clicks: a quick second one would be a double-click
             ui.last_click = (0, -1)
             ui.keys_projects(click, ui.project_rows())
-            self.assertEqual((self.shown(ui), ui.choosing), ([("project", "b"), ("all", None), ("new", "+ New project")], None))
+            self.assertEqual((self.shown(ui), ui.choosing), ([("project", "b"), ("new", "+ New project")], None))
         ui.keys_projects(("mouse", 20, 6, roost.curses.BUTTON1_CLICKED), ui.project_rows())  # the name only selects it
-        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("new", "+ New project")])
 
     def test_no_session_rows_under_a_project_even_once_marked_open(self):
         """Spec 1: no Session row under a project in any state of the UI, even with the project in
@@ -141,10 +142,10 @@ class Projects(unittest.TestCase):
                        dict(session("Second look", state="closed", kind=None), id="bb2c0000-0000", active=end)]  # worked on after
         ui.load_projects()
         ui.expanded = {"b"}
-        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("new", "+ New project")])
         ui.psel = 0
         ui.keys_projects("left", ui.project_rows())
-        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("new", "+ New project")])
 
     def wrapped_project(self, ids):
         """Project b listing ids, with a Handoff that covers aa1b9a71-0000 to its last message (an hour ago)
@@ -172,7 +173,7 @@ class Projects(unittest.TestCase):
                        dict(session("Asking", state="waiting", mins=1), id="ee5f0000-0000")]
         ui.load_projects()
         self.assertEqual([ui.wrapped_up(ui.projects[0], s) for s in ui.sessions], [True, False, False, False, False])
-        only = [("project", "b"), ("all", None), ("new", "+ New project")]
+        only = [("project", "b"), ("new", "+ New project")]
         ui.psel = 0
         ui.keys_projects("right", ui.project_rows())
         self.assertEqual(self.shown(ui), only)
@@ -189,13 +190,14 @@ class Projects(unittest.TestCase):
         ui.load_projects()
         self.assertTrue(ui.wrapped_up(ui.projects[0], ui.sessions[0]))  # the fixture really is wrapped up
         ui.psel = 0
-        ui.keys_projects("right", ui.project_rows())
+        ui.keys_projects("right", ui.project_rows())  # into the details: it lists the wrapped Session
+        ui.keys_projects("left", ui.project_rows())  # back to the list, where enter is the project's actions
         acts = labels(ui, ui.keys_projects, ui.project_rows())
         self.assertIn("Show its Sessions", acts)
         self.assertNotIn("Hide its Sessions", acts)
         ui.prow_y = {6: 0}  # the project's row, as draw left it
         ui.keys_projects(("mouse", 3, 6, roost.curses.BUTTON1_CLICKED), ui.project_rows())
-        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("new", "+ New project")])
 
     def test_a_wrapped_up_session_doesnt_change_the_sessions_column(self):
         """SESSIONS counts running Sessions; a wrapped-up one is closed, so linking it changes nothing."""
@@ -229,7 +231,7 @@ class Projects(unittest.TestCase):
         ui.psel = 0
         act(ui, ui.keys_projects, ui.project_rows(), "Show its Sessions")
         self.assertEqual((ui.TABS[ui.tab].name, roost.VIEWS[ui.view], ui.query), ("Sessions", "Running", "project:b"))
-        self.assertEqual(self.shown(ui), [("project", "b"), ("all", None), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", "b"), ("new", "+ New project")])
         self.assertFalse([l for l in labels(ui, ui.keys_projects, ui.project_rows()) if l.startswith("Hide its Sessions")])
 
     def test_show_its_sessions_opens_on_closed_when_none_of_its_sessions_is_running(self):
@@ -458,7 +460,7 @@ class Projects(unittest.TestCase):
         self.assertTrue(any(p["closed"] for p in ps) and any(not p["last"] for p in ps))
 
     def test_demo_has_an_unfiled_session_and_its_handoffs_carry_a_path(self):
-        """roost --demo shows the Unfiled entry with something in it, and its Handoffs are (time, title, path)."""
+        """roost --demo shows the Sessions tab's Unfiled view with something in it, and its Handoffs are (time, title, path)."""
         sessions = roost.demo_sessions()
         ps = roost.demo_projects(sessions)
         listed = {i for p in ps for x in [p] + list(p.get("subs") or []) for i in x["sessions"]}
@@ -537,7 +539,7 @@ class ProjectRows(unittest.TestCase):
             for pid, want in (("today-one", clock(now)), ("older-one", shown)):
                 with unittest.mock.patch.object(FMT, "date_order", lambda o=order: o):
                     lines = self.run_on(projects, [self.on_project(pid)]).lines
-                self.assertTrue([l for l in lines if re.search(rf"· worked {re.escape(want)}(\s|$)", l)], (order, pid, lines))
+                self.assertTrue([l for l in lines if re.search(rf"\sworked {re.escape(want)}(\s|$)", l)], (order, pid, lines))
 
     def test_the_projects_card_dates_are_short(self):
         import unittest.mock
@@ -553,8 +555,8 @@ class ProjectRows(unittest.TestCase):
                 seen[kind] = dict(ui.project_panel([roost.Row("Recent", kind, item, 0)], 30, 160)[1])["Status"]
         with unittest.mock.patch.object(FMT, "date_order", lambda: "DMY"):
             app = self.run_on([p], [self.on_project("older-one"), panels])
-        status = next(l for l in app.lines if "· worked" in l)
-        self.assertRegex(status, r"· worked 05/01/25(\s|$)")
+        status = next(l for l in app.lines if " worked " in l)
+        self.assertRegex(status, r"\sworked 05/01/25(\s|$)")
         self.assertRegex(seen["session"], r"Last active +05/01/25(\s|$)")
         self.assertRegex(seen["recap"], r"Last worked +05/01/25(\s|$)")
 
@@ -581,8 +583,8 @@ class ProjectRows(unittest.TestCase):
     # 2. The sidebar
 
     def test_moving_down_a_long_list_keeps_the_selected_row_in_the_sidebar(self):
-        """More projects than the sidebar has rows: as down moves through them, the selected project's
-        name is always in the sidebar, and the list scrolls to show it."""
+        """More projects than the list has rows: as down moves through them, the selected project's
+        name is always in the list, and the list scrolls to show it."""
         now, projects = time.time(), []
         for i in range(40):
             projects.append(self.project(f"proj-{i:02d}", label=f"Project {i:02d}", last=now - i * 60))
@@ -619,9 +621,9 @@ class ProjectRows(unittest.TestCase):
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class TwoPanes(unittest.TestCase):
-    """The Projects tab in two panes, under the search row: the sidebar on the left, SIDEBAR_W columns
-    wide, listing project_rows() with a marker at a row's right end, and the selected row's detail pane
-    on the right, taking the rest of the width."""
+    """The Projects tab in two panes, under the search row: the list on the left, SIDEBAR_W columns wide,
+    listing project_rows() with a marker at a row's right end, and the selected row's details on the right,
+    taking the rest of the width."""
     run_on, on_project, chosen = ProjectRows.run_on, ProjectRows.on_project, staticmethod(ProjectRows.chosen)
     select, keys, sidebar = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(ProjectRows.sidebar)
     SIZE = (120, 40)
@@ -631,7 +633,7 @@ class TwoPanes(unittest.TestCase):
     def setUp(self):
         """Read from a temp Projects folder: Printer fleet (a running Session and a Handoff: ●), Restore
         drill (a Handoff, no Sessions: ◆), Quiet one (neither), Badge rollout (a Handoff, so ◆ itself, with
-        sub-projects Badge Printers, running, and beta, ready: ● ◆ while folded), and Old network, closed."""
+        sub-projects Badge Printers, running, and beta, ready: ● ◆), and Old network, closed (under More projects)."""
         Projects.setUp(self)  # temp Projects folder, read here before the screens' stand-ins replace the readers
         self.addCleanup(Projects.tearDown, self)
         fix, laptop = session("Printer fix", mins=5, tokens=41000), session("Laptop refresh", state="waiting")
@@ -721,39 +723,19 @@ class TwoPanes(unittest.TestCase):
             self.assertNotRegex(l, r"\d:\d\d (AM|PM)")
         ui, last = app.ui, -1
         rows = ui.project_rows()
-        self.assertEqual([r.kind for r in rows if r.kind in ("head", "all", "new")], ["all", "new"])
-        for r in rows:  # top to bottom, as project_rows() lists them
-            if r.kind == "all":
-                want = f"All projects ({len(self.projects)})"
-            elif r.kind == "project":
-                want = ("▸ " if any(not s["closed"] for s in r.item.get("subs") or []) else "") + roost.label_of(r.item)
-            else:
-                want = "+ New project"
+        self.assertEqual([r.kind for r in rows if r.kind in ("head", "all", "sub")], [], "no headers, sub-project rows, or All projects")
+        wants = [roost.label_of(r.item) for r in rows if r.kind == "project"] + ["More projects", "+ New project"]
+        for want in wants:  # top to bottom, as project_rows() lists them
             y = next((i for i, l in enumerate(side) if i > last and want in l), None)
             self.assertIsNotNone(y, (want, side))
             last = y
-
-    def test_sub_project_rows_show_their_label_indented_under_their_project(self):
-        seen = {}
-        self.run_on(self.projects, [self.select(lambda ui: ui.subs_open.add("rollout")), self.grab(seen, "open")],
-                    size=self.SIZE)
-        side = self.sidebar(seen["open"][0])
-        p = self.at(side, "▾ Badge rollout")
-        self.assertIsNotNone(p, side)
-        self.assertTrue(side[p + 1].strip().startswith("Badge Printers"), side[p + 1])
-        self.assertTrue(side[p + 2].strip().startswith("beta"), side[p + 2])
-        name_x = side[p].index("Badge rollout")
-        self.assertGreater(side[p + 1].index("Badge Printers"), name_x)
-        self.assertGreater(side[p + 2].index("beta"), name_x)
+        self.assertFalse([l for l in side if set("▸▾") & set(l)], side)
 
     def test_a_marker_sits_at_the_right_end_of_its_sidebar_row(self):
         W = roost.SIDEBAR_W
         seen = {}
-        app = self.run_on(self.projects, [self.on_project("quiet"), self.grab(seen, "folded"),
-                                          self.select(lambda ui: ui.subs_open.add("rollout")), self.grab(seen, "open")],
-                          size=self.SIZE)
-        cases = {"folded": [("Printer fleet", "●"), ("Restore drill", "◆"), ("Badge rollout", "● ◆"), ("Quiet one", "")],
-                 "open": [("Badge rollout", "◆"), ("Badge Printers", "●")]}
+        self.run_on(self.projects, [self.on_project("quiet"), self.grab(seen, "folded")], size=self.SIZE)
+        cases = {"folded": [("Printer fleet", "●"), ("Restore drill", "◆"), ("Badge rollout", "● ◆"), ("Quiet one", "")]}
         for when, marks in cases.items():
             side = self.sidebar(seen[when][0])
             for label, mark in marks:
@@ -767,8 +749,6 @@ class TwoPanes(unittest.TestCase):
                     self.assertGreaterEqual(len(end), W - 4, (when, label, row))  # at the right end, not after the name
                 else:
                     self.assertFalse(set("●◆") & set(row), (when, label, row))
-        beta = next(r for r in app.ui.project_rows() if r.kind == "sub" and r.item["slug"] == "beta")
-        self.assertEqual(app.ui.markers(beta), "◆")
 
     def test_up_and_down_move_the_selection_and_the_detail_pane_shows_the_selected_row(self):
         seen, at = {}, {}
@@ -782,13 +762,6 @@ class TwoPanes(unittest.TestCase):
         self.assertEqual(self.detail_name(seen["at"][1])[0], "Printer fleet")
         self.assertEqual(self.detail_name(seen["down"][1])[0], self.row_name(rows[i + 1]))
         self.assertEqual(self.detail_name(seen["up"][1])[0], "Printer fleet")
-
-    def test_right_and_left_open_and_close_a_projects_sub_projects_in_the_sidebar(self):
-        seen = {}
-        self.run_on(self.projects, [self.on_project("rollout"), self.keys("right"), self.grab(seen, "right"),
-                                    self.keys("left"), self.grab(seen, "left")], size=self.SIZE)
-        self.assertIsNotNone(self.at(self.sidebar(seen["right"][0]), "Badge Printers"))
-        self.assertIsNone(self.at(self.sidebar(seen["left"][0]), "Badge Printers"))
 
     def test_enter_opens_the_selected_rows_menu(self):
         app = self.run_on(self.projects, [self.on_project("drill"), self.keys("enter")], size=self.SIZE)
@@ -1009,8 +982,36 @@ class SubProjects(unittest.TestCase):
                 self.assertNotIn("rollout/beta", out)
 
 
+def sub_of(ui, rid):
+    """The sub-project rid, from its project's subs: the list has no sub-project rows."""
+    p = next(p for p in ui.projects if p["id"] == rid.split("/")[0])
+    return next(s for s in p.get("subs") or [] if s["id"] == rid)
+
+
+def sub_menu(ui, rid):
+    """Put up the sub-project's actions, as enter on its line in its project's details does."""
+    s = sub_of(ui, rid)
+    ui.menu(roost.label_of(s), ui.sub_actions(s))
+
+
+def sub_labels(ui, rid):
+    """The sub-project's actions, as their labels, with DIV where a divider row falls."""
+    sub_menu(ui, rid)
+    out = [DIV if is_divider(o) else o[0] for o in ui.choice_options()]
+    ui.choosing = None
+    return out
+
+
+def sub_act(ui, rid, label):
+    """Open the sub-project's actions and pick the one whose label starts with label."""
+    sub_menu(ui, rid)
+    opts = ui.choice_options()
+    ui.choosing["sel"] = next(i for i, o in enumerate(opts) if not is_divider(o) and o[0].startswith(label))
+    return ui.keys_choice("enter")
+
+
 class SubProjectRows(unittest.TestCase):
-    """Sub-projects on the Projects tab: rows under their project, folded until opened, with a panel,
+    """Sub-projects on the Projects tab: never rows in the list (they're in their project's details), with
     actions, a New sub-project flow, and search."""
     setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
     shown = Projects.shown
@@ -1059,57 +1060,34 @@ class SubProjectRows(unittest.TestCase):
         self.addCleanup(patcher.stop)
         return calls
 
-    def test_sub_projects_are_folded_until_right_and_left_folds_them_again(self):
+    def test_sub_projects_never_get_rows_in_the_list(self):
         ui = self.fixture()
-        self.assertEqual(self.after(ui, "rollout"), [])  # folded by default
+        self.assertEqual(self.after(ui, "rollout"), [])
         self.select(ui, "project", "rollout")
-        ui.keys_projects("right", ui.project_rows())
-        self.assertEqual(self.after(ui, "rollout"), [("sub", "rollout/alpha"), ("sub", "rollout/beta")])  # slug order, no done one
-        sub_rows = [r for r in ui.project_rows() if r.kind == "sub"]
-        self.assertEqual([(r.item["slug"], r.item["type"]) for r in sub_rows], [("alpha", "feature"), ("beta", "bugfix")])
-        ui.keys_projects("left", ui.project_rows())  # on the project
-        self.assertEqual(self.after(ui, "rollout"), [])
+        for k in ("right", "left", "right", "enter"):
+            ui.keys_projects(k, ui.project_rows())
+            ui.choosing = None
+            self.assertFalse([r for r in ui.project_rows() if r.kind == "sub"], k)
         self.assertEqual(ui.project_rows()[ui.psel].item["id"], "rollout")
-        ui.keys_projects("right", ui.project_rows())
-        self.select(ui, "sub", "rollout/beta")
-        ui.keys_projects("left", ui.project_rows())  # on one of its sub rows
-        self.assertEqual(self.after(ui, "rollout"), [])
-        r = ui.project_rows()[ui.psel]
-        self.assertEqual((r.kind, r.item["id"]), ("project", "rollout"))
 
-    def test_a_projects_panel_counts_its_open_sub_projects(self):
+    def test_a_projects_open_sub_projects_are_in_its_details_sub_projects_section_not_a_field(self):
         ui = self.fixture()
         rows = self.select(ui, "project", "rollout")
         _, fields = ui.project_panel(rows, 40, 120)
-        subs = [str(v) for label, v in fields if label == "Sub-projects"]
-        self.assertEqual(len(subs), 1, fields)
-        self.assertIn("2 open", subs[0])
-        rows = self.select(ui, "project", "other")
-        _, fields = ui.project_panel(rows, 40, 120)
         self.assertNotIn("Sub-projects", [label for label, _ in fields])
+        lines = dict(ui.detail_sections(rows[ui.psel]))["Sub-projects"]
+        self.assertEqual([next(s for s in ("alpha", "beta", "gamma") if s in l) for l in lines], ["alpha", "beta"])  # no done one
+        rows = self.select(ui, "project", "other")
+        self.assertNotIn("Sub-projects", dict(ui.detail_sections(rows[ui.psel])))
 
-    def test_a_sub_rows_panel_names_its_id_type_and_status(self):
-        ui = self.fixture()
-        self.select(ui, "project", "rollout")
-        ui.keys_projects("right", ui.project_rows())
-        rows = self.select(ui, "sub", "rollout/beta")
-        name, fields = ui.project_panel(rows, 40, 120)
-        self.assertEqual(name, "rollout/beta")
-        got = {label: str(v) for label, v in fields}
-        self.assertIn("bugfix", got.get("Type", ""), fields)
-        self.assertNotIn("Status", got, fields)  # its status is on the name line
-
-    def test_a_sub_rows_actions_start_a_session_in_it(self):
+    def test_a_sub_projects_actions_start_a_session_in_it(self):
         calls = self.capture_start()
         ui = self.fixture()
-        self.select(ui, "project", "rollout")
-        ui.keys_projects("right", ui.project_rows())
-        rows = self.select(ui, "sub", "rollout/alpha")
-        acts = labels(ui, ui.keys_projects, rows)
+        acts = sub_labels(ui, "rollout/alpha")
         for want in ("Start a Session", "Show its folder in Finder"):
             self.assertTrue([l for l in acts if l.startswith(want)], (want, acts))
         self.assertNotIn("New sub-project", acts)  # only in its parent's actions
-        act(ui, ui.keys_projects, ui.project_rows(), "Start a Session")
+        sub_act(ui, "rollout/alpha", "Start a Session")
         self.assertEqual([c[0] for c in calls], ["rollout/alpha"])
 
     def test_a_projects_actions_offer_new_sub_project_and_start_one_in_a_sub_project(self):
@@ -1154,9 +1132,10 @@ class SubProjectRows(unittest.TestCase):
         meta = roost.frontmatter(readme.read_text())
         self.assertEqual((meta.get("type"), meta.get("description")), ("chore", "Tidy the cables."))
         self.assertTrue(ui.msg.startswith("Created"), ui.msg)
-        self.assertIn(("sub", "rollout/tidy-cables"), self.after(ui, "rollout"))  # its parent is unfolded
         r = ui.project_rows()[ui.psel]
-        self.assertEqual((r.kind, r.item["id"]), ("sub", "rollout/tidy-cables"))
+        self.assertEqual((r.kind, r.item["id"]), ("project", "rollout"), "its project stays selected")
+        self.assertTrue([l for l in dict(ui.detail_sections(r))["Sub-projects"] if "tidy-cables" in l], "in its project's details")
+        self.assertFalse([x for x in ui.project_rows() if x.kind == "sub"])
 
     def test_new_sub_project_with_a_bad_slug_creates_nothing(self):
         ui = self.fixture()
@@ -1172,13 +1151,13 @@ class SubProjectRows(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (self.root / "rollout" / "sub").iterdir()), before)
         self.assertTrue(ui.msg.startswith("Couldn't create it"), ui.msg)
 
-    def test_search_shows_a_matching_sub_project_under_its_parent(self):
+    def test_search_for_a_sub_project_lists_its_project(self):
         ui = self.fixture()
         ui.notes = []
-        for q, want in [("alpha", "rollout/alpha"), ("TONER", "rollout/beta"), ("type:bugfix", "rollout/beta")]:
+        for q in ("alpha", "TONER", "type:bugfix"):
             ui.pquery = q
             rows = [x for x in self.shown(ui) if x[0] != "head"]
-            self.assertEqual(rows, [("project", "rollout"), ("sub", want)], q)
+            self.assertEqual(rows, [("project", "rollout")], q)
 
 
 class ProjectMenuGroups(unittest.TestCase):
@@ -1235,10 +1214,7 @@ class ProjectMenuGroups(unittest.TestCase):
 
     def test_a_sub_projects_actions_in_groups(self):
         ui = self.fixture()
-        self.select(ui, "project", "rollout")
-        ui.keys_projects("right", ui.project_rows())
-        rows = self.select(ui, "sub", "rollout/alpha")
-        self.assertEqual(labels(ui, ui.keys_projects, rows),
+        self.assertEqual(sub_labels(ui, "rollout/alpha"),
                          ["Start a Session", "Show its Sessions", DIV,
                           "Edit its tags", "Edit its description", "Rename", "Show its folder in Finder", DIV,
                           "Delete"])
@@ -1253,9 +1229,7 @@ class ProjectMenuGroups(unittest.TestCase):
         seen = {}
         seen["rollout"] = labels(ui, ui.keys_projects, self.select(ui, "project", "rollout"))
         seen["legacy"] = labels(ui, ui.keys_projects, self.select(ui, "project", "legacy"))
-        self.select(ui, "project", "rollout")
-        ui.keys_projects("right", ui.project_rows())
-        seen["rollout/alpha"] = labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha"))
+        seen["rollout/alpha"] = sub_labels(ui, "rollout/alpha")
         for row, acts in seen.items():
             real = [a for a in acts if a != DIV]
             self.assertTrue(real, row)
@@ -1300,15 +1274,16 @@ class ProjectDelete(unittest.TestCase):
         self.setUp()
 
     def open_delete(self, ui, kind, rid):
-        """Select the row and choose Delete from its actions."""
+        """Choose Delete from the project's actions (its row's), or the sub-project's (its line's in its project's details)."""
         if kind == "sub":
-            self.select(ui, "project", rid.split("/")[0])
-            if ("sub", rid) not in self.after(ui, rid.split("/")[0]):
-                ui.keys_projects("right", ui.project_rows())
-        act(ui, ui.keys_projects, self.select(ui, kind, rid), "Delete")
+            sub_act(ui, rid, "Delete")
+        else:
+            act(ui, ui.keys_projects, self.select(ui, kind, rid), "Delete")
 
     def ids(self, ui):
-        return [r.item["id"] for r in ui.project_rows() if r.kind in ("project", "sub")]
+        """The listed projects' ids, each followed by its open sub-projects' (in its details: the list has no sub rows)."""
+        return [x["id"] for r in ui.project_rows() if r.kind == "project"
+                for x in [r.item] + [s for s in r.item.get("subs") or [] if not s["closed"]]]
 
     def fixture(self):
         ui = SubProjectRows.fixture(self)
@@ -1324,9 +1299,7 @@ class ProjectDelete(unittest.TestCase):
 
     def test_a_sub_projects_actions_include_delete(self):
         ui = self.fixture()
-        self.select(ui, "project", "rollout")
-        ui.keys_projects("right", ui.project_rows())
-        self.assertIn("Delete", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
+        self.assertIn("Delete", sub_labels(ui, "rollout/alpha"))
 
     def test_delete_on_a_project_opens_a_confirm_naming_it_and_its_sub_projects(self):
         ui = self.fixture()
@@ -1418,9 +1391,6 @@ class ProjectDelete(unittest.TestCase):
         for kept in ("rollout", "rollout/sub/beta", "rollout/sub/gamma"):
             self.assertTrue((self.root / kept).is_dir(), kept)
         self.assertTrue((self.root / "rollout" / "README.md").is_file())
-        if "rollout" not in ui.subs_open:
-            self.select(ui, "project", "rollout")
-            ui.keys_projects("right", ui.project_rows())
         self.assertNotIn("rollout/alpha", self.ids(ui))
         self.assertIn("rollout", self.ids(ui))
         self.assertIn("rollout/beta", self.ids(ui))
@@ -1440,16 +1410,11 @@ class SubProjectRename(unittest.TestCase):
         self.setUp()
 
     def open_rename(self, ui, rid="rollout/alpha"):
-        if "rollout" not in ui.subs_open:
-            self.select(ui, "project", "rollout")
-            ui.keys_projects("right", ui.project_rows())
-        act(ui, ui.keys_projects, self.select(ui, "sub", rid), "Rename")
+        sub_act(ui, rid, "Rename")
 
     def test_a_sub_projects_actions_include_rename(self):
         ui = self.fixture()
-        self.select(ui, "project", "rollout")
-        ui.keys_projects("right", ui.project_rows())
-        self.assertIn("Rename", labels(ui, ui.keys_projects, self.select(ui, "sub", "rollout/alpha")))
+        self.assertIn("Rename", sub_labels(ui, "rollout/alpha"))
 
     def test_rename_starts_with_the_slug_and_renames_its_folder(self):
         ui = self.fixture()
@@ -1464,9 +1429,6 @@ class SubProjectRename(unittest.TestCase):
         self.assertFalse((sub / "alpha").exists())
         self.assertTrue((sub / "delta").is_dir())
         self.assertTrue((self.root / "rollout" / "README.md").is_file())
-        if "rollout" not in ui.subs_open:
-            self.select(ui, "project", "rollout")
-            ui.keys_projects("right", ui.project_rows())
         self.assertIn("rollout/delta", self.ids(ui))
         self.assertNotIn("rollout/alpha", self.ids(ui))
         self.assertIn("rollout", self.ids(ui))
@@ -1672,12 +1634,6 @@ class DescriptionsOnTheTab(unittest.TestCase):
     answer = staticmethod(ProjectDelete.answer)
     shown = Projects.shown
 
-    def open_sub(self, ui, rid):
-        if ("sub", rid) not in self.after(ui, rid.split("/")[0]):
-            self.select(ui, "project", rid.split("/")[0])
-            ui.keys_projects("right", ui.project_rows())
-        return self.select(ui, "sub", rid)
-
     def assert_optional_description_title(self, ui):
         title = ((ui.asking or {}).get("title") or "").lower()
         self.assertIn("description", title)
@@ -1713,12 +1669,9 @@ class DescriptionsOnTheTab(unittest.TestCase):
     def test_the_panel_field_is_description_and_says_when_there_is_none(self):
         self.project("rollout", "---\nstatus: active\nsessions: []\n---\n\n# Rollout\n", handoffs=[TODAY()])
         self.project("said", '---\ndescription: "Said text."\nstatus: active\nsessions: []\n---\n\n# Said\n', handoffs=[TODAY()])
-        self.sub("rollout", "alpha", summary="")
-        self.sub("rollout", "beta", summary="Toner alerts.")
         ui = self.ui()
-        for kind, rid, want in [("project", "rollout", "no description yet"), ("project", "said", "Said text."),
-                                ("sub", "rollout/alpha", "no description yet"), ("sub", "rollout/beta", "Toner alerts.")]:
-            rows = self.open_sub(ui, rid) if kind == "sub" else self.select(ui, kind, rid)
+        for kind, rid, want in [("project", "rollout", "no description yet"), ("project", "said", "Said text.")]:
+            rows = self.select(ui, kind, rid)
             _, fields = ui.project_panel(rows, 40, 120)
             named = dict((label, str(v)) for label, v in fields if label)
             self.assertNotIn("Summary", named, (rid, fields))
@@ -1738,11 +1691,11 @@ class DescriptionsOnTheTab(unittest.TestCase):
         self.answer(ui, "")
         self.assertEqual(roost.frontmatter(readme.read_text())["description"], "")
         sub = self.root / "rollout" / "sub" / "alpha" / "README.md"
-        act(ui, ui.keys_projects, self.open_sub(ui, "rollout/alpha"), "Edit its description")
+        sub_act(ui, "rollout/alpha", "Edit its description")
         self.assertEqual(ui.asking["text"], "Badge printers.")
         self.answer(ui, "Badge printers, every site.")
         self.assertEqual(roost.frontmatter(sub.read_text())["description"], "Badge printers, every site.")
-        act(ui, ui.keys_projects, self.open_sub(ui, "rollout/alpha"), "Edit its description")
+        sub_act(ui, "rollout/alpha", "Edit its description")
         self.answer(ui, "")
         self.assertEqual(roost.read_project(sub.parent)["summary"], "")
 
@@ -1844,9 +1797,9 @@ class ProjectRename(unittest.TestCase):
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class SubProjectLabels(unittest.TestCase):
-    """A sub-project's row on the Projects tab shows its label (its README heading); its id stays
+    """A sub-project's line in its project's details shows its label (its README heading); its id stays
     <project>/<slug>, and the Sessions tab's PROJECT column shows that id."""
-    run_on, sidebar = ProjectRows.run_on, staticmethod(ProjectRows.sidebar)
+    run_on, sidebar, on_project = ProjectRows.run_on, staticmethod(ProjectRows.sidebar), ProjectRows.on_project
     select = staticmethod(TextualScreens.select)
 
     def setUp(self):
@@ -1860,11 +1813,12 @@ class SubProjectLabels(unittest.TestCase):
         TextualScreens.setUp(self)
         self.sessions = [work]
 
-    def test_a_sub_row_shows_its_label(self):
-        app = self.run_on(self.projects, [self.select(lambda ui: ui.subs_open.add("rollout"))])
-        self.assertEqual([r.item["id"] for r in app.ui.project_rows() if r.kind == "sub"], ["rollout/alpha"])
-        rows = self.sidebar(app.lines)
-        self.assertTrue([l for l in rows if "Badge Printers" in l], rows)
+    def test_a_sub_projects_line_in_its_projects_details_shows_its_label(self):
+        app = self.run_on(self.projects, [self.on_project("rollout")], size=(120, 40))
+        details = [l[roost.SIDEBAR_W:] for l in app.lines]
+        self.assertTrue([l for l in details if "Badge Printers" in l], details)
+        self.assertFalse([l for l in details if "rollout/alpha" in l], details)
+        self.assertFalse([l for l in self.sidebar(app.lines) if "Badge Printers" in l], "no sub-project row in the list")
 
     def test_the_sessions_tab_names_a_sub_project_by_its_id(self):
         seen = {}
@@ -1879,9 +1833,9 @@ class SubProjectLabels(unittest.TestCase):
 
 
 class ProjectMarkers(unittest.TestCase):
-    """markers(r), the marker at a sidebar row's right end: ● when a Session it lists is running; ◆ when
+    """markers(r), the marker at a list row's right end: ● when a Session it lists is running; ◆ when
     it's ready to pick up (open, nothing it lists running, a Handoff, and its newest Session, if any,
-    wrapped up); a folded project adds its open sub-projects' markers, ● first."""
+    wrapped up); a project adds its open sub-projects' markers, ● first."""
     setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
     wrapped_project = Projects.wrapped_project
 
@@ -1894,8 +1848,8 @@ class ProjectMarkers(unittest.TestCase):
 
     @staticmethod
     def marks(ui):
-        """{(kind, id): its markers} for every row the tab lists."""
-        return {(r.kind, None if r.kind == "all" else r.item["id"]): ui.markers(r) for r in ui.project_rows()}
+        """{(kind, id): its markers} for every project row the tab lists, and + New project."""
+        return {(r.kind, r.item["id"]): ui.markers(r) for r in ui.project_rows() if r.kind in ("project", "sub", "new")}
 
     @staticmethod
     def readme(ids=(), status="active"):
@@ -1934,25 +1888,25 @@ class ProjectMarkers(unittest.TestCase):
         m = self.marks(ui)
         self.assertEqual((m[("project", "b")], m[("project", "c")]), ("", "●"))
 
-    def test_the_all_projects_row_and_new_project_have_no_marker(self):
+    def test_rows_that_arent_projects_have_no_marker(self):
         self.project("b", self.readme(), handoffs=[TODAY()])  # ready: ◆ on its own row
+        self.project("shut", self.readme(status="closed"), handoffs=[TODAY()])  # under More projects
         ui = self.ui()
-        rows = [r for r in ui.project_rows() if r.kind in ("head", "all", "new")]
-        self.assertEqual([r.kind for r in rows], ["all", "new"])
-        self.assertEqual([ui.markers(r) for r in rows], ["", ""])
+        rows = [r for r in ui.project_rows() if r.kind != "project"]
+        self.assertIn("new", [r.kind for r in rows])
+        self.assertEqual([ui.markers(r) for r in rows], [""] * len(rows))
 
-    def test_a_sub_project_row_has_its_own_marker_and_an_opened_project_only_its_own(self):
+    def test_a_project_row_carries_its_open_sub_projects_marks_and_has_no_sub_rows(self):
         self.project("rollout", self.readme())  # no Handoff, no Sessions: nothing of its own
         self.sub("rollout", "alpha", sessions=[("Live", "cc3d0000-0000")])
         self.sub("rollout", "beta", status="blocked", handoffs=[(TODAY(), "x")])  # open, though blocked
         self.sub("rollout", "delta")
         ui = self.ui([dict(session("Live"), id="cc3d0000-0000")])
-        ui.subs_open.add("rollout")
         m = self.marks(ui)
-        self.assertEqual([m[("sub", f"rollout/{s}")] for s in ("alpha", "beta", "delta")], ["●", "◆", ""])
-        self.assertEqual(m[("project", "rollout")], "")
+        self.assertEqual(m[("project", "rollout")], "● ◆")
+        self.assertFalse([k for k in m if k[0] == "sub"], m)
 
-    def test_a_folded_project_shows_its_open_sub_projects_markers(self):
+    def test_a_project_shows_its_open_sub_projects_markers(self):
         self.project("rollout", self.readme())
         self.sub("rollout", "alpha", sessions=[("Live", "cc3d0000-0000")])
         self.sub("rollout", "beta", handoffs=[(TODAY(), "x")])
@@ -1963,10 +1917,8 @@ class ProjectMarkers(unittest.TestCase):
                       dict(session("Gone", state="closed", kind=None), id="ee5f0000-0000")])
         m = self.marks(ui)
         self.assertEqual((m[("project", "rollout")], m[("project", "other")]), ("● ◆", ""))
-        ui.subs_open.add("rollout")
-        self.assertEqual(self.marks(ui)[("project", "rollout")], "")
 
-    def test_a_folded_projects_own_marker_and_its_sub_projects_combine_dot_first(self):
+    def test_a_projects_own_marker_and_its_sub_projects_combine_dot_first(self):
         self.project("ready", self.readme(), handoffs=[TODAY()])  # ready itself, a running sub-project
         self.sub("ready", "alpha", sessions=[("Live", "cc3d0000-0000")])
         self.project("live", self.readme(["dd4e0000-0000"]))  # running itself, a ready sub-project
@@ -1977,9 +1929,6 @@ class ProjectMarkers(unittest.TestCase):
                       dict(session("Mine"), id="ee5f0000-0000"), dict(session("Third"), id="ff600000-0000")])
         m = self.marks(ui)
         self.assertEqual([m[("project", p)] for p in ("ready", "live", "both")], ["● ◆", "● ◆", "●"])
-        ui.subs_open.update({"ready", "live", "both"})
-        m = self.marks(ui)
-        self.assertEqual([m[("project", p)] for p in ("ready", "live", "both")], ["◆", "●", "●"])
 
     def test_the_demo_has_a_running_project_and_a_ready_one(self):
         ui = Projects.ui(self)
@@ -1991,54 +1940,11 @@ class ProjectMarkers(unittest.TestCase):
         self.assertTrue([p for p, m in shown.items() if "◆" in m], shown)
 
 
-class SessionsField(unittest.TestCase):
-    """The detail pane's Sessions field for a project or sub-project: its running counts (◆ need input,
-    ● working, ○ idle), then N unwrapped when there are any; none running when neither."""
-    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
-    ui, readme, wrapped_project = ProjectMarkers.ui, staticmethod(ProjectMarkers.readme), Projects.wrapped_project
-
-    def fields(self, ui, kind, rid):
-        rows = ui.project_rows()
-        ui.psel = next(i for i, r in enumerate(rows) if r.kind == kind and r.item["id"] == rid)
-        return ui.project_panel(rows, 40, 120)[1]
-
-    def field(self, ui, kind, rid):
-        fields = self.fields(ui, kind, rid)
-        got = [str(v) for label, v in fields if label == "Sessions"]
-        self.assertEqual(len(got), 1, fields)
-        return got[0].strip()
-
-    def test_running_counts_then_unwrapped(self):
-        ids = ["aa1b9a71-0000", "bb2c0000-0000", "cc3d0000-0000", "dd4e0000-0000", "ee5f0000-0000"]
-        self.project("b", self.readme(ids), handoffs=[TODAY()])
-        ui = self.ui([dict(session("Asks", state="waiting"), id=ids[0]), dict(session("Works", state="busy"), id=ids[1]),
-                      dict(session("Sits"), id=ids[2]), dict(session("Sits too"), id=ids[3]),
-                      dict(session("Gone", state="closed", kind=None, mins=30), id=ids[4])])
-        self.assertRegex(self.field(ui, "project", "b"), r"^◆1\W+●1\W+○2\W+1 unwrapped$")
-
-    def test_only_unwrapped_sessions(self):
-        self.project("b", self.readme(["aa1b9a71-0000", "bb2c0000-0000"]), handoffs=[TODAY()])
-        ui = self.ui([dict(session("Gone", state="closed", kind=None, mins=30), id="aa1b9a71-0000"),
-                      dict(session("Gone too", state="closed", kind=None, mins=40), id="bb2c0000-0000")])
-        self.assertEqual(self.field(ui, "project", "b"), "2 unwrapped")
-
-    def test_none_running_when_nothing_runs_and_nothing_is_unwrapped(self):
-        self.project("c", self.readme())
-        end = self.wrapped_project(["aa1b9a71-0000"])
-        ui = self.ui([dict(session("Wrapped", state="closed", kind=None, mins=60), id="aa1b9a71-0000", active=end)])
-        self.assertTrue(ui.wrapped_up(next(p for p in ui.projects if p["id"] == "b"), ui.sessions[0]))  # the fixture
-        self.assertEqual(self.field(ui, "project", "b"), "none running")  # only a wrapped-up Session
-        self.assertEqual(self.field(ui, "project", "c"), "none running")  # no Sessions at all
-
-    def test_a_sub_projects_field_counts_its_own_sessions(self):
-        self.project("rollout", self.readme(), handoffs=[TODAY()])
-        self.sub("rollout", "alpha", sessions=[("Sits", "cc3d0000-0000")])
-        self.sub("rollout", "beta")
-        ui = self.ui([dict(session("Sits"), id="cc3d0000-0000")])
-        ui.subs_open.add("rollout")
-        self.assertEqual(self.field(ui, "sub", "rollout/alpha"), "○1")
-        self.assertEqual(self.field(ui, "sub", "rollout/beta"), "none running")
-        self.assertEqual(self.field(ui, "project", "rollout"), "none running")  # a sub-project's Sessions are its own
+def panel_fields(ui, kind, rid):
+    """The selected row's Details fields, as project_panel gives them, with the row rid selected."""
+    rows = ui.project_rows()
+    ui.psel = next(i for i, r in enumerate(rows) if r.kind == kind and r.item["id"] == rid)
+    return ui.project_panel(rows, 40, 120)[1]
 
 
 def handoff_name(ts, sid="aaaaaaaa"):
@@ -2185,17 +2091,8 @@ class DetailSections(unittest.TestCase):
         ui = self.ui()
         heads = lambda rid: [h for h, _ in self.sections(ui, "project", rid)]
         self.assertEqual(heads("rollout"), ["Sub-projects", "Sessions", "Handoffs", "Notes", "Stats"])
-        ui.subs_open.add("rollout")  # opened in the sidebar: still listed
-        self.assertEqual(heads("rollout"), ["Sub-projects", "Sessions", "Handoffs", "Notes", "Stats"])
         self.assertEqual(heads("plain"), ["Sessions", "Handoffs", "Notes", "Stats"])
         self.assertEqual(heads("finished"), ["Sessions", "Handoffs", "Notes", "Stats"])  # only a done one
-
-    def test_a_sub_projects_sections_are_the_same_without_sub_projects(self):
-        self.project("rollout", self.readme(), handoffs=[TODAY()])
-        self.sub("rollout", "alpha")
-        ui = self.ui()
-        ui.subs_open.add("rollout")
-        self.assertEqual([h for h, _ in self.sections(ui, "sub", "rollout/alpha")], ["Sessions", "Handoffs", "Notes", "Stats"])
 
     # 1. Sub-projects
 
@@ -2266,15 +2163,6 @@ class DetailSections(unittest.TestCase):
         self.assertEqual(self.section(ui, "project", "b", "Sessions"), ["none in the last 7 days"])
         self.assertEqual(self.section(ui, "project", "c", "Sessions"), ["none in the last 7 days"])
 
-    def test_a_sub_projects_sessions_are_its_own(self):
-        self.project("rollout", self.readme(["aa000000-0000"]), handoffs=[TODAY()])
-        self.sub("rollout", "alpha", sessions=[("Badge work", "cc000000-0000")])
-        ui = self.ui([dict(session("Parent work"), id="aa000000-0000"), dict(session("Badge work", mins=30), id="cc000000-0000")])
-        ui.subs_open.add("rollout")
-        lines = self.section(ui, "sub", "rollout/alpha", "Sessions")
-        self.assertEqual(len(lines), 1, lines)
-        self.assertIn("Badge work", lines[0])
-
     # 3. Handoffs
 
     def test_handoffs_lists_the_newest_5_each_its_time_then_its_title(self):
@@ -2335,18 +2223,9 @@ class DetailSections(unittest.TestCase):
                         (today, live, "xx000000-0000", "other", 4.00),          # another project
                         (today, live, "ww000000-0000", None, 3.00)])            # a Session it doesn't list
         lines = self.section(ui, "project", "fleet", "Stats")
-        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(len(lines), 2, lines)
         self.assertRegex(lines[0], r"This month\s+\$4\.50 · 2 Sessions")
-
-    def test_a_sub_projects_stats_are_its_own(self):
-        self.project("rollout", self.readme(), handoffs=[TODAY()])
-        self.sub("rollout", "alpha", sessions=[("A", "aa000000-0000"), ("B", "bb000000-0000")])
-        ui = self.ui([dict(session("A"), id="aa000000-0000"), dict(session("B", mins=30), id="bb000000-0000")])
-        ui.subs_open.add("rollout")
-        today = date.today().isoformat()
-        self.spend(ui, [(today, "Live work", "aa000000-0000", None, 0.40), (today, "Live work", "zz000000-0000", "rollout/alpha", 0.60),
-                        (today, "Live work", "yy000000-0000", "rollout", 5.00)])
-        self.assertRegex(self.section(ui, "sub", "rollout/alpha", "Stats")[0], r"This month\s+\$1\.00 · 2 Sessions")
+        self.assertRegex(lines[1], r"^Last 30 days  \$\d+\.\d\d$")
 
     def test_a_spend_row_with_no_day_is_skipped(self):
         """local_day gives None for a timestamp it can't read: that row counts toward no month."""
@@ -2371,16 +2250,16 @@ class DetailSections(unittest.TestCase):
         self.project("tools", self.readme().replace("status: active\n", f"status: active\nrepo: {repo}\n"), handoffs=[TODAY()])
         self.project("plain", self.readme(), handoffs=[TODAY()])
         ui = self.ui()
-        fields = SessionsField.fields(self, ui, "project", "tools")
+        fields = panel_fields(ui, "project", "tools")
         self.assertIn(("Repo", roost.short(repo)), [(label, v) for label, v in fields])
         self.assertTrue(roost.short(repo).startswith("~/"))  # the fixture: short() shortens it
-        self.assertNotIn("Repo", [label for label, _ in SessionsField.fields(self, ui, "project", "plain")])
+        self.assertNotIn("Repo", [label for label, _ in panel_fields(ui, "project", "plain")])
 
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class SectionsOnScreen(unittest.TestCase):
-    """The detail pane at 120x40: the fields, then a blank line and each section, its heading bold and its
-    lines indented under it; a key-hints line at the pane's bottom; the Stats line fills in once spend loads."""
+    """The details at 120x40: a blank line and each section, its heading bold and its lines indented under it,
+    the fields under Details; the Stats line fills in once spend loads."""
     run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
     select, keys, sidebar = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(ProjectRows.sidebar)
     at, grab, SIZE, DESCRIPTION = staticmethod(TwoPanes.at), staticmethod(TwoPanes.grab), TwoPanes.SIZE, TwoPanes.DESCRIPTION
@@ -2444,7 +2323,7 @@ class SectionsOnScreen(unittest.TestCase):
         self.assertGreater(lines[i].index(text, roost.SIDEBAR_W), x, (heading, lines[i]))
         self.assertEqual(lines[y - 1][roost.SIDEBAR_W:].strip(), "", f"no blank line above {heading}")
 
-    def test_the_detail_pane_draws_each_section_under_the_fields(self):
+    def test_the_details_draw_each_section_with_the_fields_under_details(self):
         seen = {}
         self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet")], size=self.SIZE)
         lines, bold = seen["fleet"]
@@ -2453,17 +2332,18 @@ class SectionsOnScreen(unittest.TestCase):
         self.assertIsNotNone(described, lines)
         repo = next((l for l in lines if "~/code/fleet-tools" in l[W:]), "")
         self.assertIn("Repo", repo[W:], lines)
-        heads = ["Sessions", "Handoffs", "Notes", "Stats"]
+        heads = ["Sessions", "Handoffs", "Notes", "Details", "Stats"]
         ys = [self.heading_at(bold, h)[0] for h in heads]
         self.assertEqual(ys, sorted(ys), "the sections in order")
-        self.assertGreater(ys[0], described, "the sections come after the fields")
+        self.assertLess(ys[3], described, "the fields come under Details")
+        self.assertLess(described, ys[4], "and before Stats")
         self.assertFalse([t for y, x, t in bold if t == "Sub-projects" and x >= W], "Printer fleet has no sub-projects")
         nxt = dict(zip(heads, ys[1:] + [None]))
         self.assert_under(lines, bold, "Sessions", "Printer fix", nxt["Sessions"])
         self.assert_under(lines, bold, "Handoffs", "Toner check", nxt["Handoffs"])
         self.assert_under(lines, bold, "Notes", "Driver shortlist", nxt["Notes"])
         self.assert_under(lines, bold, "Stats", "This month", nxt["Stats"])
-        stats = next(l for l in lines[ys[3]:] if "This month" in l)
+        stats = next(l for l in lines[ys[4]:] if "This month" in l)
         self.assertRegex(stats, r"This month\s+\$1\.25 · 1 Sessions?")
 
     def test_a_projects_sub_projects_section_on_screen(self):
@@ -2479,23 +2359,6 @@ class SectionsOnScreen(unittest.TestCase):
         self.assertIn("running", row)
         row = next(l for l in lines[y:sessions_y] if "beta" in l[roost.SIDEBAR_W:])
         self.assertIn("ready · Handoff", row)
-
-    def test_the_pane_ends_with_a_key_hints_line(self):
-        seen = {}
-        W = roost.SIDEBAR_W
-        self.run_on(self.projects, [self.on_project("rollout"), self.grab(seen, "folded"), self.keys("right"),
-                                    self.grab(seen, "open"), self.on_project("fleet"), self.grab(seen, "none")], size=self.SIZE)
-        for when, want, never in (("folded", "→ sub-projects", "hide sub-projects"), ("open", "← hide sub-projects", "→ sub-projects"),
-                                  ("none", None, "sub-projects")):
-            lines = seen[when][0]
-            bottom = self.pane_bottom(lines)
-            self.assertGreater(bottom, 30, lines)  # the fixture: the pane runs down the screen
-            hints = lines[bottom][W:]
-            self.assertIn("enter actions", hints, (when, lines))
-            if want:
-                self.assertIn(want, hints, when)
-            self.assertNotIn(never, hints, when)
-            self.assertFalse([l for l in lines[bottom - 3:bottom] if "enter actions" in l[W:]], "one hints line, at the bottom")
 
     def test_drawing_the_tab_starts_the_spend_read_and_stats_fill_in(self):
         self.release.clear()  # the read waits until the test lets it finish
@@ -2583,21 +2446,6 @@ class DetailItems(unittest.TestCase):
         self.assertTrue(all(isinstance(p, str) for p in paths), paths)
         self.assertEqual(paths, [str(h) for h in hs])
 
-    def test_a_sub_projects_items_are_its_own_sessions_handoffs_and_notes(self):
-        self.project("rollout", self.readme(["aa000000-0000"]))
-        alpha = self.sub("rollout", "alpha", sessions=[("Badge work", "cc000000-0000")])
-        now = time.time()
-        [h] = self.handoffs(alpha, [(now - 3600, "name: Badge handoff\n")])
-        [n] = self.notes(alpha, [("idea.md", "# Badge idea\n", now - 60)])
-        ui = self.ui([dict(session("Parent work"), id="aa000000-0000"), dict(session("Badge work", mins=30), id="cc000000-0000")])
-        ui.subs_open.add("rollout")
-        items = self.items(ui, "sub", "rollout/alpha")
-        self.assertEqual([(k, x["name"] if k == "session" else x[1]) for k, x in items],
-                         [("session", "Badge work"), ("handoff", "Badge handoff"), ("note", "Badge idea")])
-        self.assertEqual(dict(items)["handoff"][2], str(h))
-        self.assertEqual(dict(items)["note"][2], str(n))
-        self.assert_matches_the_drawn_lines(ui, "sub", "rollout/alpha")
-
     def test_at_most_5_of_each_list_the_ones_drawn(self):
         ids = [f"{i:02d}000000-0000" for i in range(7)]
         folder = self.project("b", self.readme(ids))
@@ -2617,18 +2465,17 @@ class DetailItems(unittest.TestCase):
         self.project("b", self.readme(["aa000000-0000"]))  # its one Session is older than the Sessions list's 7 days
         ui = self.ui([dict(session("Ancient one", state="closed", kind=None, mins=8 * 1440), id="aa000000-0000", attach=None)])
         rows = ui.project_rows()
-        self.assertEqual(sorted({r.kind for r in rows}), ["all", "new", "project"])  # the fixture
+        self.assertTrue({"new", "project"} <= {r.kind for r in rows})  # the fixture
         for r in rows:
-            if r.kind != "all":  # the All projects row shows its own view, not a row's detail
-                self.assertEqual(list(ui.detail_items(r)), [], r.kind)
+            self.assertEqual(list(ui.detail_items(r)), [], r.kind)
 
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class DetailPane(unittest.TestCase):
-    """The detail pane's items, on a real screen (SectionsOnScreen's folder): on a project or sub-project
-    row with items, tab moves the keys into the pane; there ↑↓ (home/end) move ui.dsel through
-    detail_items, its line drawn selected; enter, a right-click, or a double-click acts on it; tab or esc
-    goes back to the sidebar."""
+    """The details' items, on a real screen (SectionsOnScreen's folder): on a project row with items, →
+    moves the keys into the details (ui.focus "pane"; "side" is the list); there ↑↓ (home/end) move ui.dsel
+    through detail_items, its line drawn selected; enter, a right-click, or a double-click acts on it; ← or
+    esc goes back to the list, with the same project selected."""
     run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
     select, keys = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys)
     SIZE, read_project, setUp = TwoPanes.SIZE, staticmethod(SectionsOnScreen.read_project), SectionsOnScreen.setUp
@@ -2645,7 +2492,7 @@ class DetailPane(unittest.TestCase):
             c = ui.choosing
             seen[label] = {"focus": ui.focus, "dsel": getattr(ui, "dsel", None), "psel": ui.psel,
                            "items": ui.detail_items(r) if hasattr(ui, "detail_items") else [],
-                           "lines": screen_text(pilot.app), "raised": pane_raised(pilot.app),
+                           "lines": screen_text(pilot.app), "selected": pane_selected(pilot.app),
                            "menu": c and (c["title"], [o[0] for o in ui.choice_options() if not is_divider(o)]),
                            "view": ui.TABS[ui.tab].name, "alert": ui.alerting}
         return step
@@ -2681,8 +2528,8 @@ class DetailPane(unittest.TestCase):
 
     # focus
 
-    def test_tab_moves_the_keys_into_the_pane_on_a_project_with_items_and_tab_shift_tab_or_esc_back(self):
-        seen, keys = {}, ["tab", "tab", "shift+tab", "escape", "shift+tab", "shift+tab", "tab", "escape"]
+    def test_right_moves_the_keys_into_the_details_on_a_project_with_items_and_left_or_esc_back(self):
+        seen, keys = {}, ["right", "left", "right", "escape", "right", "left", "left"]
         steps = [self.on_project("fleet"), self.state(seen, "start")]
         for i, k in enumerate(keys):
             steps += [self.keys(k), self.state(seen, i)]
@@ -2690,34 +2537,35 @@ class DetailPane(unittest.TestCase):
         self.assertTrue(seen["start"]["items"], "the fixture: Printer fleet has items")
         self.assertEqual(seen["start"]["focus"], "side")
         self.assertEqual([seen[i]["focus"] for i in range(len(keys))],
-                         ["pane", "side", "pane", "side", "pane", "side", "pane", "side"])
+                         ["pane", "side", "pane", "side", "pane", "side", "side"])
         self.assertEqual({seen[i]["view"] for i in range(len(keys))}, {"Projects"})
-        self.assertEqual({seen[i]["psel"] for i in range(len(keys))}, {seen["start"]["psel"]}, "the sidebar's selection stays")
+        self.assertEqual({seen[i]["psel"] for i in range(len(keys))}, {seen["start"]["psel"]}, "the list's selection stays")
 
-    def test_tab_does_nothing_on_a_project_with_no_items(self):
+    def test_right_on_a_project_with_no_items_does_nothing_harmful(self):
         seen = {}
-        self.run_on(self.projects, [self.on_project("quiet"), self.state(seen, "start"), self.keys("tab"), self.state(seen, "tab"),
-                                    self.keys("shift+tab"), self.state(seen, "shift+tab")], size=self.SIZE)
+        self.run_on(self.projects, [self.on_project("quiet"), self.state(seen, "start"), self.keys("right"), self.state(seen, "right")],
+                    size=self.SIZE)
         self.assertTrue(hasattr(roost.UI, "detail_items"), "no ui.detail_items")
         self.assertEqual(seen["start"]["items"], [], "the fixture: Quiet one has nothing to list")
-        self.assertEqual((seen["tab"]["focus"], seen["shift+tab"]["focus"]), ("side", "side"))
+        got = seen["right"]
+        self.assertEqual((got["focus"], got["psel"], got["menu"], got["alert"], got["view"]),
+                         ("side", seen["start"]["psel"], None, None, "Projects"))
 
-    def test_tab_moves_the_keys_into_the_pane_on_a_sub_project_with_items(self):
-        seen = {}
+    def test_enter_on_a_project_row_with_the_keys_in_the_list_opens_its_actions(self):
+        seen, want = {}, {}
 
-        def on_alpha(ui):
-            ui.subs_open.add("rollout")
-            ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "sub" and r.item["slug"] == "alpha")
-        self.run_on(self.projects, [self.select(on_alpha), self.state(seen, "start"), self.keys("tab"), self.state(seen, "tab")],
-                    size=self.SIZE)
-        self.assertEqual([k for k, _ in seen["start"]["items"]], ["session"], "the fixture: Badge Printers lists Laptop refresh")
-        self.assertEqual(seen["tab"]["focus"], "pane")
+        async def expect(pilot):
+            ui = pilot.app.ui
+            want["labels"] = self.labels(ui.project_actions(next(p for p in ui.projects if p["id"] == "fleet")))
+        self.run_on(self.projects, [self.on_project("fleet"), expect, self.keys("enter"), self.state(seen, "menu")], size=self.SIZE)
+        self.assertEqual(seen["menu"]["menu"], ("Printer fleet", want["labels"]))
+        self.assertEqual(seen["menu"]["focus"], "side")
 
     # moving in the pane
 
     def test_up_down_home_and_end_move_dsel_through_the_items_without_wrapping(self):
         seen, keys = {}, ["down", "down", "down", "down", "down", "up", "home", "up", "end", "down"]
-        steps = [self.on_project("fleet"), self.keys("tab"), self.state(seen, "tab")]
+        steps = [self.on_project("fleet"), self.keys("right"), self.state(seen, "tab")]
         for i, k in enumerate(keys):
             steps += [self.keys(k), self.state(seen, i)]
         self.run_on(self.projects, steps, size=self.SIZE)
@@ -2726,27 +2574,50 @@ class DetailPane(unittest.TestCase):
         self.assertEqual(seen["tab"]["dsel"], 0)
         self.assertEqual([seen[i]["dsel"] for i in range(len(keys))], [1, 2, 3, 3, 3, 2, 0, 0, 3, 3])
         self.assertEqual({seen[i]["focus"] for i in range(len(keys))}, {"pane"})
-        self.assertEqual({seen[i]["psel"] for i in range(len(keys))}, {seen["tab"]["psel"]}, "↑↓ move in the pane, not the sidebar")
+        self.assertEqual({seen[i]["psel"] for i in range(len(keys))}, {seen["tab"]["psel"]}, "↑↓ move in the details, not the list")
 
     def test_the_selected_items_line_is_drawn_selected_only_while_the_pane_has_the_keys(self):
         seen = {}
-        self.run_on(self.projects, [self.on_project("fleet"), self.state(seen, "side"), self.keys("tab"), self.state(seen, 0),
+        self.run_on(self.projects, [self.on_project("fleet"), self.state(seen, "side"), self.keys("right"), self.state(seen, 0),
                                     self.keys("down"), self.state(seen, 1), self.keys("down"), self.state(seen, 2),
                                     self.keys("down"), self.state(seen, 3), self.keys("escape"), self.state(seen, "back")],
                     size=self.SIZE)
         ys = self.item_ys(seen["side"])
         self.assertEqual(len(ys), 4, seen["side"]["items"])
-        self.assertFalse(seen["side"]["raised"] & set(ys), "no item line is selected while the sidebar has the keys")
+        self.assertFalse(seen["side"]["selected"] & set(ys), "no item line is selected while the list has the keys")
         for i in range(4):
             self.assertEqual(self.item_ys(seen[i]), ys, "the lines stay put")
-            self.assertEqual(seen[i]["raised"] & set(ys), {ys[i]}, (i, seen[i]["lines"][ys[i]]))
-        self.assertFalse(seen["back"]["raised"] & set(ys), "esc: back to the sidebar, nothing selected in the pane")
+            self.assertEqual(seen[i]["selected"] & set(ys), {ys[i]}, (i, seen[i]["lines"][ys[i]]))
+        self.assertFalse(seen["back"]["selected"] & set(ys), "esc: back to the list, nothing selected in the details")
 
-    def test_changing_the_sidebars_selection_resets_dsel(self):
+    def test_the_selected_items_line_has_no_background_fill_and_its_name_is_bold_green(self):
+        before = self.fleet_items()
+        ys = self.item_ys(before)
+        green = importlib.import_module("roost.app.widgets").GREEN.lower()
         seen = {}
-        self.run_on(self.projects, [self.on_project("fleet"), self.keys("tab", "down", "down"), self.state(seen, "moved"),
+
+        async def look(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            app, y = pilot.app, ys[0]
+            line = screen_text(app)[y]
+            name = self.text_of(*before["items"][0])
+            x = line.index(name, roost.SIDEBAR_W)
+            seen.update(fills=backgrounds(app, y, roost.SIDEBAR_W), line=line,
+                        name=[style_at(app, y, x + i) for i in range(len(name))],
+                        bar=[(i, color_of(style_at(app, y, i))) for i, ch in enumerate(line) if ch == "▌" and i >= roost.SIDEBAR_W])
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("right"), look], size=self.SIZE)
+        self.assertEqual(seen["fills"], set(), f"no background fill on the selected item's line: {seen['line']!r}")
+        self.assertEqual(len(seen["bar"]), 1, seen["line"])
+        self.assertEqual(seen["bar"][0][1], green, "the ▌ is green")
+        self.assertLess(seen["bar"][0][0], seen["line"].index(self.text_of(*before["items"][0]), roost.SIDEBAR_W), "at the item's left")
+        self.assertTrue(all(st and st.bold and color_of(st) == green for st in seen["name"]), "its name is bold green")
+
+    def test_changing_the_lists_selection_resets_dsel(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("right", "down", "down"), self.state(seen, "moved"),
                                     self.keys("escape", "down"), self.state(seen, "next row"), self.keys("up"), self.state(seen, "back"),
-                                    self.keys("tab"), self.state(seen, "pane")], size=self.SIZE)
+                                    self.keys("right"), self.state(seen, "pane")], size=self.SIZE)
         self.assertEqual(seen["moved"]["dsel"], 2)
         self.assertNotEqual(seen["next row"]["psel"], seen["moved"]["psel"])
         self.assertEqual(seen["next row"]["dsel"], 0)
@@ -2762,7 +2633,7 @@ class DetailPane(unittest.TestCase):
             ui = pilot.app.ui
             s = next(s for s in ui.sessions if s["name"] == "Printer fix")
             want["labels"] = self.labels(ui.session_actions(s))
-        self.run_on(self.projects, [self.on_project("fleet"), self.keys("tab"), self.index_of("session", "Printer fix"),
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("right"), self.index_of("session", "Printer fix"),
                                     expect, self.keys("enter"), self.state(seen, "menu")], size=self.SIZE)
         self.assertEqual(seen["menu"]["menu"], ("Printer fix", want["labels"]))
 
@@ -2773,7 +2644,7 @@ class DetailPane(unittest.TestCase):
             ui = pilot.app.ui
             path = self.root / "fleet" / "notes" / "idea.md"
             want["labels"] = self.labels(ui.note_actions(roost.read_note(path, "fleet")))
-        self.run_on(self.projects, [self.on_project("fleet"), self.keys("tab"), self.index_of("note", "Driver shortlist"),
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("right"), self.index_of("note", "Driver shortlist"),
                                     expect, self.keys("enter"), self.state(seen, "menu")], size=self.SIZE)
         title, labels = seen["menu"]["menu"]
         self.assertEqual((title, labels), ("Driver shortlist", want["labels"]))
@@ -2787,9 +2658,9 @@ class DetailPane(unittest.TestCase):
             ui = pilot.app.ui
             p = next(p for p in ui.projects if p["id"] == "rollout")
             alpha = next(s for s in p["subs"] if s["slug"] == "alpha")
-            # titled as its own row's menu in the sidebar is (label_of), or by the label its line shows
+            # titled by its label (label_of), or by the label its line shows
             want["titles"], want["labels"] = {roost.label_of(alpha), alpha.get("title")}, self.labels(ui.sub_actions(alpha))
-        self.run_on(self.projects, [self.on_project("rollout"), self.keys("tab"), self.index_of("sub", "Badge Printers"),
+        self.run_on(self.projects, [self.on_project("rollout"), self.keys("right"), self.index_of("sub", "Badge Printers"),
                                     expect, self.keys("enter"), self.state(seen, "menu")], size=self.SIZE)
         self.assertIsNotNone(seen["menu"]["menu"])
         title, labels = seen["menu"]["menu"]
@@ -2811,7 +2682,7 @@ class DetailPane(unittest.TestCase):
                     await pilot.press("enter")
             with unittest.mock.patch.object(roost.UI, "edit", lambda ui, p: edited.append(str(p))), \
                     unittest.mock.patch.object(roost.UI, "show_in_finder", lambda ui, p, reveal=False: shown.append(str(p))):
-                self.run_on(self.projects, [self.on_project("fleet"), self.keys("tab"), self.index_of("handoff", "Toner check"),
+                self.run_on(self.projects, [self.on_project("fleet"), self.keys("right"), self.index_of("handoff", "Toner check"),
                                             self.keys("enter"), self.state(seen, "menu"), pick], size=self.SIZE)
             self.assertEqual(seen["menu"]["menu"], ("Toner check", ["Open it", "Show it in Finder"]))
             self.assertEqual(got, [path], label)
@@ -2828,7 +2699,7 @@ class DetailPane(unittest.TestCase):
                                     self.state(seen, "clicked")], size=self.SIZE)
         got = seen["clicked"]
         self.assertEqual((got["focus"], got["dsel"], got["menu"]), ("pane", note, None))
-        self.assertEqual(got["raised"] & set(ys), {ys[note]})
+        self.assertEqual(got["selected"] & set(ys), {ys[note]})
 
     def test_a_double_click_on_an_items_line_runs_its_first_action(self):
         import unittest.mock
@@ -2855,7 +2726,7 @@ class DetailPane(unittest.TestCase):
     def test_a_click_on_a_line_that_isnt_an_item_does_nothing_harmful(self):
         before = self.fleet_items()
         W = roost.SIDEBAR_W
-        heading = next(i for i, l in enumerate(before["lines"]) if l[W:].strip() == "Handoffs")
+        heading = next(i for i, l in enumerate(before["lines"]) if re.match(r"Handoffs\b", l[W:].strip()))
         seen = {}
         self.run_on(self.projects, [self.on_project("fleet"), lambda pilot: pilot.click(offset=(W + 6, heading)),
                                     self.state(seen, "heading")], size=self.SIZE)
@@ -2866,7 +2737,7 @@ class DetailPane(unittest.TestCase):
         self.run_on(self.projects, [self.on_project("quiet"), lambda pilot: pilot.click(offset=(W + 6, heading)),
                                     self.state(seen, "quiet")], size=self.SIZE)
         got = seen["quiet"]
-        self.assertEqual((got["focus"], got["menu"], got["alert"]), ("side", None, None), "nothing to select: the keys stay in the sidebar")
+        self.assertEqual((got["focus"], got["menu"], got["alert"]), ("side", None, None), "nothing to select: the keys stay in the list")
 
 
 class StatusLine(unittest.TestCase):
@@ -2885,10 +2756,10 @@ class StatusLine(unittest.TestCase):
 
 
 class RecentProjects(unittest.TestCase):
-    """The sidebar's projects with no search: the ten most recently active open ones, newest first (one never
-    worked on after those that were), each followed by its open sub-projects once → opens it; then the All
-    projects row; then + New project. No section headers, and no closed project. A search lists every match,
-    open ones newest first then closed ones, with no cap, no headers, and no All projects row."""
+    """The list's projects with no search: the ten most recently active open ones, newest first (one never
+    worked on after those that were), with no sub-project rows; then More projects (MoreProjects reads it off
+    the screen); then + New project. No section headers. A search lists every match, open ones newest first
+    then closed ones, with no cap, no headers, no More projects, and no + New project."""
     setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
     ui, shown = Projects.ui, Projects.shown
     DAY = 86400
@@ -2914,12 +2785,11 @@ class RecentProjects(unittest.TestCase):
         self.assertEqual(len(ui.projects), 16)  # the fixture
         return ui
 
-    def test_the_sidebar_lists_the_ten_most_recent_open_projects_then_all_projects_then_new_project(self):
+    def test_the_list_is_the_ten_most_recent_open_projects_then_new_project(self):
         ui = self.many()
-        self.assertEqual(self.shown(ui), [("project", f"open-{i:02d}") for i in range(10)]
-                         + [("all", None), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", f"open-{i:02d}") for i in range(10)] + [("new", "+ New project")])
 
-    def test_ten_or_fewer_open_projects_all_show_and_all_projects_still_follows(self):
+    def test_ten_or_fewer_open_projects_all_show(self):
         now = time.time()
         self.project("older", self.readme("Older"), handoffs=[handoff_name(now - 30 * self.DAY)])
         self.project("newer", self.readme("Newer"), handoffs=[handoff_name(now - 60)])
@@ -2927,21 +2797,18 @@ class RecentProjects(unittest.TestCase):
         self.project("shut", self.readme("Shut", status="closed"), handoffs=[handoff_name(now - 30)])  # closed: not listed
         ui = self.ui()
         self.assertEqual(self.shown(ui), [("project", "newer"), ("project", "older"), ("project", "never-one"),
-                                          ("all", None), ("new", "+ New project")])
+                                          ("new", "+ New project")])
 
-    def test_an_opened_projects_sub_projects_follow_it_and_dont_count_toward_the_ten(self):
+    def test_a_projects_sub_projects_get_no_rows_even_after_right(self):
         ui = self.many()
         self.sub("open-03", "alpha")
         self.sub("open-03", "beta")
         ui.load_projects()
         ui.psel = self.shown(ui).index(("project", "open-03"))
         ui.keys_projects("right", ui.project_rows())
-        self.assertEqual(self.shown(ui), [("project", f"open-{i:02d}") for i in range(4)]
-                         + [("sub", "open-03/alpha"), ("sub", "open-03/beta")]
-                         + [("project", f"open-{i:02d}") for i in range(4, 10)]
-                         + [("all", None), ("new", "+ New project")])
+        self.assertEqual(self.shown(ui), [("project", f"open-{i:02d}") for i in range(10)] + [("new", "+ New project")])
 
-    def test_a_search_lists_every_match_open_newest_first_then_closed_with_no_all_projects_row(self):
+    def test_a_search_lists_every_match_open_newest_first_then_closed_with_no_more_projects_or_new_project(self):
         ui = self.many()
         ui.pquery = "printer"
         self.assertEqual(self.shown(ui), [("project", f"open-{i:02d}") for i in range(12)]
@@ -2949,224 +2816,263 @@ class RecentProjects(unittest.TestCase):
 
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
-class AllProjects(unittest.TestCase):
-    """The All projects row under the sidebar's projects, All projects (N) with N every project open or
-    closed, and the view it shows in the right pane (ui.entry "All projects"): Active (N), Inactive (N), and
-    Closed (N), each newest first, with ↑↓ over the projects, enter for one's actions, → for its detail, esc
-    back, / to filter."""
-    run_on, chosen, sidebar = ProjectRows.run_on, staticmethod(ProjectRows.chosen), staticmethod(ProjectRows.sidebar)
+class MoreProjects(unittest.TestCase):
+    """The Projects list with no search: the ten most recently worked open projects, newest first; then More
+    projects N (N: every project not listed above, the open ones past ten and the closed ones), folded until
+    enter or → opens it in place, listing its projects under it (open ones newest first, then closed ones,
+    drawn dim), and ← or enter closes it; then + New project. Its projects are ordinary project rows."""
+    run_on, sidebar = ProjectRows.run_on, staticmethod(ProjectRows.sidebar)
     select, keys, proj = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(TextualScreens.proj)
-    grab, detail_name = staticmethod(TwoPanes.grab), staticmethod(TwoPanes.detail_name)
+    detail_name = staticmethod(TwoPanes.detail_name)
     SIZE = (120, 40)
-    DAY = 86400
-    LISTED = ["Active (3)", "Toner order", "Printer fleet", "Badge rollout", "Inactive (2)", "VPN refresh", "Wiki cleanup",
-              "Closed (2)", "Laptop refresh", "Old audit"]  # what the view lists for the fixture, top to bottom
+    HOUR = 3600
+    TOP = [f"Open {i:02d}" for i in range(10)]
+    MORE = ["Open 10", "Open 11", "Shut a", "Shut b"]  # what More projects lists for the fixture, top to bottom
 
     def setUp(self):
         TextualScreens.setUp(self)
-        now = time.time()
+        self.projects = self.fixture(12, 2)
 
-        def project(pid, label, days, closed=False, summary="", tags=()):
-            p = self.proj(pid, [], label=label)
-            p.update(last=now - days * self.DAY, closed=closed, status="closed" if closed else "active",
-                     summary=summary, tags=list(tags))
-            return p
-        # Active: worked on in the last RECENT_PROJECT_DAYS days; Inactive: open, older; Closed. Laptop refresh is
-        # closed but newer than two Active ones; Wiki cleanup's summary and Old audit's tag hold "toner".
-        self.projects = [project("toner", "Toner order", 0.05), project("laptops", "Laptop refresh", 0.1, closed=True),
-                         project("fleet", "Printer fleet", 2), project("badges", "Badge rollout", 5),
-                         project("vpn", "VPN refresh", 20), project("wiki", "Wiki cleanup", 60, summary="Toner budget notes."),
-                         project("audit", "Old audit", 90, closed=True, tags=["toner-vendor"])]
-
-    @staticmethod
-    def all_row(ui):
-        """The index of the All projects row in the sidebar's rows."""
-        rows = ui.project_rows()
-        at = [i for i, r in enumerate(rows) if r.kind == "all"]
-        assert at, f"no All projects row in the sidebar: {[r.kind for r in rows]}"
-        return at[0]
-
-    def above_all(self):
-        """A step that selects the sidebar row just above All projects: the last project."""
-        return self.select(lambda ui: setattr(ui, "psel", self.all_row(ui) - 1))
-
-    def to_all(self):
-        """Steps that move the sidebar's selection down onto All projects."""
-        return [self.above_all(), self.keys("down")]
-
-    def into_view(self):
-        """Steps that show All projects and move the keys into its pane (enter on the row)."""
-        return self.to_all() + [self.keys("enter")]
+    def fixture(self, n_open, n_closed):
+        """n_open open projects, Open 00, Open 01, … worked on 0, 1, 2 … hours ago, and n_closed closed ones:
+        Shut a (worked on 30 minutes ago, newer than most open ones), then Shut b, Shut c … a week apart."""
+        now, out = time.time(), []
+        for i in range(n_open):
+            p = self.proj(f"open-{i:02d}", [], label=f"Open {i:02d}")
+            p.update(last=now - i * self.HOUR - 60, summary="Printer work.")
+            out.append(p)
+        for i in range(n_closed):
+            p = self.proj(f"shut-{'abcd'[i]}", [], label=f"Shut {'abcd'[i]}")
+            p.update(last=now - (1800 if i == 0 else i * 7 * 86400), closed=True, status="closed", summary="Printer work.")
+            out.append(p)
+        return out
 
     @staticmethod
-    def state(seen, label):
-        """A step that keeps, under label: the entry shown, the focus, the selected sidebar row, the menu up
-        (its title and labels), the prompt up, and the screen's lines and bold runs."""
+    def look(seen, label):
+        """A step that keeps, under label: the screen's lines, the list's part of the rows between the top bar
+        and the status bar, the bold and dim runs, and the menu and prompt up."""
         async def step(pilot):
             pilot.app.redraw()
             await pilot.pause()
             ui = pilot.app.ui
-            rows = ui.project_rows()
-            r = rows[ui.psel] if rows and ui.psel < len(rows) else None
-            seen[label] = {"entry": ui.entry, "focus": ui.focus, "row": r and (r.kind, r.item.get("id")),
-                           "menu": ui.choosing and (ui.choosing["title"], [l for l, _ in ui.choosing["options"]]),
-                           "asking": ui.asking, "lines": screen_text(pilot.app), "bold": bold_text(pilot.app)}
+            bar = len(ui.bar[0]) if ui.bar else 1
+            lines = screen_text(pilot.app)
+            c = ui.choosing
+            seen[label] = {"lines": lines, "list": [l[:roost.SIDEBAR_W] for l in lines[1:len(lines) - bar - 1]],
+                           "bold": bold_text(pilot.app), "dim": dim_text(pilot.app), "asking": ui.asking,
+                           "menu": c and (c["title"], [o[0] for o in ui.choice_options() if not is_divider(o)])}
         return step
 
     @staticmethod
-    def pane(lines):
-        """The right pane's part of each line, stripped, with a selection mark taken off."""
-        return [l[roost.SIDEBAR_W:].strip().lstrip("›").strip() for l in lines]
+    def rows_of(got):
+        """The list's rows, top to bottom, as text: the selection bar and edges taken off, blank and rule lines left out."""
+        out = [l.strip(" ▌›│┃▏▕") for l in got["list"]]
+        return [l for l in out if l and not set(l) <= set("─ ")]
 
-    def listed(self, lines):
-        """The pane's section headers and project names, top to bottom (the fixture's labels only)."""
-        labels = {p["label"] for p in self.projects}
-        out = []
-        for l in self.pane(lines):
-            if re.fullmatch(r"(Active|Inactive|Closed) \(\d+\)", l):
-                out.append(l)
-            else:
-                out += [n for n in labels if l.startswith(n)]
-        return out
+    @staticmethod
+    def on_more():
+        """Keys that select More projects: end (+ New project), then ↑."""
+        return TextualScreens.keys("end", "up")
 
-    def test_down_from_the_last_project_selects_all_projects_and_shows_its_view(self):
+    def test_ten_open_projects_newest_first_then_more_projects_then_new_project(self):
         seen = {}
-        self.run_on(self.projects, self.to_all() + [self.state(seen, "on")], size=self.SIZE)
-        got = seen["on"]
-        self.assertEqual((got["entry"], got["focus"]), ("All projects", "side"))
-        self.assertIn("All projects (7)", "\n".join(self.sidebar(got["lines"])), "every project, open and closed")
-        self.assertEqual(self.listed(got["lines"]), self.LISTED)
-        self.assertEqual(roost.ENTRIES, ENTRIES, "All projects isn't one of the entries")
-        side = self.sidebar(got["lines"])
-        ys = [next((i for i, l in enumerate(side) if re.fullmatch(rf"{name}( +\d+)?", l.strip(" ▕"))), None) for name in ENTRIES]
-        self.assertTrue(all(ys) and ys == sorted(ys), (ys, side))  # the entries still follow under the projects
-        self.assertLess(next(i for i, l in enumerate(side) if "All projects (" in l), ys[0])
+        self.run_on(self.projects, [self.look(seen, "x")], size=self.SIZE)
+        rows = self.rows_of(seen["x"])
+        self.assertEqual(rows[:10], self.TOP, rows)
+        self.assertRegex(rows[10], r"^More projects\s+4$", "four not listed above: Open 10, Open 11, and the two closed")
+        self.assertEqual(rows[11:], ["+ New project"], "folded by default, and no section header anywhere")
+        self.assertFalse([l for l in seen["x"]["lines"] if "All projects" in l])
 
-    def test_up_from_all_projects_goes_back_to_the_last_project(self):
-        seen = {}
-        app = self.run_on(self.projects, self.to_all() + [self.keys("up"), self.state(seen, "up")], size=self.SIZE)
-        self.assertFalse(seen["up"]["entry"])
-        self.assertEqual(self.chosen(app), "wiki")  # the oldest of the five open projects
-
-    def test_down_from_all_projects_goes_to_new_project_then_the_entries_and_up_comes_back(self):
-        seen = {}
-        self.run_on(self.projects, self.to_all() + [self.keys("down"), self.state(seen, "new"), self.keys("up"),
-                                                    self.state(seen, "back"), self.keys("down", "down"),
-                                                    self.state(seen, "entry")], size=self.SIZE)
-        self.assertEqual((seen["new"]["entry"], seen["new"]["row"][0]), (None, "new"))
-        self.assertEqual(seen["back"]["entry"], "All projects")
-        self.assertEqual(seen["entry"]["entry"], ENTRIES[0])
-
-    def test_a_click_on_all_projects_shows_its_view(self):
-        seen = {}
-        self.run_on(self.projects, [self.state(seen, "before")], size=self.SIZE)
-        y = next((i for i, l in enumerate(self.sidebar(seen["before"]["lines"])) if "All projects (" in l), None)
-        self.assertIsNotNone(y, self.sidebar(seen["before"]["lines"]))
-        self.run_on(self.projects, [lambda pilot: pilot.click(offset=(6, y)), self.state(seen, "clicked")], size=self.SIZE)
-        got = seen["clicked"]
-        self.assertEqual((got["entry"], got["menu"], got["asking"]), ("All projects", None, None))
-        self.assertEqual(self.listed(got["lines"]), self.LISTED)
-
-    def test_enter_tab_or_right_on_all_projects_moves_the_keys_into_its_pane(self):
-        for key in ("enter", "tab", "right"):
+    def test_more_projects_counts_every_project_not_listed_above(self):
+        for n_open, n_closed, want in ((12, 2, 4), (3, 2, 2), (12, 0, 2), (10, 1, 1)):
             seen = {}
-            self.run_on(self.projects, self.to_all() + [self.keys(key), self.state(seen, key)], size=self.SIZE)
-            got = seen[key]
-            with self.subTest(key=key):
-                self.assertEqual((got["entry"], got["focus"], got["menu"], got["asking"]), ("All projects", "pane", None, None))
-                self.assertEqual(self.listed(got["lines"]), self.LISTED)
+            self.run_on(self.fixture(n_open, n_closed), [self.look(seen, "x")], size=self.SIZE)
+            rows = self.rows_of(seen["x"])
+            more = [r for r in rows if r.startswith("More projects")]
+            with self.subTest(open=n_open, closed=n_closed):
+                self.assertEqual(len(more), 1, rows)
+                self.assertRegex(more[0], rf"^More projects\s+{want}$")
+                self.assertEqual(rows[:min(n_open, 10)], self.TOP[:n_open])
+                self.assertEqual(rows[-1], "+ New project")
 
-    def test_all_projects_lists_active_inactive_and_closed_with_counts_newest_first(self):
+    def test_with_no_projects_the_list_is_only_new_project(self):
         seen = {}
-        self.run_on(self.projects, self.into_view() + [self.state(seen, "view")], size=self.SIZE)
-        self.assertEqual(self.listed(seen["view"]["lines"]), self.LISTED)
+        self.run_on([], [self.look(seen, "x")], size=self.SIZE)
+        rows = self.rows_of(seen["x"])
+        self.assertEqual(rows[:1], ["+ New project"], rows)
+        self.assertFalse([r for r in rows if "More projects" in r or "All projects" in r], rows)
 
-    def test_a_section_with_nothing_in_it_is_left_out(self):
-        seen = {}
-        self.projects = [p for p in self.projects if not p["closed"] and p["id"] not in ("vpn", "wiki")]  # Active only
-        self.run_on(self.projects, self.into_view() + [self.state(seen, "view")], size=self.SIZE)
-        self.assertEqual(self.listed(seen["view"]["lines"]), ["Active (3)", "Toner order", "Printer fleet", "Badge rollout"])
-        pane = "\n".join(self.pane(seen["view"]["lines"]))
-        self.assertNotIn("Inactive (", pane)
-        self.assertNotIn("Closed (", pane)
-
-    def test_up_and_down_move_over_the_projects_not_the_headers_and_enter_opens_its_actions(self):
-        import unittest.mock
-        seen = {}
-        acts = lambda ui, p: [(f"Act on {p['id']}", lambda: None), ("Second", lambda: None)]  # one menu per project
-        with unittest.mock.patch.object(roost.UI, "project_actions", acts):
-            self.run_on(self.projects, self.into_view() + [
-                self.keys("enter"), self.state(seen, "first"), self.keys("escape"),
-                self.keys("down", "down", "down"), self.keys("enter"), self.state(seen, "inactive"), self.keys("escape"),
-                self.keys("up"), self.keys("enter"), self.state(seen, "back"), self.keys("escape"),
-                self.keys("down", "down", "down"), self.keys("enter"), self.state(seen, "closed"), self.keys("escape"),
-                self.keys("up", "up", "up", "up", "up", "up", "up"), self.keys("enter"), self.state(seen, "top")],
-                size=self.SIZE)
-        self.assertEqual(seen["first"]["menu"], ("Toner order", ["Act on toner", "Second"]))  # the newest, at the top
-        self.assertEqual(seen["inactive"]["menu"][0], "VPN refresh", "↓ from the last Active one skips the Inactive header")
-        self.assertEqual(seen["back"]["menu"][0], "Badge rollout")
-        self.assertEqual(seen["closed"]["menu"][0], "Laptop refresh", "↓ skips the Closed header")
-        self.assertEqual(seen["top"]["menu"][0], "Toner order", "↑ stops at the first project, never on the Active header")
-        self.assertEqual(seen["top"]["focus"], "pane")
-
-    def test_enter_offers_the_same_actions_as_the_projects_sidebar_row(self):
-        seen = {}
-
-        async def sidebar_actions(pilot):
-            ui = pilot.app.ui
-            seen["sidebar"] = [l for l, _ in ui.row_actions(next(r for r in ui.project_rows() if r.item.get("id") == "fleet"))]
-        self.run_on(self.projects, [sidebar_actions] + self.into_view() + [self.keys("down"), self.keys("enter"),
-                                                                           self.state(seen, "menu")], size=self.SIZE)
-        self.assertEqual(seen["menu"]["menu"], ("Printer fleet", seen["sidebar"]))
-
-    def test_right_shows_the_selected_projects_detail_and_esc_goes_back_to_the_list_with_it_selected(self):
-        seen = {}
-        self.run_on(self.projects, self.into_view() + [self.keys("down"), self.keys("right"), self.state(seen, "detail"),
-                                                       self.keys("escape"), self.state(seen, "list"), self.keys("enter"),
-                                                       self.state(seen, "menu")], size=self.SIZE)
-        detail = seen["detail"]
-        pane = "\n".join(self.pane(detail["lines"]))
-        self.assertEqual(self.detail_name(detail["bold"])[0], "Printer fleet", "its name first, as the sidebar's detail draws it")
-        self.assertRegex(pane, r"(?m)^ *Folder +/nowhere/fleet *$", "the selected project's folder, on a row of its own")
-        for heading in ("Sessions", "Handoffs", "Notes"):
-            self.assertIn(heading, self.detail_name(detail["bold"]), f"its {heading} section")
-        self.assertNotIn("Active (", pane, "the detail in place of the list")
-        self.assertEqual((detail["entry"], detail["focus"]), ("All projects", "pane"))
-        self.assertEqual(self.listed(seen["list"]["lines"]), self.LISTED)
-        self.assertEqual((seen["list"]["entry"], seen["list"]["focus"]), ("All projects", "pane"))
-        self.assertEqual(seen["menu"]["menu"][0], "Printer fleet", "the same project still selected")
-
-    def test_esc_from_the_list_returns_the_keys_to_the_sidebar(self):
-        seen = {}
-        self.run_on(self.projects, self.into_view() + [self.keys("escape"), self.state(seen, "esc")], size=self.SIZE)
-        self.assertEqual((seen["esc"]["entry"], seen["esc"]["focus"]), ("All projects", "side"))
-
-    def test_slash_filters_the_list_by_name_summary_and_tags(self):
-        seen = {}
-        self.run_on(self.projects, self.into_view() + [self.keys("slash"), self.keys(*"toner"), self.keys("enter"),
-                                                       self.state(seen, "filtered")], size=self.SIZE)
-        self.assertEqual(self.listed(seen["filtered"]["lines"]),
-                         ["Active (1)", "Toner order", "Inactive (1)", "Wiki cleanup", "Closed (1)", "Old audit"])
-
-    def test_a_double_click_on_a_project_in_the_list_runs_its_first_action(self):
-        import unittest.mock
-        seen, ran = {}, []
-        self.run_on(self.projects, self.to_all() + [self.state(seen, "view")], size=self.SIZE)
-        y = next((i for i, l in enumerate(self.pane(seen["view"]["lines"])) if l.startswith("VPN refresh")), None)
-        self.assertIsNotNone(y, self.pane(seen["view"]["lines"]))
-        acts = lambda ui, p: [("First", lambda: ran.append(p["id"])), ("Second", lambda: ran.append("second"))]
-        with unittest.mock.patch.object(roost.UI, "project_actions", acts):
-            self.run_on(self.projects, self.to_all() + [lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, y), times=2)],
+    def test_enter_or_right_on_more_projects_opens_it_in_place(self):
+        for key in ("enter", "right"):
+            seen = {}
+            self.run_on(self.projects, [self.on_more(), self.look(seen, "on"), self.keys(key), self.look(seen, "open")],
                         size=self.SIZE)
-        self.assertEqual(ran, ["vpn"])
+            got = seen["open"]
+            rows = self.rows_of(got)
+            with self.subTest(key=key):
+                at = next((i for i, r in enumerate(rows) if r.startswith("More projects")), None)
+                self.assertIsNotNone(at, rows)
+                self.assertEqual(rows[:at], self.TOP)
+                self.assertEqual(rows[at + 1:], self.MORE + ["+ New project"], "open ones newest first, then closed ones")
+                self.assertEqual((got["menu"], got["asking"]), (None, None), "it opens in place: no menu, no prompt")
+                W = roost.SIDEBAR_W
+                for name, dim in (("Open 10", False), ("Open 11", False), ("Shut a", True), ("Shut b", True)):
+                    y = next(i for i, l in enumerate(got["lines"]) if name in l[:W])
+                    drawn_dim = bool([t for yy, x, t in got["dim"] if yy == y and x < W and name in t])
+                    self.assertEqual(drawn_dim, dim, f"{name}: closed ones are dim, open ones aren't")
+
+    def test_left_or_enter_on_more_projects_closes_it(self):
+        for opener, closer in (("right", "left"), ("enter", "enter"), ("right", "enter"), ("enter", "left")):
+            seen = {}
+            self.run_on(self.projects, [self.on_more(), self.keys(opener), self.look(seen, "open"), self.keys(closer),
+                                        self.look(seen, "closed")], size=self.SIZE)
+            with self.subTest(opener=opener, closer=closer):
+                self.assertIn("Open 10", self.rows_of(seen["open"]))
+                rows = self.rows_of(seen["closed"])
+                self.assertEqual(rows[:10], self.TOP)
+                self.assertRegex(rows[10], r"^More projects\s+4$")
+                self.assertEqual(rows[11:], ["+ New project"])
+                self.assertEqual((seen["closed"]["menu"], seen["closed"]["asking"]), (None, None))
+
+    def test_more_projects_projects_are_ordinary_project_rows(self):
+        seen, want = {}, {}
+
+        async def expect(pilot):
+            ui = pilot.app.ui
+            acts = ui.project_actions(next(p for p in ui.projects if p["id"] == "shut-a"))
+            want["labels"] = [label for label, fn in acts if (label, fn) != roost.DIVIDER]
+        self.run_on(self.projects, [expect, self.on_more(), self.keys("right", "down"), self.look(seen, "open 10"),
+                                    self.keys("down", "down"), self.look(seen, "shut a"), self.keys("enter"), self.look(seen, "menu")],
+                    size=self.SIZE)
+        self.assertEqual(self.detail_name(seen["open 10"]["bold"])[:1], ["Open 10"], "↓ from More projects: its first project's details")
+        self.assertEqual(self.detail_name(seen["shut a"]["bold"])[:1], ["Shut a"])
+        self.assertEqual(seen["menu"]["menu"], ("Shut a", want["labels"]), "enter: the project's actions")
+
+    def test_a_search_lists_every_match_with_no_more_projects_or_new_project(self):
+        seen = {}
+        self.run_on(self.projects, [self.keys("slash", *"printer", "enter"), self.look(seen, "x")], size=self.SIZE)
+        self.assertEqual(self.rows_of(seen["x"]), [f"Open {i:02d}" for i in range(12)] + ["Shut a", "Shut b"],
+                         "every match, open newest first then closed")
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class ListLook(unittest.TestCase):
+    """The Projects list's look (TwoPanes' folder): every label starts at the same column; the selected row has
+    no background fill: ▌ at column 0, green while the list has the keys and dim while the details have them,
+    and its label bold, green while the list has the keys; a row's marks sit at its right, ● green and ◆ yellow."""
+    run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
+    select, keys, SIZE, setUp, DESCRIPTION = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), TwoPanes.SIZE, TwoPanes.setUp, TwoPanes.DESCRIPTION
+    LOOK = importlib.import_module("roost.app.widgets")
+
+    @staticmethod
+    def lines(seen, label, also=None):
+        """A step that keeps the screen's lines under label, and what also(app, lines) says under (label, "also")."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            seen[label] = screen_text(pilot.app)
+            if also:
+                seen[(label, "also")] = also(pilot.app, seen[label])
+        return step
+
+    @staticmethod
+    def row_y(lines, label):
+        return next((i for i, l in enumerate(lines) if label in l[:roost.SIDEBAR_W]), None)
+
+    def test_every_label_in_the_list_starts_at_the_same_column(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("quiet"), self.lines(seen, "x")], size=self.SIZE)
+        side = [l[:roost.SIDEBAR_W] for l in seen["x"]]
+        xs = {}
+        for label in ("Printer fleet", "Restore drill", "Quiet one", "Badge rollout", "More projects", "+ New project"):
+            y = self.row_y(seen["x"], label)
+            self.assertIsNotNone(y, (label, side))
+            xs[label] = side[y].index(label)
+        self.assertEqual(len(set(xs.values())), 1, xs)
+
+    def test_the_selected_row_has_no_fill_a_bar_and_a_bold_label_green_in_the_list_and_dim_in_the_details(self):
+        seen = {}
+
+        def styles(app, lines):
+            y = self.row_y(lines, "Printer fleet")
+            x = lines[y].index("Printer fleet")
+            return {"bar": style_at(app, y, 0), "label": [style_at(app, y, x + i) for i in range(len("Printer fleet"))],
+                    "fills": backgrounds(app, y, 0, roost.SIDEBAR_W - 1), "y": y}
+        self.run_on(self.projects, [self.on_project("fleet"), self.lines(seen, "list", styles), self.keys("right"),
+                                    self.lines(seen, "details", styles)], size=self.SIZE)
+        green, muted = self.LOOK.GREEN.lower(), self.LOOK.MUTED.lower()
+        for when, bar in (("list", green), ("details", muted)):
+            got, lines = seen[(when, "also")], seen[when]
+            with self.subTest(keys_in=when):
+                self.assertEqual(lines[got["y"]][:1], "▌", lines[got["y"]])
+                self.assertEqual(color_of(got["bar"]), bar)
+                self.assertEqual(got["fills"], set(), "no background fill on the selected row")
+                self.assertTrue(all(st and st.bold for st in got["label"]), "the label is bold")
+                label_green = {color_of(st) == green for st in got["label"]}
+                self.assertEqual(label_green, {when == "list"}, "the label is green only while the list has the keys")
+
+    def test_a_rows_marks_are_a_green_dot_and_a_yellow_diamond_at_its_right(self):
+        seen = {}
+
+        def marks(app, lines):
+            out = {}
+            for label in ("Printer fleet", "Restore drill", "Badge rollout"):
+                y = self.row_y(lines, label)
+                row = lines[y][:roost.SIDEBAR_W]
+                out[label] = [(m, color_of(style_at(app, y, x))) for x, m in enumerate(row) if m in "●◆"]
+            return out
+        self.run_on(self.projects, [self.on_project("quiet"), self.lines(seen, "x", marks)], size=self.SIZE)
+        green, yellow = self.LOOK.GREEN.lower(), self.LOOK.YELLOW.lower()
+        self.assertEqual(seen[("x", "also")], {"Printer fleet": [("●", green)], "Restore drill": [("◆", yellow)],
+                                               "Badge rollout": [("●", green), ("◆", yellow)]})
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class DetailsKeyBar(unittest.TestCase):
+    """The key bar on the Projects tab (SectionsOnScreen's folder): with the keys in the list it names → into
+    details, enter actions, tab next tab, and / search; with them in the details, ← back, enter actions, and
+    tab next tab. The details have no hint line of their own."""
+    run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
+    select, keys, SIZE, setUp, DESCRIPTION = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), TwoPanes.SIZE, SectionsOnScreen.setUp, TwoPanes.DESCRIPTION
+    read_project = staticmethod(SectionsOnScreen.read_project)
+
+    @staticmethod
+    def bar(seen, label):
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            ui = pilot.app.ui
+            rows = len(ui.bar[0]) if ui.bar else 1
+            lines = screen_text(pilot.app)
+            seen[label] = {"bar": "   ".join(lines[-rows:]), "above": lines[1:-rows - 1], "focus": ui.focus}
+        return step
+
+    def test_the_key_bar_with_the_keys_in_the_list_and_in_the_details(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.bar(seen, "list"), self.keys("right"), self.bar(seen, "details")],
+                    size=self.SIZE)
+        self.assertEqual((seen["list"]["focus"], seen["details"]["focus"]), ("side", "pane"), "the fixture: Printer fleet has items")
+        for want in ("→ into details", "enter actions", "tab next tab", "/ search"):
+            self.assertIn(want, seen["list"]["bar"], want)
+        for want in ("← back", "enter actions", "tab next tab"):
+            self.assertIn(want, seen["details"]["bar"], want)
+
+    def test_the_details_have_no_hint_line_of_their_own(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("rollout"), self.bar(seen, "list"), self.keys("right"), self.bar(seen, "details")],
+                    size=self.SIZE)
+        W = roost.SIDEBAR_W
+        for when in ("list", "details"):
+            hints = [l for l in seen[when]["above"] if re.search(r"enter actions|tab its items|sub-projects$", l[W:])]
+            self.assertEqual(hints, [], when)
 
 
 if __name__ == "__main__":
     unittest.main()
 
 
-# ---------- the detail layout: the top area, the name line, the fields, Current state and Next, the newest
-# Handoff's lines, and the Stats sparkline
+# ---------- the details' layout: the top area, the name line, the sections and their items, Current state and
+# Next, the newest Handoff's lines, the fields under Details, and the Stats lines
 
 STATE_TEXT = ("Drivers are packaged for both offices and the north office already runs on the new toner supplier, "
               "while the south office waits on a vendor quote before its printers move over.")
@@ -3260,10 +3166,10 @@ class LatestHandoffData(unittest.TestCase):
 
 
 class DetailFields(unittest.TestCase):
-    """project_panel's fields for a project, in order, each only when it has something: Description (always:
-    "no description yet" when empty), Sessions (the only Sessions count), Repo, Category and Tags on one row
-    (whichever is set; no row when neither), then Folder (the path alone). No Status field: the status and
-    when it was worked are on the name line. A sub-project gets the same rules, and keeps Type."""
+    """project_panel's fields for a project, the Details section, in order, each only when it has something:
+    Description (always: "no description yet" when empty), Repo, Category and Tags on one row (whichever is
+    set; no row when neither), then Folder (the path alone). No Status field: the status and when it was
+    worked are on the name line. No Sessions or Sub-projects field: they're sections of their own."""
     setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
     ui = ProjectMarkers.ui
 
@@ -3289,18 +3195,24 @@ class DetailFields(unittest.TestCase):
         self.assertFalse([r for r in rows if r.startswith("Status")], rows)
         self.assertFalse([r for r in rows if "Last worked" in r or re.search(r"\bSessions\s+\d", r)], rows)
         self.assertFalse([r for r in rows if re.search(r"\bId\b", r)], rows)
+        self.assertFalse([r for r in rows if r.startswith(("Sessions", "Sub-projects"))], rows)
 
     def test_a_projects_fields_in_order(self):
         repo = str(Path.home() / "code" / "fleet-tools")
         folder = self.project("fleet", self.readme(category="procurement", tags=("zq-tag", "toner"), repo=repo), handoffs=[TODAY()])
         rows = self.rows(self.ui(), "project", "fleet")
-        at = [self.index(rows, p) for p in (r"Description\b", r"Sessions\b", r"Repo\b", r"Category\b", r"Folder\b")]
+        at = [self.index(rows, p) for p in (r"Description\b", r"Repo\b", r"Category\b", r"Folder\b")]
         self.assertEqual(at, sorted(at), rows)
         self.assertEqual(at[0], 0, "Description comes first")
-        self.assertRegex(rows[at[3]], r"^Category\s+procurement\s+Tags\s+zq-tag, toner$")
-        self.assertRegex(rows[at[4]], rf"^Folder\s+{re.escape(roost.short(str(folder)))}$")
+        self.assertRegex(rows[at[2]], r"^Category\s+procurement\s+Tags\s+zq-tag, toner$")
+        self.assertRegex(rows[at[3]], rf"^Folder\s+{re.escape(roost.short(str(folder)))}$")
         self.assertFalse([r for r in rows if r.startswith("Tags")], "Tags is on Category's row")
         self.assert_no_old_fields(rows)
+
+    def test_a_project_with_open_sub_projects_has_no_sub_projects_field(self):
+        self.project("rollout", self.readme(), handoffs=[TODAY()])
+        self.sub("rollout", "alpha")
+        self.assert_no_old_fields(self.rows(self.ui(), "project", "rollout"))
 
     def test_category_and_tags_share_a_row_that_goes_when_both_are_empty(self):
         self.project("cat", self.readme(category="drills"), handoffs=[TODAY()])
@@ -3321,60 +3233,43 @@ class DetailFields(unittest.TestCase):
         rows = self.rows(self.ui(), "project", "fleet")
         self.assertRegex(rows[0], r"^Description\s+no description yet$")
 
-    def test_a_sub_projects_fields_keep_type_and_follow_the_same_rules(self):
-        self.project("rollout", self.readme(), handoffs=[TODAY()])
-        beta = self.sub("rollout", "beta", type="bugfix", status="blocked", summary="Toner alerts.")
-        (beta / "README.md").write_text((beta / "README.md").read_text().replace("status: blocked\n", "status: blocked\ntags: [toner]\n"))
-        ui = self.ui()
-        ui.subs_open.add("rollout")
-        rows = self.rows(ui, "sub", "rollout/beta")
-        self.assertRegex(rows[self.index(rows, r"Type\b")], r"^Type\s+bugfix$")
-        at = [self.index(rows, p) for p in (r"Description\b", r"Sessions\b", r"Tags\b", r"Folder\b")]
-        self.assertEqual(at, sorted(at), rows)
-        self.assertRegex(rows[at[2]], r"^Tags\s+toner$")
-        self.assertRegex(rows[at[3]], rf"^Folder\s+{re.escape(roost.short(str(beta)))}$")
-        self.assert_no_old_fields(rows)
 
-
-class StatsSparkline(unittest.TestCase):
-    """The Stats line: This month  $X · N Sessions, then a 30-character sparkline of the project's own daily
-    spend over the last 30 days (oldest left, today right) in  ▁▂▃▄▅▆▇█ scaled to the biggest day, a day with
-    no spend a space. The same matching as the month's spend; worked out once per spend read, like it."""
+class StatsLines(unittest.TestCase):
+    """The Stats section: "This month  $X · N Sessions", then "Last 30 days  $Y", the project's own spend
+    over the last 30 days, today included, with no sparkline. The same matching as the month's spend; worked
+    out once per spend read, like it."""
     setUp_base, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
     setUp, ui, readme = DetailSections.setUp, ProjectMarkers.ui, staticmethod(ProjectMarkers.readme)
     section, spend, row = DetailSections.section, staticmethod(DetailSections.spend), staticmethod(DetailSections.row)
     sections = DetailSections.sections
+    SPARK = set("▁▂▃▄▅▆▇█")
 
     @staticmethod
     def day(ago):
         return (date.today() - timedelta(days=ago)).isoformat()
 
-    def test_the_sparkline_follows_the_month_line(self):
+    def test_the_month_line_then_the_last_30_days_spend(self):
         listed = ["aa000000-0000"]
         self.project("fleet", self.readme(listed).replace("# Title", "# Printer fleet"), handoffs=[TODAY()])
         self.project("other", self.readme(), handoffs=[TODAY()])
         ui = self.ui([dict(session("Live"), id=listed[0])])
-        self.spend(ui, [(self.day(0), "Live work", "zz000000-0000", "fleet", 2.00),           # today, the biggest day: █
-                        (self.day(29), "Live work", "yy000000-0000", "Printer fleet", 1.00),  # the oldest day, by its label: ▄
-                        (self.day(3), "Live work", listed[0], None, 0.50),                    # a day's rows add up:
-                        (self.day(3), "Wrap-ups", "xx000000-0000", "fleet", 0.50),            # 1.00 on it, ▄
+        self.spend(ui, [(self.day(0), "Live work", "zz000000-0000", "fleet", 2.00),           # today, by its id
+                        (self.day(10), "Live work", "yy000000-0000", "Printer fleet", 1.00),  # by its label
+                        (self.day(3), "Live work", listed[0], None, 0.50),                    # by a Session it lists
+                        (self.day(3), "Wrap-ups", "xx000000-0000", "fleet", 0.50),
                         (self.day(10), "Live work", "ww000000-0000", "other", 5.00),          # another project's
-                        (self.day(30), "Live work", "vv000000-0000", "fleet", 9.00),          # before the 30 days
-                        (None, "Live work", "uu000000-0000", "fleet", 7.00)])                 # no day
-        [line] = self.section(ui, "project", "fleet", "Stats")
-        want = [" "] * 30
-        want[29], want[0], want[26] = "█", "▄", "▄"
-        self.assertEqual(line[-30:], "".join(want), line)
-        self.assertRegex(line[:-30].rstrip(), r"^This month  \$\d+\.\d\d · \d+ Sessions?$", "the month line reads as before")
+                        (self.day(40), "Live work", "vv000000-0000", "fleet", 9.00)])         # well before the 30 days
+        lines = self.section(ui, "project", "fleet", "Stats")
+        self.assertEqual(len(lines), 2, lines)
+        self.assertRegex(lines[0], r"^This month  \$\d+\.\d\d · \d+ Sessions?$", "the month line reads as before, with nothing after it")
+        self.assertEqual(lines[1], "Last 30 days  $4.00")
+        self.assertFalse(self.SPARK & set("".join(lines)), "no sparkline")
 
-    def test_no_spend_in_30_days_is_a_blank_sparkline(self):
+    def test_no_spend_in_30_days_is_zero(self):
         self.project("fleet", self.readme(), handoffs=[TODAY()])
         ui = self.ui()
         self.spend(ui, [(self.day(40), "Live work", "zz000000-0000", "fleet", 3.00)])
-        [line] = self.section(ui, "project", "fleet", "Stats")
-        self.assertEqual(line[-30:], " " * 30, line)
-        self.assertRegex(line[:-30].rstrip(), r"^This month  \$0\.00 · 0 Sessions$", line)
-        self.assertGreaterEqual(len(line), len("This month  $0.00 · 0 Sessions") + 30, line)
+        self.assertEqual(self.section(ui, "project", "fleet", "Stats"), ["This month  $0.00 · 0 Sessions", "Last 30 days  $0.00"])
 
     def test_it_is_worked_out_once_per_spend_read(self):
         class Rows(list):
@@ -3387,20 +3282,21 @@ class StatsSparkline(unittest.TestCase):
         self.project("fleet", self.readme(), handoffs=[TODAY()])
         ui = self.ui()
         self.spend(ui, Rows([(self.day(0), "Live work", "zz000000-0000", "fleet", 2.00)]))
-        first = self.section(ui, "project", "fleet", "Stats")[0]
-        self.assertTrue(first.endswith("█"), first)  # the sparkline is there
+        first = self.section(ui, "project", "fleet", "Stats")
+        self.assertEqual(first[-1], "Last 30 days  $2.00", first)  # the 30 days' spend is there
         before = Rows.reads
         for _ in range(3):  # drawn again, with the same spend read
-            self.assertEqual(self.section(ui, "project", "fleet", "Stats")[0], first)
+            self.assertEqual(self.section(ui, "project", "fleet", "Stats"), first)
         self.assertEqual(Rows.reads, before, "the spend rows were read again for a draw")
 
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class DetailLayout(unittest.TestCase):
-    """The detail layout on a real screen (SectionsOnScreen's folder, with Current state and Next on Printer
-    fleet, a Next alone on Restore drill, and bodies on Printer fleet's Handoffs: Toner swap, the newest, and
-    Toner check). The top bar is the only row above the content; the sidebar's first row and the detail's
-    name line are on screen row 2 on every view."""
+    """The details on a real screen (SectionsOnScreen's folder, with Current state and Next on Printer fleet, a
+    Next alone on Restore drill, and bodies on Printer fleet's Handoffs: Toner swap, the newest, and Toner
+    check). One column at any width, its sections at most 80 columns wide: the name line, then Next and
+    Current state, Sub-projects, Sessions, Handoffs, Notes, Details, and Stats. Above the content are only the
+    top bar, a blank row, a rule, and a blank row; the list's first row and the name line are on screen row 4."""
     run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
     select, keys, sidebar = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(ProjectRows.sidebar)
     at, SIZE, WIDE, DESCRIPTION = staticmethod(TwoPanes.at), (120, 48), (180, 48), TwoPanes.DESCRIPTION
@@ -3432,16 +3328,16 @@ class DetailLayout(unittest.TestCase):
             ui = pilot.app.ui
             r = ui.project_rows()[ui.psel]
             seen[label] = {"lines": screen_text(pilot.app), "bold": bold_text(pilot.app), "dim": dim_text(pilot.app),
-                           "raised": pane_raised(pilot.app), "items": ui.detail_items(r) if r.kind in ("project", "sub") else [],
+                           "selected": pane_selected(pilot.app), "items": ui.detail_items(r) if r.kind in ("project", "sub") else [],
                            "dsel": getattr(ui, "dsel", None), "focus": ui.focus, "menu": ui.choosing and ui.choosing["title"],
                            "folder": roost.short(str(roost.projects_dir())), "projects": ui.projects}
         return step
 
     @staticmethod
     def first_sidebar_row(lines):
-        """The first screen row under the top bar where the sidebar draws anything."""
+        """The first screen row under the top bar and its rule where the sidebar draws anything."""
         side = ProjectRows.sidebar(lines)
-        return next((i for i in range(1, len(side)) if side[i].strip(" │┃▏▕")), None)
+        return next((i for i in range(1, len(side)) if side[i].strip(" │┃▏▕─")), None)
 
     @staticmethod
     def name_at(got):
@@ -3459,19 +3355,20 @@ class DetailLayout(unittest.TestCase):
 
     # 1. The top area
 
-    def test_the_top_bar_is_the_only_row_above_the_content(self):
+    def test_only_the_top_bar_and_its_rule_are_above_the_content(self):
         seen = {}
         self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet")], size=self.SIZE)
         got = seen["fleet"]
         lines, W = got["lines"], roost.SIDEBAR_W
-        self.assertTrue(lines[0].startswith(" Agent Roost"), lines[0])
+        self.assertRegex(lines[0], r"^\s*Agent Roost\s+Projects\s+Sessions\s+Notes\s+Stats\s", lines[0])
         self.assertTrue(lines[0].rstrip().endswith(got["folder"]), f"the projects folder at the top bar's right: {lines[0]!r}")
         self.assertTrue([t for y, x, t in got["dim"] if y == 0 and got["folder"] in t], "the folder is dim")
         self.assertFalse([l for l in lines if re.search(r"\d+ projects · \d+ closed", l)], "no project counts")
-        self.assertEqual(lines[1].strip(" │┃▏▕"), "", "one blank row under the top bar")
-        self.assertEqual(self.first_sidebar_row(lines), 2, self.sidebar(lines)[:5])
+        self.assertEqual(lines[2], "─" * self.SIZE[0], "a rule across the whole width under the top bar")
+        self.assertEqual([l.strip(" │┃▏▕") for l in (lines[1], lines[3])], ["", ""], "a blank row each side of the rule")
+        self.assertEqual(self.first_sidebar_row(lines), 4, self.sidebar(lines)[:6])
         y, x, name = self.name_at(got)
-        self.assertEqual((y, name), (2, "Printer fleet"), "the name line is level with the sidebar's first row")
+        self.assertEqual((y, name), (4, "Printer fleet"), "the name line is level with the sidebar's first row")
         self.assertGreaterEqual(x, W)
 
     def test_the_search_row_shows_only_while_searching_or_with_a_search_set(self):
@@ -3479,131 +3376,253 @@ class DetailLayout(unittest.TestCase):
         self.run_on(self.projects, [self.on_project("fleet"), self.keys("/"), self.grab(seen, "typing"), self.keys("f", "l", "e"),
                                     self.keys("enter"), self.grab(seen, "kept"), self.keys("/", "escape"), self.grab(seen, "cleared")],
                     size=self.SIZE)
-        W, top = roost.SIDEBAR_W, slice(1, 6)  # the rows under the top bar (the key bar has a / too)
+        W, top = roost.SIDEBAR_W, slice(1, 7)  # the rows under the top bar (the key bar has a / too)
         self.assertTrue([l for l in seen["typing"]["lines"][top] if "/ " in l[W:]], "the search row, while typing")
         self.assertTrue([l for l in seen["kept"]["lines"][top] if "/ fle" in l[W:]], "the search row, with a search set")
         got = seen["cleared"]
         self.assertFalse([l for l in got["lines"][top] if "/ " in l[W:]], "no search row once it's cleared")
-        self.assertEqual(self.name_at(got)[0], 2, got["lines"][:5])
+        self.assertEqual(self.name_at(got)[0], 4, got["lines"][:6])
 
-    def test_the_sidebars_first_row_is_on_the_same_screen_row_on_every_view(self):
-        seen = {}
-        steps = [self.on_project("fleet")]
-        for name in ("Projects",) + ENTRIES + ("Projects",):
-            steps += [open_view(name), self.grab(seen, name)]
+    def test_the_lists_first_row_is_on_the_same_screen_row_after_the_other_tabs(self):
+        seen, shown = {}, []
+
+        async def tab(pilot):
+            await pilot.press("tab")
+            await pilot.pause()
+            shown.append(pilot.app.ui.TABS[pilot.app.ui.tab].name)
+        steps = [self.on_project("fleet"), self.grab(seen, "first")] + [tab] * len(TABS) + [self.grab(seen, "back")]
         self.run_on(self.projects, steps, size=self.SIZE)
-        got = {name: self.first_sidebar_row(seen[name]["lines"]) for name in seen}
-        self.assertEqual(got, {name: 2 for name in seen})
+        self.assertEqual(shown, list(TABS[1:]) + ["Projects"], "round the other tabs and back")
+        got = {k: self.first_sidebar_row(seen[k]["lines"]) for k in seen}
+        self.assertEqual(got, {"first": 4, "back": 4})
 
     # 2. The name line
 
-    def test_the_name_line_is_the_label_then_its_status_and_when_it_was_worked(self):
+    def test_the_name_line_is_the_label_bold_then_its_status_bold_in_its_color_then_when_it_was_worked_dim(self):
         seen = {}
-        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet"), self.on_project("quiet"),
-                                    self.grab(seen, "quiet")], size=self.SIZE)
+        widgets = importlib.import_module("roost.app.widgets")
+
+        def name_line(label):
+            async def step(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                y = min((y for y, x, t in bold_text(pilot.app) if x >= roost.SIDEBAR_W and y > 0), default=None)
+                seen[(label, "runs")] = runs(pilot.app, y) if y else []
+                seen[(label, "fills")] = backgrounds(pilot.app, y, roost.SIDEBAR_W) if y else None
+            return step
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet"), name_line("fleet"), self.on_project("quiet"),
+                                    self.grab(seen, "quiet"), name_line("quiet")], size=self.SIZE)
         fleet = next(p for p in seen["fleet"]["projects"] if p["id"] == "fleet")
-        for label, status, when in (("fleet", "awaiting-vendor", f"worked {roost.short_when(fleet['last'])}"),
-                                    ("quiet", "active", "never worked")):
+        for label, status, color, when in (("fleet", "awaiting-vendor", widgets.BLUE, f"worked {roost.short_when(fleet['last'])}"),
+                                           ("quiet", "active", widgets.GREEN, "never worked")):
             got = seen[label]
             y, x, name = self.name_at(got)
             line = got["lines"][y]
-            self.assertRegex(line[x:], rf"^{re.escape(name)}\s+{re.escape(status)} · {re.escape(when)}$", label)
-            self.assertTrue([t for yy, xx, t in got["dim"] if yy == y and xx > x and f"{status} · {when}" in t],
-                            f"{label}: the status and when are dim: {got['dim']}")
+            self.assertRegex(line[x:], rf"^{re.escape(name)}\s+{re.escape(status)}\s+{re.escape(when)}$", label)
+            # the status: bold in its color, with no background and no padding spaces in its look
+            shown = "".join(text for _, text, st in seen[(label, "runs")] if color_of(st) == color.lower() and st.bold)
+            self.assertEqual(shown, status, (label, seen[(label, "runs")]))
+            self.assertEqual(seen[(label, "fills")], set(), f"{label}: no background on the name line")
+            self.assertTrue([t for yy, xx, t in got["dim"] if yy == y and xx > x and when in t],
+                            f"{label}: when it was worked is dim: {got['dim']}")
             W = roost.SIDEBAR_W
             self.assertFalse([l for l in got["lines"] if l[W:].strip().startswith("Status") or "Last worked" in l], label)
 
-    def test_a_sub_projects_name_line(self):
-        seen = {}
-
-        def on_alpha(ui):
-            ui.subs_open.add("rollout")
-            ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "sub" and r.item["slug"] == "alpha")
-        self.run_on(self.projects, [self.select(on_alpha), self.grab(seen, "alpha")], size=self.SIZE)
-        got = seen["alpha"]
-        alpha = next(s for p in got["projects"] if p["id"] == "rollout" for s in p["subs"] if s["slug"] == "alpha")
-        y, x, name = self.name_at(got)
-        self.assertEqual(y, 2)
-        self.assertRegex(got["lines"][y][x:], rf"^{re.escape(name)}\s+active · worked {re.escape(roost.short_when(alpha['last']))}$")
-        W = roost.SIDEBAR_W
-        self.assertFalse([l for l in got["lines"] if l[W:].strip().startswith("Status")])
-        self.assertTrue([l for l in got["lines"] if re.match(r"Type\s+feature$", l[W:].strip())], "Type stays")
+    def test_the_name_line_notes_a_missing_readme(self):
+        import unittest.mock
+        p = TextualScreens.proj("no-readme", [])
+        p.update(readme=False, label="No readme")
+        with unittest.mock.patch.object(roost, "read_projects", lambda sessions: [p]):
+            app = self.run_on([p], [self.on_project("no-readme")], size=self.SIZE)
+        line = next(l for l in app.lines if "No readme" in l[roost.SIDEBAR_W:])
+        self.assertIn("(no README.md)", line)
 
     # 3. Current state and Next
 
-    def test_narrower_than_110_they_come_after_the_fields_and_before_the_sections(self):
+    def test_next_then_current_state_come_first_under_the_name_line_at_any_width(self):
+        for size in (self.SIZE, self.WIDE):
+            seen = {}
+            self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet")], size=size)
+            W, got = roost.SIDEBAR_W, seen["fleet"]
+            lines = got["lines"]
+            name_y = self.name_at(got)[0]
+            ny, nx = self.bold_at(got, "Next")
+            sy, sx = self.bold_at(got, "Current state")
+            sessions_y, sessions_x = self.bold_at(got, "Sessions")
+            with self.subTest(size=size):
+                self.assertLess(name_y, ny)
+                self.assertLess(ny, sy, "Next first")
+                self.assertLess(sy, sessions_y, "before the sections")
+                self.assertEqual((nx, sx), (sessions_x, sessions_x), "one column: no column at the right")
+                self.assertLess(sy, self.field_y(got, "Folder"), "before the fields")
+                self.assertEqual(words(" ".join(l[W:] for l in lines[ny + 1:sy])), words(NEXT_TEXT))
+                self.assertEqual(words(" ".join(l[W:] for l in lines[sy + 1:sessions_y])), words(STATE_TEXT), "the whole text, wrapped")
+                self.assertGreater(sum(bool(l[W:].strip()) for l in lines[sy + 1:sessions_y]), 1, "wrapped over lines")
         seen = {}
-        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet"),
-                                    self.on_project("drill"), self.grab(seen, "drill"),
+        self.run_on(self.projects, [self.on_project("drill"), self.grab(seen, "drill"),
                                     self.on_project("quiet"), self.grab(seen, "quiet")], size=self.SIZE)
-        W, got = roost.SIDEBAR_W, seen["fleet"]
-        lines = got["lines"]
-        sy, sx = self.bold_at(got, "Current state")
-        ny, nx = self.bold_at(got, "Next")
-        sessions_y, _ = self.bold_at(got, "Sessions")
-        self.assertGreater(sy, self.field_y(got, "Folder"), "after the fields")
-        self.assertLess(sy, ny)
-        self.assertLess(ny, sessions_y, "before the sections")
-        self.assertEqual(words(" ".join(l[W:] for l in lines[sy + 1:ny])), words(STATE_TEXT), "the whole text, wrapped")
-        self.assertGreater(sum(bool(l[W:].strip()) for l in lines[sy + 1:ny]), 1, "wrapped over lines")
-        self.assertEqual(words(" ".join(l[W:] for l in lines[ny + 1:sessions_y])), words(NEXT_TEXT))
+        W = roost.SIDEBAR_W
         drill = seen["drill"]
         self.assertFalse([t for y, x, t in drill["bold"] if t == "Current state"], "an empty one is left out")
         dy, _ = self.bold_at(drill, "Next")
         self.assertIn(words(DRILL_NEXT), words(" ".join(l[W:] for l in drill["lines"][dy + 1:dy + 4])))
         self.assertFalse([t for y, x, t in seen["quiet"]["bold"] if t in ("Current state", "Next") and x >= W])
 
-    def test_at_110_columns_and_wider_they_are_a_right_hand_column_beside_the_fields_and_sections(self):
+    # 4. The sections, their headings, and their items
+
+    HEADS = ("Next", "Current state", "Sub-projects", "Sessions", "Handoffs", "Notes", "Details", "Stats")
+
+    def heads(self, got):
+        """{heading: (y, x)} for each of HEADS drawn bold in the details."""
+        out = {}
+        for y, x, t in got["bold"]:
+            if t in self.HEADS and x >= roost.SIDEBAR_W and t not in out:
+                out[t] = (y, x)
+        return out
+
+    def test_the_sections_in_order_from_the_top(self):
         seen = {}
-        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet")], size=self.WIDE)
-        W, got = roost.SIDEBAR_W, seen["fleet"]
-        lines = got["lines"]
-        sy, sx = self.bold_at(got, "Current state")
-        ny, nx = self.bold_at(got, "Next")
-        sessions_y, sessions_x = self.bold_at(got, "Sessions")
-        self.assertGreaterEqual(sx, W + 50, "in a right-hand column")
-        self.assertEqual(nx, sx, "Next under Current state, in the same column")
-        self.assertLess(sy, ny)
-        self.assertLessEqual(sy, self.field_y(got, "Folder"), "beside the fields, not under them")
-        self.assertLess(sessions_x, sx, "the sections stay in the left column")
-        self.assertEqual(words(" ".join(l[sx:] for l in lines[sy + 1:ny])), words(STATE_TEXT), "wrapped to the column")
-        end = next(i for i in range(ny + 1, len(lines)) if not lines[i][sx:].strip())
-        self.assertEqual(words(" ".join(l[sx:] for l in lines[ny + 1:end])), words(NEXT_TEXT))
-        described = next((l for l in lines if TwoPanes.DESCRIPTION[:30] in l), None)
-        self.assertIsNotNone(described, "the description, in the left column")
-        self.assertLess(described.index(TwoPanes.DESCRIPTION[:30]), sx)
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet"),
+                                    self.on_project("rollout"), self.grab(seen, "rollout")], size=self.SIZE)
+        for label, want in (("fleet", ["Next", "Current state", "Sessions", "Handoffs", "Notes", "Details", "Stats"]),
+                            ("rollout", ["Sub-projects", "Sessions", "Handoffs", "Notes", "Details", "Stats"])):
+            got = seen[label]
+            heads = self.heads(got)
+            with self.subTest(project=label):
+                self.assertEqual(sorted(heads, key=lambda h: heads[h]), want, heads)
+                self.assertLess(self.name_at(got)[0], min(y for y, _ in heads.values()), "the name line on top")
+
+    def heading_rows(self, size):
+        """Printer fleet's details at size: the lines, and for each heading drawn, (y, x, the text from x)."""
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet")], size=size)
+        got = seen["fleet"]
+        return got, {h: (y, x, got["lines"][y][x:]) for h, (y, x) in self.heads(got).items()}
+
+    def test_each_heading_is_bold_then_its_count_dim_then_a_rule_to_the_80_column_limit(self):
+        got, rows = self.heading_rows(self.WIDE)  # 180 columns: the details are far wider than 80
+        W = roost.SIDEBAR_W
+        counts = {"Sessions": 1, "Handoffs": 2, "Notes": 1}  # Printer fix; Toner swap and Toner check; Driver shortlist
+        ends = {}
+        for head in ("Next", "Current state", "Sessions", "Handoffs", "Notes", "Details", "Stats"):
+            self.assertIn(head, rows, (head, rows))
+            y, x, text = rows[head]
+            with self.subTest(heading=head):
+                if head in counts:
+                    self.assertRegex(text, rf"^{head} {counts[head]} ─+$")
+                    n_at = x + len(head) + 1
+                    self.assertTrue([t for yy, xx, t in got["dim"] if yy == y and xx == n_at and t.startswith(str(counts[head]))],
+                                    f"the count is dim: {got['dim']}")
+                else:
+                    self.assertRegex(text, rf"^{head} ─+$", "no count: it lists no items")
+                ends[head] = x + len(text)
+                self.assertTrue(70 <= ends[head] - W <= 84, f"the rule stops at the 80-column limit: {ends[head] - W}")
+        self.assertEqual(len(set(ends.values())), 1, ends)
+
+    def test_the_sections_stay_within_80_columns_at_any_width(self):
+        for size in (self.SIZE, self.WIDE):
+            got, _ = self.heading_rows(size)
+            W, bottom = roost.SIDEBAR_W, size[1] - 3  # above the status bar and the key bar
+            with self.subTest(size=size):
+                for y, l in enumerate(got["lines"][4:bottom], 4):  # under the top bar, its rule, and their blank rows
+                    self.assertLessEqual(len(l.rstrip()) - W, 84, f"row {y} runs past 80 columns: {l[W:]!r}")
+
+    def test_each_item_has_its_mark_its_name_and_its_time_at_the_sections_right_edge(self):
+        toner = TextualScreens.closed("Toner order", 30)  # closed half an hour ago: in the last 7 days
+        self.sessions.append(toner)
+        next(p for p in self.projects if p["id"] == "fleet")["sessions"].append(toner["id"])
+        got, rows = self.heading_rows(self.SIZE)
+        W, lines = roost.SIDEBAR_W, got["lines"]
+        edge = {h: x + len(text) for h, (y, x, text) in rows.items()}
+        fix = next(s for s in self.sessions if s["name"] == "Printer fix")
+        fleet = next(p for p in got["projects"] if p["id"] == "fleet")
+        swap = next(h for h in fleet["handoffs"] if h[1] == "Toner swap")
+        want = [("Sessions", "Printer fix", rf"● Printer fix\s+{re.escape(roost.short_when(fix['last']))}"),
+                ("Sessions", "Toner order", rf"○ Toner order\s+{re.escape(roost.short_when(toner['last']))}"),
+                ("Handoffs", "Toner swap", rf"◆ Toner swap\s+{re.escape(roost.short_when(swap[0]))}"),
+                ("Notes", "Driver shortlist", r"✎ Driver shortlist(\s+\S.*)?")]
+        for head, name, pattern in want:
+            with self.subTest(item=name):
+                self.assertIn(head, rows, rows)
+                y0 = rows[head][0]
+                line = next((l for l in lines[y0 + 1:] if name in l[W:]), None)
+                self.assertIsNotNone(line, (name, lines[y0:]))
+                self.assertRegex(line[W:].strip(), rf"^{pattern}$")
+                if head != "Notes":
+                    self.assertLessEqual(abs(len(line.rstrip()) - edge[head]), 1, f"its time at the section's right edge: {line!r}")
+
+    def test_a_sub_projects_line_has_its_mark_name_type_and_state_at_the_right(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("rollout"), self.grab(seen, "rollout")], size=self.SIZE)
+        got = seen["rollout"]
+        W, lines = roost.SIDEBAR_W, got["lines"]
+        y0 = self.heads(got)["Sub-projects"][0]
+        rollout = next(p for p in got["projects"] if p["id"] == "rollout")
+        beta = next(s for s in rollout["subs"] if s["slug"] == "beta")
+        sub_lines = [l[W:].strip() for l in lines[y0 + 1:y0 + 3]]
+        self.assertRegex(sub_lines[0], r"^● Badge Printers\s+feature\s+running$")
+        self.assertRegex(sub_lines[1], rf"^◆ beta\s+feature\s+ready · Handoff {re.escape(roost.short_when(beta['handed']))}$")
+
+    def test_details_holds_the_description_then_category_and_tags_then_the_folder(self):
+        for pid in ("fleet", "rollout"):
+            seen = {}
+            self.run_on(self.projects, [self.on_project(pid), self.loaded, self.grab(seen, pid)], size=self.SIZE)
+            got = seen[pid]
+            W, heads = roost.SIDEBAR_W, self.heads(got)
+            under = [l[W:].strip() for l in got["lines"][heads["Details"][0] + 1:heads["Stats"][0]] if l[W:].strip()]
+            project = next(p for p in got["projects"] if p["id"] == pid)
+            with self.subTest(project=pid):
+                self.assertTrue(under and under[0].startswith("Description"), under)
+                self.assertFalse([l for l in under if l.startswith(("Sessions", "Sub-projects"))], under)
+                path = roost.short(project["path"])
+                folder = [i for i, l in enumerate(under) if (m := re.fullmatch(r"Folder\s+(\S.*)", l))
+                          and (m.group(1) == path or (m.group(1).endswith("…") and path.startswith(m.group(1)[:-1])))]
+                self.assertEqual(len(folder), 1, under)
+                if pid == "fleet":
+                    cat = [i for i, l in enumerate(under) if re.fullmatch(r"Category\s+procurement\s+Tags\s+zq-tag", l)]
+                    self.assertEqual(len(cat), 1, under)
+                    self.assertLess(cat[0], folder[0])
+
+    def test_stats_is_this_months_spend_and_sessions_then_the_last_30_days_with_no_sparkline(self):
+        got, rows = self.heading_rows(self.SIZE)
+        W, y0 = roost.SIDEBAR_W, rows["Stats"][0]
+        lines = [l[W:].strip() for l in got["lines"][y0 + 1:]]
+        at = next((i for i, l in enumerate(lines) if "This month" in l), None)
+        self.assertIsNotNone(at, lines)
+        self.assertRegex(lines[at], r"^This month\s+\$1\.25 · 1 Sessions?$")
+        self.assertRegex(lines[at + 1], r"^Last 30 days\s+\$1\.25$")
+        self.assertFalse([l for l in got["lines"] if set("▁▂▃▄▅▆▇█") & set(l[W:])], "no sparkline characters in the details")
 
     def assert_items_selectable(self, size):
-        """In this layout: tab then ↓ draw each item's line selected in turn, and a click on the note's line
+        """At this size: → then ↓ draw each item's line selected in turn, and a click on the note's line
         selects it."""
         seen, W = {}, roost.SIDEBAR_W
-        steps = [self.on_project("fleet"), self.loaded, self.grab(seen, "side"), self.keys("tab")]
+        steps = [self.on_project("fleet"), self.loaded, self.grab(seen, "side"), self.keys("right")]
         for i in range(4):
             steps += [self.grab(seen, i), self.keys("down")]
         self.run_on(self.projects, steps, size=size)
         got = seen["side"]
-        sy, sx = self.bold_at(got, "Current state")  # the layout this test is about is drawn
-        stop = sx if sx > W + 40 else None  # wide: the items are in the left column
+        self.bold_at(got, "Current state")  # the fixture: Current state and Next are drawn
         ys, last = [], 0
         for kind, item in got["items"]:
             t = self.text_of(kind, item)
-            y = next((i for i in range(last, len(got["lines"])) if t in got["lines"][i][W:stop]), None)
+            y = next((i for i in range(last, len(got["lines"])) if t in got["lines"][i][W:]), None)
             self.assertIsNotNone(y, (t, got["lines"]))
             ys.append(y)
             last = y + 1
         self.assertEqual(len(ys), 4, got["items"])  # Printer fix, Toner swap, Toner check, Driver shortlist
         for i in range(4):
-            self.assertEqual(seen[i]["raised"] & set(ys), {ys[i]}, (size, i, seen[i]["lines"][ys[i]]))
+            self.assertEqual(seen[i]["selected"] & set(ys), {ys[i]}, (size, i, seen[i]["lines"][ys[i]]))
         note = next(i for i, (k, _) in enumerate(got["items"]) if k == "note")
         clicked = {}
         self.run_on(self.projects, [self.on_project("fleet"), self.loaded,
                                     lambda pilot: pilot.click(offset=(W + 8, ys[note])), self.grab(clicked, "x")], size=size)
         self.assertEqual((clicked["x"]["focus"], clicked["x"]["dsel"], clicked["x"]["menu"]), ("pane", note, None), size)
 
-    def test_the_items_stay_selectable_with_state_and_next_below_the_fields(self):
+    def test_the_items_are_selectable_at_120_columns(self):
         self.assert_items_selectable(self.SIZE)
 
-    def test_the_items_stay_selectable_with_state_and_next_in_a_column(self):
+    def test_the_items_are_selectable_at_180_columns(self):
         self.assert_items_selectable(self.WIDE)
 
     # 4. The newest Handoff's lines
@@ -3626,7 +3645,7 @@ class DetailLayout(unittest.TestCase):
 
     def test_the_handoffs_lines_arent_items(self):
         seen = {}
-        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "side"), self.keys("tab"),
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "side"), self.keys("right"),
                                     self.index_of("handoff", "Toner swap"), self.grab(seen, "swap"), self.keys("down"),
                                     self.grab(seen, "down")], size=self.SIZE)
         W, lines = roost.SIDEBAR_W, seen["side"]["lines"]
@@ -3635,8 +3654,8 @@ class DetailLayout(unittest.TestCase):
         cy = next(i for i, l in enumerate(lines) if "Toner check" in l[W:])
         self.assertEqual([x[1] for k, x in seen["side"]["items"] if k == "handoff"], ["Toner swap", "Toner check"])
         band = set(range(ty, cy + 1))
-        self.assertEqual(seen["swap"]["raised"] & band, {ty})
-        self.assertEqual(seen["down"]["raised"] & band, {cy}, "↓ goes from Toner swap straight to Toner check")
+        self.assertEqual(seen["swap"]["selected"] & band, {ty})
+        self.assertEqual(seen["down"]["selected"] & band, {cy}, "↓ goes from Toner swap straight to Toner check")
         check = next(i for i, (k, x) in enumerate(seen["side"]["items"]) if k == "handoff" and x[1] == "Toner check")
         for y, want in ((ty + 1, None), (cy, check)):
             clicked = {}
@@ -3645,8 +3664,224 @@ class DetailLayout(unittest.TestCase):
             got = clicked["x"]
             if want is None:  # a click on one of the lines: nothing is selected or opened
                 self.assertEqual((got["menu"], got["focus"]), (None, "side"), got["lines"][y])
-                self.assertFalse(got["raised"] & band)
+                self.assertFalse(got["selected"] & band)
             else:
                 self.assertEqual((got["focus"], got["dsel"]), ("pane", want))
 
     loaded = staticmethod(SectionsOnScreen.loaded)
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class DetailScroll(unittest.TestCase):
+    """The details scroll (DetailLayout's folder: Printer fleet has Next, Current state, Sessions, Handoffs,
+    notes, Details, and Stats). In a short window they're drawn in full and shown from a scroll position: the
+    wheel over them scrolls them wherever the keys are, without changing the selected project or item; it
+    stops at the top, and at the bottom once the last line shows. With the keys in them, ↑↓ move the selected
+    item and the view follows it; page up/down scroll by their height less one row and leave the selection
+    where it is. While there's more below, their last row ends in a dim "↓ more". Another project's details
+    show from the top."""
+    run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
+    keys = staticmethod(TextualScreens.keys)
+    loaded = staticmethod(SectionsOnScreen.loaded)
+    select = staticmethod(TextualScreens.select)
+    name_at, DESCRIPTION = staticmethod(DetailLayout.name_at), DetailLayout.DESCRIPTION
+    read_project = staticmethod(SectionsOnScreen.read_project)
+    SHORT, TALL = (100, 28), (100, 80)  # SHORT: the smallest window roost draws in (MIN_SIZE)
+
+    def setUp(self):
+        """DetailLayout's folder, plus on Printer fleet four more notes and a third Handoff: details long enough
+        that a page down at SHORT doesn't reach their end."""
+        DetailLayout.setUp(self)
+        fleet = self.root / "fleet"
+        for i, title in enumerate(("Toner budget", "Driver test plan", "Office map", "Vendor contacts")):
+            (fleet / "notes" / f"extra-{i}.md").write_text(f"# {title}\n")
+        (fleet / "handoffs" / handoff_name(time.time() - 3 * 86400, "dd000000")).write_text("---\nname: Driver trial\n---\n\nDone.\n")
+        p = next(p for p in self.projects if p["id"] == "fleet")
+        p.update(self.read_project(fleet, self.sessions))
+
+    @staticmethod
+    def norm(line):
+        return line.replace("▌", " ").rstrip()
+
+    def view(self, seen, label):
+        """A step that keeps, under label: the details' rows as drawn (right of the sidebar), their first screen
+        row, the selection, the rows marked selected, the dim and bold runs, the key bar, and the help."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            app, ui, W = pilot.app, pilot.app.ui, roost.SIDEBAR_W
+            box, lines = app.query_one(roost.ProjectPanel).region, screen_text(app)
+            seen[label] = {"pane": [l[W:] for l in lines[box.y:box.bottom]], "y0": box.y, "lines": lines,
+                           "psel": ui.psel, "dsel": getattr(ui, "dsel", None), "focus": ui.focus,
+                           "selected": pane_selected(app) & set(range(box.y, box.bottom)),
+                           "dim": dim_text(app), "bold": bold_text(app), "bar": ui.bar, "help": ui.help_rows()}
+        return step
+
+    @staticmethod
+    def wheel(where, n=1, down=True):
+        """A step: n turns of the wheel over where (roost.ProjectPanel, the details, or roost.ProjectList)."""
+        async def step(pilot):
+            widget = pilot.app.query_one(where)
+            box = widget.region
+            ev = type("Wheel", (), {"x": 4, "y": 4, "screen_x": box.x + 4, "screen_y": box.y + 4, "stop": lambda self: None})()
+            for _ in range(n):
+                (widget.on_mouse_scroll_down if down else widget.on_mouse_scroll_up)(ev)
+                await pilot.pause()
+        return step
+
+    def full(self):
+        """Printer fleet's details whole, in a window tall enough for all of them: their rows, trailing blanks left out."""
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "x")], size=self.TALL)
+        rows = [self.norm(l) for l in seen["x"]["pane"]]
+        while rows and not rows[-1]:
+            rows.pop()
+        self.assertFalse([r for r in rows if "↓ more" in r], "the fixture: everything fits at 120x80")
+        return rows
+
+    def offset(self, got, full):
+        """The scroll position a view shows: where its rows (all but the last, which may carry ↓ more) start in full."""
+        shown = [self.norm(l) for l in got["pane"]][:-1]
+        padded = full + [""] * len(got["pane"])
+        at = [o for o in range(len(full)) if padded[o:o + len(shown)] == shown]
+        self.assertEqual(len(at), 1, ("the view isn't one place in the details", shown, full))
+        return at[0]
+
+    def test_a_short_window_reaches_every_section_down_to_stats_with_the_wheel(self):
+        full = self.full()
+        seen = {}
+        steps = [self.on_project("fleet"), self.loaded, self.view(seen, "start")]
+        for i in range(len(full)):
+            steps += [self.wheel(roost.ProjectPanel), self.view(seen, i)]
+        self.run_on(self.projects, steps, size=self.SHORT)
+        heads = {"Next", "Current state", "Sessions", "Handoffs", "Notes", "Details", "Stats"}
+        W = roost.SIDEBAR_W
+        self.assertNotIn("Stats", {t for y, x, t in seen["start"]["bold"] if x >= W}, "the fixture: Stats is cut off at first")
+        shown = {t for v in seen.values() for y, x, t in v["bold"] if x >= W and t in heads}
+        self.assertEqual(shown, heads, "every section shows at some scroll position")
+        last = seen[len(full) - 1]
+        self.assertIn(full[-1], [self.norm(l) for l in last["pane"]], "the details' last line shows at the end")
+
+    def test_the_wheel_over_the_details_scrolls_them_and_keeps_the_selected_project_and_item(self):
+        full = self.full()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "list"),
+                                    self.wheel(roost.ProjectPanel, 2), self.view(seen, "list wheeled"),
+                                    self.keys("right"), self.view(seen, "pane"), self.wheel(roost.ProjectPanel, 2),
+                                    self.view(seen, "pane wheeled")], size=self.SHORT)
+        for before, after in (("list", "list wheeled"), ("pane", "pane wheeled")):
+            b, a = seen[before], seen[after]
+            with self.subTest(keys_in=b["focus"]):
+                self.assertGreater(self.offset(a, full), self.offset(b, full), "the wheel scrolled the details down")
+                self.assertEqual((a["psel"], a["focus"]), (b["psel"], b["focus"]), "the same project, the keys where they were")
+                if b["focus"] == "pane":
+                    self.assertEqual(a["dsel"], b["dsel"], "the selected item stays")
+
+    def test_the_wheel_over_the_list_still_moves_the_lists_selection(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.view(seen, "start"), self.wheel(roost.ProjectList),
+                                    self.view(seen, "down"), self.wheel(roost.ProjectList, down=False), self.view(seen, "up")],
+                    size=self.SHORT)
+        self.assertEqual(seen["down"]["psel"], seen["start"]["psel"] + 1)
+        self.assertEqual(seen["up"]["psel"], seen["start"]["psel"])
+
+    def test_scrolling_stops_at_the_top_and_once_the_last_line_shows(self):
+        full = self.full()
+        seen = {}
+        steps = [self.on_project("fleet"), self.loaded, self.wheel(roost.ProjectPanel, down=False), self.view(seen, "top"),
+                 self.wheel(roost.ProjectPanel, len(full)), self.view(seen, "end"), self.wheel(roost.ProjectPanel, 3),
+                 self.view(seen, "past")]
+        self.run_on(self.projects, steps, size=self.SHORT)
+        room = len(seen["top"]["pane"])
+        self.assertGreater(len(full), room, "the fixture: the details don't fit at 120x24")
+        self.assertEqual(self.offset(seen["top"], full), 0, "the wheel up at the top stays at the top")
+        for when in ("end", "past"):
+            got = seen[when]
+            with self.subTest(when=when):
+                self.assertEqual(self.offset(got, full), len(full) - room, "the end: the last line on the last row, no further")
+                self.assertEqual(self.norm(got["pane"][-1]), full[-1])
+
+    def test_with_the_keys_in_the_details_down_keeps_the_selected_item_on_screen(self):
+        seen, n = {}, 9  # Printer fix; three Handoffs; five notes
+        steps = [self.on_project("fleet"), self.loaded, self.view(seen, "list"), self.keys("right"), self.view(seen, 0)]
+        for i in range(1, n):
+            steps += [self.keys("down"), self.view(seen, i)]
+        self.run_on(self.projects, steps, size=self.SHORT)
+        self.assertEqual(seen[0]["focus"], "pane", "the fixture: → moved the keys into the details")
+        for i in range(n):
+            got = seen[i]
+            with self.subTest(dsel=i):
+                self.assertEqual(got["dsel"], i)
+                self.assertEqual(len(got["selected"]), 1, f"the selected item is on screen: {got['pane']}")
+        last = self.norm(seen[n - 1]["lines"][min(seen[n - 1]["selected"])][roost.SIDEBAR_W:])
+        self.assertNotIn(last, [self.norm(l) for l in seen["list"]["pane"]], "the fixture: the last item is below the window at first")
+
+    def test_page_down_and_up_scroll_by_the_height_less_one_row_and_leave_the_selection(self):
+        full = self.full()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.keys("right"), self.view(seen, "top"),
+                                    self.keys("pagedown"), self.view(seen, "down"), self.keys("pageup"), self.view(seen, "up"),
+                                    self.keys("pagedown"), self.keys("down"), self.view(seen, "moved")], size=self.SHORT)
+        room = len(seen["top"]["pane"])
+        self.assertGreater(len(full), 2 * room - 1, "the fixture: a page down doesn't reach the end")
+        self.assertEqual(self.offset(seen["top"], full), 0)
+        self.assertEqual(self.offset(seen["down"], full), room - 1, "a page is the details' height less one row")
+        self.assertEqual(self.offset(seen["up"], full), 0)
+        self.assertEqual((seen["down"]["dsel"], seen["up"]["dsel"]), (0, 0), "paging leaves the selected item")
+        self.assertEqual(seen["down"]["selected"], set(), "the fixture: the page down scrolled the selected item off")
+        got = seen["moved"]
+        self.assertEqual(got["dsel"], 1, "↓ after paging moves the selection on by one")
+        self.assertEqual(len(got["selected"]), 1, "and the view comes back to show it")
+
+    def test_more_below_ends_the_last_row_in_a_dim_more_marker_and_none_when_it_all_shows(self):
+        full = self.full()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "top"),
+                                    self.wheel(roost.ProjectPanel, len(full)), self.view(seen, "end")], size=self.SHORT)
+        W, top = roost.SIDEBAR_W, seen["top"]
+        last_y = top["y0"] + len(top["pane"]) - 1
+        row = top["lines"][last_y]
+        self.assertTrue(row.rstrip().endswith("↓ more"), f"the last row: {row!r}")
+        self.assertLessEqual(len(row.rstrip()) - W, 84, "within the details' 80 columns")
+        self.assertTrue([t for y, x, t in top["dim"] if y == last_y and t.endswith("↓ more")], "it's dim")
+        self.assertEqual(sum("↓ more" in l for l in top["pane"]), 1, "only on the last row")
+        self.assertFalse([l for l in seen["end"]["pane"] if "↓ more" in l], "none once the end shows")
+        tall = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(tall, "x")], size=self.TALL)
+        self.assertFalse([l for l in tall["x"]["pane"] if "↓ more" in l], "none when it all fits")
+
+    def test_another_project_shows_its_details_from_the_top(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "fleet"),
+                                    self.wheel(roost.ProjectPanel, 5), self.view(seen, "scrolled"), self.keys("down"),
+                                    self.view(seen, "down"), self.wheel(roost.ProjectPanel, 5), self.keys("up"),
+                                    self.view(seen, "back")], size=self.SHORT)
+        top = self.name_at(seen["fleet"])[0]
+        scrolled = self.name_at(seen["scrolled"])
+        self.assertFalse(scrolled and scrolled[2] == "Printer fleet" and scrolled[0] == top, "the fixture: the wheel scrolled the details")
+        self.assertNotEqual(seen["down"]["psel"], seen["scrolled"]["psel"], "the fixture: ↓ picked another project")
+        for when, name in (("down", None), ("back", "Printer fleet")):
+            got = seen[when]
+            with self.subTest(when=when):
+                y, x, shown = self.name_at(got)
+                self.assertEqual(y, top, f"its name line on the details' first row: {got['pane'][:3]}")
+                if name:
+                    self.assertEqual(shown, name)
+        W, lines = roost.SIDEBAR_W, seen["fleet"]["lines"]
+        y = next(i for i, l in enumerate(lines) if "Restore drill" in l[:W])
+        clicked = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.wheel(roost.ProjectPanel, 5),
+                                    lambda pilot: pilot.click(offset=(8, y)), self.view(clicked, "x")], size=self.SHORT)
+        y, x, shown = self.name_at(clicked["x"])
+        self.assertEqual((y, shown), (top, "Restore drill"), "a click on another project: its details from the top")
+
+    def test_the_key_bar_names_the_paging_keys_in_the_details_and_the_help_mentions_scrolling(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.keys("right"), self.view(seen, "pane")],
+                    size=self.SHORT)
+        got = seen["pane"]
+        self.assertEqual(got["focus"], "pane")
+        bar = " ".join(keys for keys, _ in got["bar"][0])
+        self.assertIn("page up/down", bar, "the key bar names the paging keys")
+        self.assertTrue([(a, b) for a, b in got["help"] if "scroll" in b.lower() and "details" in (a + b).lower()],
+                        f"the Projects help mentions scrolling the details: {got['help']}")

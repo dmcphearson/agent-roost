@@ -5,7 +5,7 @@ from roost.tabs.sessions import SessionsTab, SessionsView
 from roost.tabs.projects import ProjectsTab, ProjectsView
 from roost.tabs.notes import NotesTab, NotesView
 from roost.tabs.stats import StatsTab, StatsPage
-from roost.tabs.unfiled import UnfiledTab, UnfiledView
+from roost.tabs.unfiled import UnfiledTab
 
 
 class UI(ProjectsTab, UnfiledTab, SessionsTab, NotesTab, StatsTab, Shell):
@@ -16,8 +16,6 @@ class UI(ProjectsTab, UnfiledTab, SessionsTab, NotesTab, StatsTab, Shell):
     # own is taking every key, and the widget that draws it.
     TABS = [Tab("Projects", ProjectsTab.draw_projects, ProjectsTab.keys_projects, ProjectsTab.PROJECTS_HELP,
                 ProjectsTab.projects_typing, ProjectsView),
-            Tab("Unfiled", UnfiledTab.draw_unfiled, UnfiledTab.keys_unfiled, UnfiledTab.UNFILED_HELP, UnfiledTab.unfiled_typing,
-                UnfiledView),
             Tab("Sessions", SessionsTab.draw_sessions, SessionsTab.keys_sessions, SessionsTab.SESSIONS_HELP,
                 SessionsTab.sessions_typing, SessionsView),
             Tab("Notes", NotesTab.draw_notes, NotesTab.keys_notes, NotesTab.NOTES_HELP, NotesTab.notes_typing,

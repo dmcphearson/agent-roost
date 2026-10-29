@@ -7,14 +7,12 @@ load_tests = own_tests(__name__)
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class Unfiled(unittest.TestCase):
-    """The Unfiled entry, first under the projects, and its view in the right pane: the Sessions no project
-    (or sub-project) lists and the person hasn't dismissed, and the notes in ~/.roost/notes. Recent (uview 0)
-    has the running Sessions, the ones closed in the last 7 days, and the notes edited in the last 7 days;
-    All (uview 1) has every one. Running Sessions first, then the rest by last activity or edit, newest first."""
+    """The Sessions tab's Unfiled view (Running, Closed, Unfiled, switched with ← →): every Session no project
+    (or sub-project) lists and the person hasn't dismissed, and every note in ~/.roost/notes. Running Sessions
+    first, then the rest by last activity or edit, newest first. A row's actions are the Unfiled entry's were."""
     run_app = TextualScreens.run_app
     keys, select = staticmethod(TextualScreens.keys), staticmethod(TextualScreens.select)
-    RECENT = ["Laptop refresh", "Badge scan", "Printer idea", "Toner order", "Cable plan"]
-    OLDER = ["Old idea", "Old audit"]  # in All only: a note edited 9 days ago, a Session closed 10 days ago
+    LISTED = ["Laptop refresh", "Badge scan", "Printer idea", "Toner order", "Cable plan", "Old idea", "Old audit"]
     NEVER = ["Printer fix", "Fleet audit", "Badge work", "Dismissed one"]  # filed, or dismissed
 
     def setUp(self):
@@ -56,6 +54,19 @@ class Unfiled(unittest.TestCase):
             return self.run_app(list(steps), size=size)
 
     @staticmethod
+    def on_unfiled():
+        """A pilot step: the Sessions tab (tab from Projects), then → until its Unfiled view shows, at most once round."""
+        async def step(pilot):
+            await open_view("Sessions")(pilot)
+            for _ in range(len(roost.VIEWS)):
+                ui = pilot.app.ui
+                if roost.VIEWS[ui.view] == "Unfiled":
+                    break
+                await pilot.press("right")
+                await pilot.pause()
+        return step
+
+    @staticmethod
     def look(seen, label, get=None):
         """A step that keeps, under label: the screen's lines, and what get(app) says."""
         async def step(pilot):
@@ -65,18 +76,14 @@ class Unfiled(unittest.TestCase):
         return step
 
     @staticmethod
-    def pane(lines):
-        return [l[roost.SIDEBAR_W:] for l in lines]
-
-    def order(self, lines, names):
-        """The row each name is on in the pane (None when it isn't there)."""
-        pane = self.pane(lines)
-        return {n: next((i for i, l in enumerate(pane) if re.search(rf"(^|\s){re.escape(n)}(\s|$)", l)), None) for n in names}
+    def order(lines, names):
+        """The row each name is on (None when it isn't there), the panel at the bottom left out."""
+        return {n: next((i for i, l in enumerate(lines[:-10]) if re.search(rf"(^|\s){re.escape(n)}(\s|$)", l)), None) for n in names}
 
     def assert_listed_in_order(self, lines, names, running=2):
-        """names are in the pane, top to bottom; the first running ones (any order among them) come first."""
+        """names are listed, top to bottom; the first running ones (any order among them) come first."""
         ys = self.order(lines, names)
-        self.assertNotIn(None, ys.values(), (ys, "\n".join(self.pane(lines))))
+        self.assertNotIn(None, ys.values(), (ys, "\n".join(lines)))
         got = [ys[n] for n in names]
         self.assertLess(max(got[:running]), min(got[running:]), ("running Sessions first", ys))
         self.assertEqual(got[running:], sorted(got[running:]), ("the rest newest first", ys))
@@ -91,162 +98,148 @@ class Unfiled(unittest.TestCase):
     def labels(acts):
         return [label for label, fn in acts if (label, fn) != roost.DIVIDER]
 
-    # the entry and its view
+    # the view
 
-    def test_unfiled_is_the_first_entry_and_a_view_after_projects(self):
-        self.assertEqual(roost.ENTRIES, ("Unfiled", "Sessions", "Notes", "Stats"))
-        self.assertEqual([t.name for t in roost.UI.TABS], ["Projects", "Unfiled", "Sessions", "Notes", "Stats"])
+    def test_unfiled_is_the_sessions_tabs_third_view_and_not_a_tab(self):
+        self.assertEqual(list(roost.VIEWS), ["Running", "Closed", "Unfiled"])
+        self.assertEqual([t.name for t in roost.UI.TABS], list(TABS))
 
-    def test_the_sidebar_shows_unfiled_first_under_the_projects_with_its_recent_count(self):
+    def test_it_lists_every_unfiled_session_and_note_running_first_then_newest_first(self):
         seen = {}
-        self.start([self.look(seen, "projects"), open_view("Unfiled"), self.look(seen, "unfiled", lambda app: (
-            app.ui.TABS[app.ui.tab].name, app.ui.focus))])
-        side = [l[:roost.SIDEBAR_W] for l in seen["projects"][0]]
-        new = next(i for i, l in enumerate(side) if "+ New project" in l)
-        self.assertIn("Unfiled", side[new + 2], "\n".join(side))
-        self.assertIn("Sessions", side[new + 3], "\n".join(side))
-        self.assertTrue(side[new + 2].rstrip(" │┃▏▕").endswith(f" {len(self.RECENT)}"),
-                        f"the Recent count ({len(self.RECENT)}) at its right: {side[new + 2]!r}")
-        self.assertEqual(seen["unfiled"][1], ("Unfiled", "pane"))
-        pane = "\n".join(self.pane(seen["unfiled"][0]))
-        self.assertIn(f"Recent ({len(self.RECENT)})", pane, "the sidebar's count is Recent's")
-
-    def test_recent_and_all_are_labeled_with_their_counts(self):
-        seen = {}
-        self.start([open_view("Unfiled"), self.look(seen, "x")])
-        pane = "\n".join(self.pane(seen["x"][0]))
-        self.assertIn(f"Recent ({len(self.RECENT)})", pane)
-        self.assertIn(f"All ({len(self.RECENT) + len(self.OLDER)})", pane)
-        self.assertLess(pane.index("Recent ("), pane.index("All ("))
-
-    def test_recent_lists_running_sessions_then_recent_ones_and_notes_newest_first(self):
-        seen = {}
-        self.start([open_view("Unfiled"), self.look(seen, "recent", lambda app: app.ui.uview)])
-        lines, uview = seen["recent"]
-        self.assertEqual(uview, 0)
-        self.assert_listed_in_order(lines, self.RECENT)
-        ys = self.order(lines, self.OLDER + self.NEVER)
-        self.assertEqual({n: y for n, y in ys.items() if y is not None}, {}, "only Recent's, and nothing filed or dismissed")
-
-    def test_right_and_left_switch_between_recent_and_all(self):
-        seen = {}
-        self.start([open_view("Unfiled"), self.keys("right"), self.look(seen, "all", lambda app: app.ui.uview),
-                    self.keys("left"), self.look(seen, "recent", lambda app: app.ui.uview)])
-        lines, uview = seen["all"]
-        self.assertEqual(uview, 1)
-        self.assert_listed_in_order(lines, self.RECENT[:2] + ["Printer idea", "Toner order", "Cable plan", "Old idea", "Old audit"])
+        app = self.start([self.on_unfiled(), self.look(seen, "x")])
+        lines, _ = seen["x"]
+        self.assertEqual((app.ui.TABS[app.ui.tab].name, roost.VIEWS[app.ui.view]), ("Sessions", "Unfiled"))
+        self.assert_listed_in_order(lines, self.LISTED)
         ys = self.order(lines, self.NEVER)
-        self.assertEqual({n: y for n, y in ys.items() if y is not None}, {}, "nothing filed or dismissed, even in All")
-        lines, uview = seen["recent"]
-        self.assertEqual(uview, 0)
-        self.assertEqual(self.order(lines, ["Old audit"])["Old audit"], None)
+        self.assertEqual({n: y for n, y in ys.items() if y is not None}, {}, "nothing filed or dismissed")
 
-    def test_each_row_shows_its_name_when_and_mark(self):
+    def test_each_row_shows_its_name_and_mark(self):
         seen = {}
         status = lambda app: {n: app.ui.status_cell(s)[0] for n, s in self.by_name.items()}
-        self.start([open_view("Unfiled"), self.keys("right"), self.look(seen, "all", status)])
-        lines, marks = seen["all"]
-        pane = self.pane(lines)
-        ys = self.order(lines, self.RECENT + self.OLDER)
+        self.start([self.on_unfiled(), self.look(seen, "x", status)])
+        lines, marks = seen["x"]
+        ys = self.order(lines, self.LISTED)
         for name, y in ys.items():
-            self.assertIsNotNone(y, (name, "\n".join(pane)))
-            row = pane[y]
+            self.assertIsNotNone(y, (name, "\n".join(lines)))
+            row = lines[y]
             if name in self.by_name:
-                s = self.by_name[name]
                 self.assertIn(marks[name], row, f"{name}: its status as the Sessions list shows it")
-                self.assertIn(roost.short_when(s["last"]), row, name)
                 self.assertNotIn("✎", row, name)
             else:
                 self.assertIn("✎", row, f"{name}: a note's mark")
-                self.assertIn(roost.short_when(os.stat(self.note_paths[name]).st_mtime), row, name)
         self.assertTrue(marks["Laptop refresh"].startswith("◆") and marks["Toner order"].endswith("closed"), marks)
 
     def test_nothing_unfiled(self):
         self.sessions = [self.by_name["Printer fix"], self.by_name["Fleet audit"], self.by_name["Dismissed one"]]
         seen = {}
-        self.start([open_view("Unfiled"), self.look(seen, "x")], notes=False)
-        self.assertIn("Nothing unfiled.", "\n".join(self.pane(seen["x"][0])))
+        self.start([self.on_unfiled(), self.look(seen, "x")], notes=False)
+        lines = seen["x"][0]
+        self.assertTrue([l for l in lines if "Nothing" in l], "\n".join(lines))
+        self.assertEqual({n: y for n, y in self.order(lines, self.NEVER).items() if y is not None}, {})
 
-    # the keys in the pane
+    # the keys
 
-    def test_up_and_down_move_usel_and_enter_opens_the_selected_items_actions(self):
+    def test_up_and_down_move_and_enter_opens_the_selected_items_actions(self):
         seen = {}
 
         def with_wants(app):
             ui = app.ui
             note = next(n for n in ui.notes if n["name"] == "Printer idea")
-            return ui.usel, self.menu(app), self.labels(ui.note_actions(note)), \
+            return self.menu(app), self.labels(ui.note_actions(note)), \
                 {n: self.labels(ui.session_actions(s)) for n, s in self.by_name.items()}
-        self.start([open_view("Unfiled"), self.look(seen, "start", lambda app: app.ui.usel), self.keys("down"),
-                    self.look(seen, "down", lambda app: app.ui.usel), self.keys("down", "enter"), self.look(seen, "note", with_wants),
-                    self.keys("escape", "up", "up"), self.look(seen, "top", lambda app: app.ui.usel), self.keys("enter"),
-                    self.look(seen, "session", with_wants)])
-        self.assertEqual((seen["start"][1], seen["down"][1], seen["top"][1]), (0, 1, 0))
-        usel, menu, note_labels, _ = seen["note"][1]
-        self.assertEqual(usel, 2)
-        self.assertEqual(menu, ("Printer idea", note_labels), "the third Recent row is the note Printer idea")
+        self.start([self.on_unfiled(), self.keys("down", "down", "enter"), self.look(seen, "note", with_wants),
+                    self.keys("escape", "up", "up", "enter"), self.look(seen, "session", with_wants)])
+        menu, note_labels, _ = seen["note"][1]
+        self.assertEqual(menu, ("Printer idea", note_labels), "the third row is the note Printer idea")
         self.assertIn("Move to a project", note_labels)
-        _, menu, _, session_labels = seen["session"][1]
+        menu, _, session_labels = seen["session"][1]
         self.assertIsNotNone(menu)
         title, labels = menu
         self.assertIn(title, ("Laptop refresh", "Badge scan"), "a running Session is on top")
         self.assertEqual(labels, session_labels[title])
         self.assertIn("Add to a project", labels)
+        self.assertNotIn("Dismiss", labels, "only a closed Session offers Dismiss")
+        self.assertTrue([l for l in note_labels if l.startswith(("Make it a project", "Delete"))], note_labels)
 
-    def test_slash_searches_unfiled_by_name_and_esc_clears_it(self):
+    def test_slash_searches_the_unfiled_view_by_name_and_esc_clears_it(self):
         seen = {}
-        q = lambda app: (getattr(app.ui, "uquery", None), app.ui.focus)
-        self.start([open_view("Unfiled"), self.keys("slash", *"toner", "enter"), self.look(seen, "search", q),
-                    self.keys("escape"), self.look(seen, "cleared", q),
-                    self.keys("slash", *"cable"), self.look(seen, "typing", q), self.keys("escape"), self.look(seen, "esc", q)])
-        lines, (query, focus) = seen["search"]
-        self.assertEqual((query, focus), ("toner", "pane"))
-        ys = self.order(lines, ["Toner order", "Laptop refresh", "Printer idea"])
-        self.assertIsNotNone(ys["Toner order"], "\n".join(self.pane(lines)))
+        self.start([self.on_unfiled(), self.keys("slash", *"toner", "enter"), self.look(seen, "search"),
+                    self.keys("escape"), self.look(seen, "cleared"),
+                    self.keys("slash", *"cable"), self.look(seen, "typing"), self.keys("escape"), self.look(seen, "esc")])
+        ys = self.order(seen["search"][0], ["Toner order", "Laptop refresh", "Printer idea"])
+        self.assertIsNotNone(ys["Toner order"], "\n".join(seen["search"][0]))
         self.assertEqual((ys["Laptop refresh"], ys["Printer idea"]), (None, None))
-        lines, (query, focus) = seen["cleared"]
-        self.assertEqual((query, focus), ("", "pane"), "esc clears the search first, and the keys stay in the pane")
-        self.assertIsNotNone(self.order(lines, ["Laptop refresh"])["Laptop refresh"])
-        lines, (query, _) = seen["typing"]
-        self.assertEqual(query, "cable")
-        self.assertIsNotNone(self.order(lines, ["Cable plan"])["Cable plan"])
-        self.assertIsNone(self.order(lines, ["Toner order"])["Toner order"])
-        self.assertEqual(seen["esc"][1][0], "")
+        self.assertIsNotNone(self.order(seen["cleared"][0], ["Laptop refresh"])["Laptop refresh"], "esc clears the search")
+        ys = self.order(seen["typing"][0], ["Cable plan", "Toner order"])
+        self.assertIsNotNone(ys["Cable plan"])
+        self.assertIsNone(ys["Toner order"])
+        self.assertIsNotNone(self.order(seen["esc"][0], ["Toner order"])["Toner order"])
 
     # the mouse
 
     def rows(self):
-        """The pane's row for each Recent item, from a first roost."""
+        """The screen row of each listed item, from a first roost."""
         seen = {}
-        self.start([open_view("Unfiled"), self.look(seen, "x")])
-        ys = self.order(seen["x"][0], self.RECENT)
-        self.assertNotIn(None, ys.values(), "\n".join(self.pane(seen["x"][0])))
+        self.start([self.on_unfiled(), self.look(seen, "x")])
+        ys = self.order(seen["x"][0], self.LISTED)
+        self.assertNotIn(None, ys.values(), "\n".join(seen["x"][0]))
         return ys
 
-    def test_a_click_selects_a_row_and_moves_the_keys_into_the_pane(self):
+    def test_a_click_selects_a_row(self):
         ys, seen = self.rows(), {}
-        self.start([open_view("Unfiled"), self.keys("tab"), self.look(seen, "side", lambda app: app.ui.focus),  # the keys back in the sidebar
-                    lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, ys["Toner order"])),
-                    self.look(seen, "x", lambda app: (app.ui.usel, app.ui.focus, self.menu(app), app.ui.TABS[app.ui.tab].name))])
-        self.assertEqual(seen["side"][1], "side")
-        self.assertEqual(seen["x"][1], (self.RECENT.index("Toner order"), "pane", None, "Unfiled"))
+        self.start([self.on_unfiled(), lambda pilot: pilot.click(offset=(8, ys["Toner order"])),
+                    self.look(seen, "clicked", self.menu), self.keys("enter"), self.look(seen, "x", self.menu)])
+        self.assertIsNone(seen["clicked"][1], "a click only selects it")
+        self.assertEqual(seen["x"][1][0], "Toner order")
 
     def test_a_double_click_runs_the_rows_first_action(self):
         import unittest.mock
         ys, edited, opened = self.rows(), [], []
         with unittest.mock.patch.object(roost.UI, "edit", lambda ui, p: edited.append(str(p))), \
                 unittest.mock.patch.object(roost.UI, "open_one", lambda ui, s: opened.append(s["name"])):
-            self.start([open_view("Unfiled"), lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, ys["Printer idea"]), times=2)])
+            self.start([self.on_unfiled(), lambda pilot: pilot.click(offset=(8, ys["Printer idea"]), times=2)])
             self.assertEqual(edited, [self.note_paths["Printer idea"]], "a note's first action: Edit")
-            self.start([open_view("Unfiled"), lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, ys["Laptop refresh"]), times=2)])
+            self.start([self.on_unfiled(), lambda pilot: pilot.click(offset=(8, ys["Laptop refresh"]), times=2)])
         self.assertEqual(opened, ["Laptop refresh"], "a running Session's first action opens it")
 
     def test_a_right_click_opens_the_rows_menu(self):
         ys, seen = self.rows(), {}
-        self.start([open_view("Unfiled"), lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 8, ys["Toner order"]), button=3),
+        self.start([self.on_unfiled(), lambda pilot: pilot.click(offset=(8, ys["Toner order"]), button=3),
                     self.look(seen, "x", lambda app: (self.menu(app), self.labels(app.ui.session_actions(self.by_name["Toner order"]))))])
         menu, want = seen["x"][1]
         self.assertEqual(menu, ("Toner order", want))
+
+
+    # the look
+
+    def test_the_selected_row_is_a_green_mark_and_a_bold_green_name_with_no_background(self):
+        seen = {}
+
+        def rows(app):
+            ui = app.ui
+            kind, item = ui.urows[ui.usel]
+            lines = screen_text(app)
+            out = {}
+            for y in ui.urow_y:
+                name = ui.urows[ui.urow_y[y]][1]["name"]
+                x = lines[y].index(name)
+                out[name] = {"name": [style_at(app, y, x + i) for i in range(len(name))], "fills": backgrounds(app, y),
+                             "mark": (lines[y][1], color_of(style_at(app, y, 1))), "line": lines[y]}
+            return item["name"], out
+        self.start([self.on_unfiled(), self.look(seen, "first", rows), self.keys("down"), self.look(seen, "second", rows)])
+        green = roost.GREEN.lower()
+        for when in ("first", "second"):
+            sel, out = seen[when][1]
+            with self.subTest(selected=sel):
+                got = out[sel]
+                self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+                self.assertEqual(got["mark"], ("›", green))
+                self.assertTrue(all(color_of(st) == green and st.bold for st in got["name"]), "the name is bold green")
+                for name, other in out.items():
+                    if name != sel:
+                        self.assertNotEqual(other["mark"][0], "›", name)
+                        self.assertFalse([st for st in other["name"] if color_of(st) == green], f"{name} isn't selected")
+        self.assertNotEqual(seen["first"][1][0], seen["second"][1][0], "the fixture: ↓ moved the selection")
 
 
 if __name__ == "__main__":

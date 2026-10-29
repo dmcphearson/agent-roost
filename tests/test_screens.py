@@ -54,7 +54,7 @@ class TextualScreens(unittest.TestCase):
             pilot.app.ui.summaries = {done["id"]: {"state": "running", "text": "writing", "name": done["name"],
                                                    "step": 1, "steps": 3, "started": time.time()}}
             await open_view("Sessions")(pilot)
-        lines = [l[roost.SIDEBAR_W:] for l in self.screen(self.run_app([start]))]  # the pane, right of the sidebar
+        lines = self.screen(self.run_app([start]))  # the whole width: the Sessions tab has no sidebar
         heads = [l.strip().split(" (")[0] for l in lines if "(1)" in l]
         self.assertEqual(heads[-1], "Wrapping up")
         self.assertLess(next(i for i, l in enumerate(lines) if "Laptop refresh" in l),
@@ -76,11 +76,10 @@ class TextualScreens(unittest.TestCase):
         self.assertRegex(panel, r"Project +(2026-10-printer-fleet|none)")
         self.assertIn("Context", panel)
 
-    def test_it_draws_the_same_frame_and_the_sidebar_opens_sessions(self):
-        app = self.run_app([open_view("Sessions")])
+    def test_it_draws_the_same_frame_and_tab_switches_tabs(self):
+        app = self.run_app([self.keys("tab")])
         lines = self.screen(app)
-        self.assertTrue(lines[0].startswith(" Agent Roost"), lines[0])
-        self.assertNotIn("Projects   Sessions   Notes", lines[0])
+        self.assertRegex(lines[0], r"^\s*Agent Roost\s+Projects\s+Sessions\s+Notes\s+Stats(\s|$)")
         self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
         self.assertIn("Printer fix", "\n".join(lines))
         self.assertIn("ctrl+q quit", lines[-1])
@@ -143,18 +142,29 @@ class TextualScreens(unittest.TestCase):
         self.assertEqual(looks, ["\x1b]11;#1b1e24\x07\x1b]2;roost\x07", "\x1b]111\x07"])
 
     def test_the_wheel_moves_the_sessions_list(self):
-        wheel = type("Wheel", (), {"x": roost.SIDEBAR_W + 10, "y": 6, "stop": lambda self: None})()
+        wheel = type("Wheel", (), {"x": 10, "y": 6, "stop": lambda self: None})()
 
         async def scroll(pilot):
             pilot.app.query_one(roost.SessionList).on_mouse_scroll_down(wheel)
         app = self.run_app([open_view("Sessions"), scroll])
         self.assertEqual((app.ui.TABS[app.ui.tab].name, app.ui.sel), ("Sessions", 1))
 
+    @staticmethod
+    def click_first_session(**how):
+        """A pilot step: a click (how: times, button) at column 10 of the Sessions list's first Session row,
+        the screen row the list last drew it on."""
+        async def step(pilot):
+            ys = getattr(pilot.app.ui, "row_y", {})
+            assert ys, "the Sessions list drew no Session rows"
+            await pilot.click(offset=(10, min(ys)), **how)
+            await pilot.pause()
+        return step
+
     def test_a_triple_click_acts_once(self):
         import unittest.mock
         ran = []
         with unittest.mock.patch.object(roost.UI, "session_actions", lambda ui, s: [("Open", lambda: ran.append(s["name"]))]):
-            self.run_app([open_view("Sessions"), lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 10, 6), times=3)])
+            self.run_app([open_view("Sessions"), self.click_first_session(times=3)])
         self.assertEqual(len(ran), 1)
 
     def test_a_double_or_triple_click_selects_no_text(self):
@@ -165,11 +175,15 @@ class TextualScreens(unittest.TestCase):
         seen = []
 
         async def clicks(pilot):
-            x = roost.SIDEBAR_W + 10  # a Session's row, in the pane
-            w, _ = pilot.app.get_widget_at(x, 6)
+            ui, x = pilot.app.ui, 10
+            ys = getattr(ui, "row_y", {})
+            self.assertTrue(ys, "the Sessions list drew no Session rows")
+            y = min(ys)  # the first Session's row, where the list drew it
+            self.assertIn(ui.srows[ys[y]]["name"], screen_text(pilot.app)[y], "the click lands on that Session's row")
+            w, _ = pilot.app.get_widget_at(x, y)
             for chain in (2, 3):
                 pilot.app.screen.selections = {}
-                w.post_message(events.Click(w, x, 6, 0, 0, 1, False, False, False, screen_x=x, screen_y=6, chain=chain))
+                w.post_message(events.Click(w, x, y, 0, 0, 1, False, False, False, screen_x=x, screen_y=y, chain=chain))
                 await pilot.pause()
                 seen.append(dict(pilot.app.screen.selections))
         with unittest.mock.patch.object(roost.UI, "session_actions", lambda ui, s: [("Open", lambda: None)]):
@@ -204,7 +218,7 @@ class TextualScreens(unittest.TestCase):
         self.assertEqual((copied, app.ui.msg), ([], ""))
 
     def test_a_right_click_opens_a_rows_actions(self):
-        app = self.run_app([open_view("Sessions"), lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 10, 6), button=3)])
+        app = self.run_app([open_view("Sessions"), self.click_first_session(button=3)])
         self.assertTrue(app.ui.choosing)
         self.assertIn(app.ui.choosing["title"], [s["name"] for s in self.sessions])
 
@@ -249,7 +263,7 @@ class TextualScreens(unittest.TestCase):
             app = self.run_app([open_view("Sessions")])
         lines = self.screen(app)
         edge = next(i for i, l in enumerate(lines) if "⚠ deleted in 6 days" in l)
-        self.assertTrue(lines[edge][roost.SIDEBAR_W:].lstrip().startswith("─"))  # the rule over the panel, in the pane
+        self.assertTrue(lines[edge].lstrip().startswith("─"))  # the rule over the panel
         self.assertNotIn("deleted", lines[edge + 1])  # the facts line has its own row
 
     def test_a_prompt_on_the_bottom_row_is_a_textual_input(self):
@@ -268,7 +282,7 @@ class TextualScreens(unittest.TestCase):
         async def go():
             async with app.run_test(size=(90, 24)) as pilot:
                 await pilot.pause()
-                await pilot.press("down")  # with room, ↓ from + New project would select the Sessions entry
+                await pilot.press("tab")  # with room, tab would open the Sessions tab
                 await pilot.pause()
                 app.lines = screen_text(app)
         asyncio.run(go())
@@ -343,7 +357,7 @@ class TextualScreens(unittest.TestCase):
         roost.create_note("Printer idea", body="first line\nsecond line")
         app = self.run_app([open_view("Notes")])
         lines = self.screen(app)
-        self.assertTrue(any("Printer idea" in l and l.index("Printer idea") < roost.SIDEBAR_W + 10 for l in lines))
+        self.assertTrue(any("Printer idea" in l and l.index("Printer idea") < 10 for l in lines))
         self.assertTrue(any("Notes  /  Printer idea" in l for l in lines))
         self.assertTrue(any("Tags" in l and "Created" in l for l in lines))  # the facts, in two columns
         self.assertEqual(app.ui.nrows[app.ui.nsel]["name"], "Printer idea")
@@ -408,10 +422,9 @@ class TextualScreens(unittest.TestCase):
         self.assertNotIn("▸", line)
         self.assertNotIn("▾", line)
 
-    def test_a_project_with_a_running_session_has_no_open_marker_and_the_same_sessions_field(self):
-        """Spec 1 and 2: a project with a running Session has no ▸ either, and a wrapped-up Session linked
-        beside the running one changes neither its sidebar row nor its Sessions field (it isn't counted
-        as unwrapped)."""
+    def test_a_project_with_a_running_session_has_no_open_marker_and_the_same_list_row(self):
+        """Spec 1: a project with a running Session has no ▸ either, and a wrapped-up Session linked beside
+        the running one doesn't change its row in the Projects list."""
         row = lambda lines: next(l[:roost.SIDEBAR_W] for l in lines if self.pid in l[:roost.SIDEBAR_W])
         app, _ = self.with_wrapped("Projects", [1], [self.on_project("printer-fleet")])
         without = self.screen(app)
@@ -420,10 +433,7 @@ class TextualScreens(unittest.TestCase):
         with_it = self.screen(app)
         self.assertNotIn("▸", row(without))
         self.assertNotIn("▾", row(without))
-        self.assertIn("◆1", self.sessions_field(without))
-        self.assertNotIn("unwrapped", self.sessions_field(without))
         self.assertEqual(row(with_it), row(without))
-        self.assertEqual(self.sessions_field(with_it), self.sessions_field(without))
 
     # Spec 2, 3, 4: the SESSIONS cell's unwrapped count, Show its Sessions, and Dismiss, on a real screen.
 
@@ -478,7 +488,11 @@ class TextualScreens(unittest.TestCase):
         return step
 
     def on_session(self, name):
-        return self.select(lambda ui: setattr(ui, "sel", [s["name"] for s in ui.srows].index(name)))
+        def at(ui):
+            names = [s["name"] for s in getattr(ui, "srows", [])]
+            assert name in names, f"{name} isn't in the Sessions view's rows {names}, on the {ui.TABS[ui.tab].name} tab"
+            ui.sel = names.index(name)
+        return self.select(at)
 
     def on_project(self, pid):
         return self.select(lambda ui: setattr(ui, "psel", next(i for i, r in enumerate(ui.project_rows())
@@ -504,37 +518,6 @@ class TextualScreens(unittest.TestCase):
 
     CLOSED_VIEW = ("right",)  # from Running, the view roost opens on with a running Session, to Closed
 
-    @staticmethod
-    def sessions_field(lines):
-        """The value of the detail pane's Sessions field (right of the sidebar), or None."""
-        for l in lines:
-            m = re.match(r"\s*Sessions\s{2,}(\S.*)$", l[roost.SIDEBAR_W:])
-            if m:
-                return m.group(1).strip()
-        return None
-
-    def test_the_sessions_field_counts_unwrapped_sessions_after_the_running_ones(self):
-        """Spec 2: the selected project's Sessions field has its running marks, then "N unwrapped" for
-        linked closed Sessions no Handoff covers; with only unwrapped ones, "N unwrapped"; with only
-        wrapped-up ones, none running. Spec 1: no ▸ in the sidebar."""
-        p, _, _ = self.fleet()
-        desks = [self.closed("Desk order", 35), self.closed("Desk survey", 45)]
-        vpn = self.closed("VPN audit", 150)
-        self.sessions = self.sessions + desks + [vpn]
-        projects = [p, self.proj("bravo-desks", desks), self.proj("charlie-vpn", [vpn], covered=[vpn])]
-        seen, steps = {}, []
-        for pid in (self.pid, "bravo-desks", "charlie-vpn"):
-            steps += [self.on_project(pid), self.look(seen, pid, screen_text)]
-        self.run_with("Projects", projects, steps)
-        both, unwrapped, wrapped = (self.sessions_field(seen[pid]) for pid in (self.pid, "bravo-desks", "charlie-vpn"))
-        self.assertRegex(both or "", r"^○1\W+1 unwrapped$")
-        self.assertEqual(unwrapped, "2 unwrapped")
-        self.assertEqual(wrapped, "none running")
-        side = [l[:roost.SIDEBAR_W] for l in seen[self.pid]]
-        for label in ("Printer fleet", "bravo-desks", "charlie-vpn"):
-            line = next(l for l in side if label in l)
-            self.assertFalse(set("▸▾") & set(line), line)
-
     def test_show_its_sessions_lists_exactly_the_projects_sessions_until_esc(self):
         """Spec 3 (with 4): Show its Sessions puts the Sessions tab on Running (one of its Sessions is
         running) with project:<id>, listing the project's running Session; → lists its closed ones
@@ -558,33 +541,25 @@ class TextualScreens(unittest.TestCase):
         self.assertEqual(seen["plain"], sorted(s["id"] for s in decoys))  # the decoys are closed
 
     def test_dismiss_marks_sorts_and_uncounts_a_session_and_undismiss_takes_it_back(self):
-        """Spec 4: a dismissed Session's STATUS says dismissed, it lists after every other Session in
-        its view (Closed, whatever the sort), and its project stops counting it as unwrapped.
-        Undismiss undoes all three, and its id leaves config.DISMISSED."""
+        """Spec 4: a dismissed Session's STATUS says dismissed, and it lists after every other Session in
+        its view (Closed, whatever the sort). Undismiss undoes both, and its id leaves config.DISMISSED."""
         p, _, _ = self.fleet()
         seen = {}
         names = lambda app: [s["name"] for s in app.ui.srows]
         status = lambda app: self.line_of(screen_text(app), "Toner order")
-
-        def project(app):  # the selected project's Sessions field, where "N unwrapped" goes
-            return self.sessions_field(screen_text(app)) or ""
         self.run_with("Sessions", [p], [
             open_view("Sessions"), self.keys(*self.CLOSED_VIEW), self.look(seen, "before", names),
             self.on_session("Toner order"), self.pick("Dismiss"),
             self.look(seen, "closed view", names), self.look(seen, "status", status),
             self.select(lambda ui: setattr(ui, "sort", ("NAME", True))), self.look(seen, "by name", names),  # Z to A: Toner order would lead Closed
             self.select(lambda ui: setattr(ui, "sort", ("LAST ACTIVE", True))),
-            open_view("Projects"), self.on_project(self.pid), self.look(seen, "project", project), open_view("Sessions"),
             self.on_session("Toner order"), self.pick("Undismiss"),
-            self.look(seen, "after", names), self.look(seen, "status after", status),
-            open_view("Projects"), self.on_project(self.pid), self.look(seen, "project after", project)],
+            self.look(seen, "after", names), self.look(seen, "status after", status)],
             size=(120, 40))  # the status line takes a row: at 30 rows the Dismissed section's row is cut off
         self.assertLess(seen["before"].index("Toner order"), seen["before"].index("Old printer audit"))  # the fixture
         for view in ("closed view", "by name"):
             self.assertEqual(seen[view][-1], "Toner order", (view, seen[view]))
         self.assertIn("dismissed", seen["status"])
-        self.assertIn("1 unwrapped", seen["project after"])
-        self.assertNotIn("unwrapped", seen["project"])
         self.assertEqual(seen["after"], seen["before"])
         self.assertNotIn("dismissed", seen["status after"])
         self.assertNotIn(self.sessions[2]["id"], self.persisted())
@@ -603,10 +578,11 @@ class TextualScreens(unittest.TestCase):
     def test_the_sessions_tab_still_lists_a_wrapped_up_session(self):
         app, _ = self.with_wrapped("Sessions", ["wrapped"], [open_view("Sessions"), self.keys(*self.CLOSED_VIEW)])  # it's closed
         self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
-        line = next(l for l in self.screen(app)[:-10] if "Old printer audit" in l)
+        line = next((l for l in self.screen(app)[:-10] if "Old printer audit" in l), None)
+        self.assertIsNotNone(line, "\n".join(self.screen(app)))
         self.assertIn("✓ wrapped up", line)
 
-    # The Sessions views: Running and Closed, a simple history.
+    # The Sessions views: Running and Closed, a simple history, and Unfiled.
 
     def views_fixture(self):
         """Two running Sessions (Printer fix, Laptop refresh) and three closed: Printer toner order, Old
@@ -616,26 +592,81 @@ class TextualScreens(unittest.TestCase):
 
     @staticmethod
     def view_row(app):
-        """The Sessions view row's text, right of the sidebar."""
-        return screen_text(app)[app.ui.view_row_y][roost.SIDEBAR_W:]
+        """The Sessions view row's text, the whole width: the Sessions tab has no sidebar."""
+        return screen_text(app)[app.ui.view_row_y]
 
-    def test_the_view_row_shows_running_and_closed_with_their_counts_then_the_search(self):
+    def test_the_view_row_shows_running_closed_and_unfiled_with_their_counts_then_the_search(self):
         self.views_fixture()
         seen = {}
         self.run_app([open_view("Sessions"), self.look(seen, "row", self.view_row),
                       self.keys("slash", *"printer", "enter"), self.look(seen, "searched", self.view_row)])
-        self.assertRegex(seen["row"], r"^\s*Running \(2\)\s+Closed \(3\)\s*$")
-        self.assertRegex(seen["searched"], r"^\s*Running \(1\)\s+Closed \(2\)\s+/ printer\s*$")
+        # no project lists any of the five Sessions, and there are no notes: all five are unfiled
+        self.assertRegex(seen["row"], r"^\s*Running \(2\)\s+Closed \(3\)\s+Unfiled \(5\)\s*$")
+        self.assertRegex(seen["searched"], r"^\s*Running \(1\)\s+Closed \(2\)\s+Unfiled \(\d+\)\s+/ printer\s*$")
 
-    def test_left_and_right_switch_between_running_and_closed_wrapping(self):
+    def test_the_current_view_is_bold_green_with_no_background_and_the_others_dim(self):
+        self.views_fixture()
+        seen = {}
+
+        def styles(app):
+            y, line = app.ui.view_row_y, screen_text(app)[app.ui.view_row_y]
+            out = {}
+            for label in roost.VIEWS:
+                x = line.index(f"{label} (")
+                out[label] = [style_at(app, y, i) for i in range(x, x + len(label))]
+            return roost.VIEWS[app.ui.view], out, backgrounds(app, y), line
+        steps = [open_view("Sessions")]
+        for i in range(len(roost.VIEWS)):
+            steps += [self.look(seen, i, styles), self.keys("right")]
+        self.run_app(steps)
+        green, muted = roost.GREEN.lower(), roost.MUTED.lower()
+        self.assertEqual([seen[i][0] for i in range(len(roost.VIEWS))], list(roost.VIEWS), "the fixture: → went through each view")
+        for i in range(len(roost.VIEWS)):
+            current, out, fills, line = seen[i]
+            with self.subTest(view=current):
+                self.assertEqual(fills, set(), f"no background on the view row: {line!r}")
+                for label, sts in out.items():
+                    if label == current:
+                        self.assertTrue(all(color_of(st) == green and st.bold for st in sts), f"{label} is bold green")
+                    else:
+                        self.assertEqual({color_of(st) for st in sts}, {muted}, f"{label} is dim while {current} shows")
+
+    def test_the_selected_session_row_is_a_green_mark_and_a_bold_green_name_with_no_background(self):
+        seen = {}
+
+        def look(app):
+            lines = screen_text(app)
+            ys = {n: next(y for y, l in enumerate(lines) if n in l) for n in ("Laptop refresh", "Printer fix")}
+            sel = app.ui.srows[app.ui.sel]["name"]
+            out = {}
+            for n, y in ys.items():
+                x = lines[y].index(n)
+                out[n] = {"name": [style_at(app, y, x + i) for i in range(len(n))], "fills": backgrounds(app, y),
+                          "mark": (lines[y][1], color_of(style_at(app, y, 1))), "line": lines[y]}
+            return sel, out
+        self.run_app([open_view("Sessions"), self.look(seen, "x", look)])
+        sel, out = seen["x"]
+        green = roost.GREEN.lower()
+        self.assertEqual(sel, "Laptop refresh", "the fixture: the first row is selected")
+        got = out["Laptop refresh"]
+        self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+        self.assertEqual(got["mark"], ("›", green))
+        self.assertTrue(all(color_of(st) == green and st.bold for st in got["name"]), "the name is bold green")
+        other = out["Printer fix"]
+        self.assertNotEqual(other["mark"][0], "›")
+        self.assertFalse([st for st in other["name"] if color_of(st) == green], "an unselected name isn't green")
+
+    def test_left_and_right_switch_between_running_closed_and_unfiled_wrapping(self):
         self.views_fixture()
         seen = {}
         view = lambda app: roost.VIEWS[app.ui.view]
-        self.run_app([open_view("Sessions"), self.look(seen, "start", view),
-                      self.keys("right"), self.look(seen, "right", view), self.keys("right"), self.look(seen, "right again", view),
-                      self.keys("left"), self.look(seen, "left", view), self.keys("left"), self.look(seen, "left again", view)])
-        self.assertEqual([seen[k] for k in ("start", "right", "right again", "left", "left again")],
-                         ["Running", "Closed", "Running", "Closed", "Running"])
+        keys = ["right", "right", "right", "left", "left", "left"]
+        steps = [open_view("Sessions"), self.look(seen, "start", view)]
+        for i, k in enumerate(keys):
+            steps += [self.keys(k), self.look(seen, i, view)]
+        self.run_app(steps)
+        self.assertEqual([seen["start"]] + [seen[i] for i in range(len(keys))],
+                         ["Running", "Closed", "Unfiled", "Running", "Unfiled", "Closed", "Running"])
 
     def test_a_click_on_a_view_label_picks_that_view(self):
         self.views_fixture()
@@ -651,8 +682,8 @@ class TextualScreens(unittest.TestCase):
                 await pilot.click(offset=(x, y))
             return step
         self.run_app([open_view("Sessions"), click("Closed"), self.look(seen, "closed", view),
-                      click("Running"), self.look(seen, "running", view)])
-        self.assertEqual((seen["closed"], seen["running"]), ("Closed", "Running"))
+                      click("Unfiled"), self.look(seen, "unfiled", view), click("Running"), self.look(seen, "running", view)])
+        self.assertEqual((seen["closed"], seen["unfiled"], seen["running"]), ("Closed", "Unfiled", "Running"))
 
     # The key bar: every key it names does what it says, on each tab that draws it.
 
@@ -667,7 +698,7 @@ class TextualScreens(unittest.TestCase):
         roost.create_note("Printer idea", body="first line")
         roost.create_note("Laptop idea", body="first line")
         with unittest.mock.patch.multiple(roost, read_projects=lambda sessions: [proj], read_config=lambda: {"tab": name}):
-            return self.run_app(([] if name == "Projects" else [open_view(name)]) + list(steps))  # an entry's keys: focus its pane
+            return self.run_app([open_view(name)] + list(steps))  # roost starts on it, as remembered
 
     def test_every_key_the_bar_names_does_what_it_says(self):
         sel = {"Projects": "psel", "Sessions": "sel", "Notes": "nsel"}
@@ -679,14 +710,6 @@ class TextualScreens(unittest.TestCase):
                     seen[label] = get(pilot.app.ui)
                 return step
 
-            async def pick_header(pilot):  # ←→ act on the selected row: the project, given an open sub-project, closed to start
-                ui = pilot.app.ui
-                p = next(p for p in ui.projects if p["id"] == self.pid)
-                p["subs"] = [dict(self.proj(f"{self.pid}/alpha", []), slug="alpha", parent=self.pid, title="alpha", type="feature")]
-                ui.subs_open.discard(self.pid)
-                ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "project" and r.item["id"] == self.pid)
-                pilot.app.redraw()
-
             async def pick_project(pilot):  # enter acts on the selected row: the project
                 ui = pilot.app.ui
                 ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "project" and r.item["id"] == self.pid)
@@ -696,17 +719,19 @@ class TextualScreens(unittest.TestCase):
                 if name == "Projects":
                     return [l for l, _ in ui.row_actions(ui.prows[ui.psel])]
                 if name == "Sessions":
-                    return [l for l, _ in ui.session_actions(ui.srows[ui.sel])]
-                return [l for l, _ in ui.note_actions(ui.nrows[ui.nsel])]
+                    return [l for l, _ in ui.session_actions(ui.srows[ui.sel])] if ui.sel < len(ui.srows) else []
+                return [l for l, _ in ui.note_actions(ui.nrows[ui.nsel])] if ui.nsel < len(ui.nrows) else []
             at = lambda ui: getattr(ui, sel[name])
             async def catch_exit(pilot):  # what ctrl+q leads to: the app exits (run_test would end it anyway)
                 pilot.app.exit = lambda *a, **k: seen.setdefault("exits", []).append(a)
-            arrows = {"Projects": lambda ui: self.pid in ui.subs_open, "Sessions": lambda ui: ui.view,
+            # Projects: → moves the keys into the selected project's details (its Session is an item there), ← back
+            arrows = {"Projects": lambda ui: ui.focus == "pane", "Sessions": lambda ui: ui.view,
                       "Notes": lambda ui: ui.nreading}[name]
+            names = [t.name for t in roost.UI.TABS]
             steps = [look("tab", lambda ui: ui.TABS[ui.tab].name), look("rows", lambda ui: len(ui.draw())),
                      look("at", at), self.keys("down"), look("down", at), self.keys("up"), look("up", at)]
             if name == "Projects":
-                steps.append(pick_header)
+                steps.append(pick_project)
             steps += [look("arrows", arrows), self.keys("right"), look("right", arrows), self.keys("left"), look("left", arrows)]
             if name == "Projects":
                 steps.append(pick_project)
@@ -716,9 +741,8 @@ class TextualScreens(unittest.TestCase):
                       self.keys("ctrl+n"), look("new", lambda ui: ui.choosing and ui.choosing["title"]),
                       look("new options", lambda ui: ui.choosing and " ".join(l for l, _ in ui.choosing["options"])),
                       self.keys("n"), look("note prompt", lambda ui: ui.asking and ui.asking["title"]), self.keys("escape"),
-                      look("focus", lambda ui: (ui.TABS[ui.tab].name, ui.focus)),
-                      self.keys("tab"), look("after tab", lambda ui: (ui.TABS[ui.tab].name, ui.focus)), self.keys("shift+tab"),
-                      look("after shift+tab", lambda ui: (ui.TABS[ui.tab].name, ui.focus)),
+                      self.keys("tab"), look("next tab", lambda ui: ui.TABS[ui.tab].name), self.keys("shift+tab"),
+                      look("back", lambda ui: ui.TABS[ui.tab].name),
                       self.keys("question_mark"), look("help", lambda ui: ui.helping), self.keys("escape"),
                       look("help closed", lambda ui: ui.helping), catch_exit, self.keys("ctrl+q")]
             self.run_on_tab(name, steps)
@@ -728,7 +752,7 @@ class TextualScreens(unittest.TestCase):
                 self.assertEqual((seen["down"], seen["up"]), (seen["at"] + 1, seen["at"]), "↑↓ move")
                 if name == "Sessions":
                     self.assertEqual((seen["right"], seen["left"]), ((seen["arrows"] + 1) % len(roost.VIEWS), seen["arrows"]), "←→ views")
-                else:  # Projects: → opens the project's sub-projects, ← closes them · Notes: → reads the note, ← goes back to the list
+                else:  # Projects: → into the details, ← back to the list · Notes: → reads the note, ← goes back to the list
                     self.assertEqual((seen["arrows"], seen["right"], seen["left"]), (False, True, False), "←→")
                 self.assertTrue(seen["actions"])
                 self.assertEqual(seen["menu"], seen["actions"], "enter actions")
@@ -736,10 +760,7 @@ class TextualScreens(unittest.TestCase):
                 self.assertEqual(seen["new"], "New", "ctrl+n new")
                 self.assertIn("Note", seen["new options"])
                 self.assertEqual(seen["note prompt"], "New note: its title", "ctrl+n then n")
-                if name == "Projects":  # a project with items in its detail moves the keys into the pane on tab (step 3b-1): its Session
-                    self.assertEqual((seen["focus"], seen["after tab"], seen["after shift+tab"]), ((name, "side"), (name, "pane"), (name, "side")), "tab")
-                else:
-                    self.assertEqual((seen["focus"], seen["after tab"], seen["after shift+tab"]), ((name, "pane"), (name, "side"), (name, "pane")), "tab")
+                self.assertEqual((seen["next tab"], seen["back"]), (names[(names.index(name) + 1) % len(names)], name), "tab next tab")
                 self.assertEqual((seen["help"], seen["help closed"]), (True, False), "? help")
                 self.assertEqual(seen.get("exits"), [(None,)], "ctrl+q quit")
 
@@ -752,10 +773,11 @@ class TextualScreens(unittest.TestCase):
             with self.subTest(tab=name):
                 self.assertEqual(app.ui.TABS[app.ui.tab].name, name)
                 for entry in entries:
-                    if entry.startswith("←→"):  # what ←→ does is the tab's own: views, open/close, or → read
+                    if entry.startswith("←→"):  # what ←→ does is the tab's own: views, → into details, or → read
                         self.assertIn("→ ", drawn)
                     else:
                         self.assertIn(entry, drawn)
+                self.assertIn("tab next tab", drawn)
 
     def test_the_status_line_above_the_key_bar_says_how_many_sessions_are_running_on_every_tab(self):
         """One line just above the key bar, on every tab: empty on the left, "N running" (Sessions whose
@@ -764,7 +786,7 @@ class TextualScreens(unittest.TestCase):
         data = {"rows": [], "tokens": {}, "unpriced": [], "priced": True}
         roost.create_note("Printer idea", body="first line")
         tabs = [t.name for t in roost.UI.TABS]
-        self.assertEqual(tabs, ["Projects", "Unfiled", "Sessions", "Notes", "Stats"])  # Unfiled's view joins, after Projects (step 3b-1)
+        self.assertEqual(tabs, list(TABS))
         everyone = self.sessions + [self.closed("Toner order", 30)]  # idle, waiting, closed: 2 running
         for sessions, want in ((everyone, "2 running"), ([self.closed("Toner order", 30)], "nothing running")):
             for i, name in enumerate(tabs):
@@ -780,7 +802,7 @@ class TextualScreens(unittest.TestCase):
                     self.assertIn("quit", "   ".join(lines[-rows:]))  # the key bar is the bottom rows
                     status = lines[-rows - 1]
                     self.assertTrue(status.endswith(want), status)
-                    self.assertEqual(status.strip(), want, "the left side is empty for now")
+                    self.assertRegex(status.strip(), rf"^(● )?{want}$", "the left side is empty for now")
 
     # Slow work off the UI thread: the idle refresh and the slow actions don't hold up the keys.
 
@@ -999,11 +1021,12 @@ class TextualScreens(unittest.TestCase):
 
     def test_the_wren_is_drawn_whole_or_not_at_all(self):
         """A wren taller than the room under the note isn't drawn, not even its top rows. A made-up
-        20-cell-tall art stands in for the wren: a tall window shows all of it (so the stand-in reaches
-        the screen), a window of the minimum size has no room and shows no half block."""
+        30-cell-tall art stands in for the wren, taller than a minimum-size window: a tall window shows
+        all of it (so the stand-in reaches the screen), a window of the minimum size has no room and shows
+        no half block."""
         import unittest.mock
         wren = importlib.import_module("roost.core.wren")
-        tall = ["......" + "5a3a1e" * 4 + "......"] * 40  # 40 pixel rows: 20 cell rows of ▀
+        tall = ["......" + "5a3a1e" * 4 + "......"] * 60  # 60 pixel rows: 30 cell rows of ▀, more than MIN_SIZE's rows
         cases = [("Projects", [], []), ("Projects", [], [self.keys("/", *"zzqx", "enter")]),
                  ("Sessions", [], [open_view("Sessions")])]
         for tab, sessions, steps in cases:
@@ -1039,24 +1062,26 @@ class TextualScreens(unittest.TestCase):
         self.assertEqual(app.ui.TABS[app.ui.tab].name, "Sessions")
         self.assertTrue(any("Printer fix" in l for l in lines), "\n".join(lines))
         self.assertFalse(any("Nothing here." in l for l in lines))
-        self.assertFalse(any(b in l[roost.SIDEBAR_W:] for l in lines for b in "▀▄"), "\n".join(lines))  # the pane's
+        self.assertFalse(any(b in l for l in lines for b in "▀▄"), "\n".join(lines))
 
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
-class Sidebar(unittest.TestCase):
-    """No tabs: the sidebar (SIDEBAR_W columns, at the left) is on every view. It lists the project rows,
-    a blank line, then the entries Unfiled, Sessions, Notes, and Stats; the selected row's view fills the right
-    pane. ui.focus is "side" or "pane": which of the two the keys go to."""
+class TopTabs(unittest.TestCase):
+    """The top bar's tabs: Agent Roost, then Projects, Sessions, Notes, and Stats, the current one green and
+    bold. Tab and shift+tab move to the next and previous tab, wrapping, wherever the keys are; a click on a
+    label opens its tab; roost starts on the tab it was on. Only the Projects tab has a list at the left
+    (SIDEBAR_W wide): Sessions, Notes, and Stats take the whole window."""
     setUp = TextualScreens.setUp
     run_app = TextualScreens.run_app
     keys = staticmethod(TextualScreens.keys)
     select = staticmethod(TextualScreens.select)
     PID = "printer-fleet"
-    OLD_TABS = {"Projects": 14, "Sessions": 25, "Notes": 36, "Stats": 44}  # where the tab bar drew " Name ", by column
+    GREEN = importlib.import_module("roost.app.widgets").GREEN.lower()
+    YELLOW = importlib.import_module("roost.app.widgets").YELLOW.lower()
 
     def start(self, steps, size=(120, 30), tab=None):
-        """roost with project printer-fleet (worked on now, so under Recent, listing Printer fix) and two
-        notes, started on tab as remembered (none: no setting). What it saves as the start view goes in self.saved."""
+        """roost with project printer-fleet (worked on now, listing Printer fix) and two notes, started on tab
+        as remembered (none: no setting). What it saves as the start tab goes in self.saved."""
         import unittest.mock
         proj = TextualScreens.proj(self.PID, [self.sessions[0]])
         roost.create_note("Printer idea", body="first line")
@@ -1068,215 +1093,256 @@ class Sidebar(unittest.TestCase):
             return self.run_app(list(steps), size=size)
 
     @staticmethod
-    def side(lines):
-        return [l[:roost.SIDEBAR_W] for l in lines]
-
-    @staticmethod
     def shown(app):
         return app.ui.TABS[app.ui.tab].name
 
     def look(self, seen, label, get=None):
-        """A step that keeps (the view shown, the focus), or what get(app) says, under label."""
+        """A step that keeps the tab shown, or what get(app) says, under label."""
         async def step(pilot):
             pilot.app.redraw()
             await pilot.pause()
-            seen[label] = get(pilot.app) if get else (self.shown(pilot.app), pilot.app.ui.focus)
+            seen[label] = get(pilot.app) if get else self.shown(pilot.app)
         return step
 
-    def on_new_project(self):
-        return self.select(lambda ui: setattr(ui, "psel", next(i for i, r in enumerate(ui.project_rows()) if r.kind == "new")))
+    @staticmethod
+    def label_x(bar, name):
+        """The column of the tab label name in the top bar: its first match after Agent Roost."""
+        after = bar.index("Agent Roost") + len("Agent Roost")
+        m = re.compile(rf"\b{name}\b").search(bar, after)
+        return m.start() if m else None
 
-    def to_entry(self, name):
-        """Steps that move the sidebar's selection onto the entry name with ↓, from + New project."""
-        return [self.on_new_project(), self.keys(*["down"] * (ENTRIES.index(name) + 1))]
+    # 1. The top bar
 
-    # 1. The sidebar on every view
-
-    def test_every_view_has_the_sidebar_with_the_projects_then_a_blank_line_then_the_entries(self):
-        for name in ("Projects",) + ENTRIES:
-            app = self.start([] if name == "Projects" else [open_view(name)])
-            side = self.side(self.screen(app))
-            with self.subTest(view=name):
-                self.assertEqual(self.shown(app), name)
-                new = next((i for i, l in enumerate(side) if "+ New project" in l), None)
-                self.assertIsNotNone(new, "\n".join(side))
-                self.assertTrue([l for l in side[:new] if self.PID in l], "\n".join(side))
-                self.assertEqual(side[new + 1].strip(" │┃▏▕"), "", "a blank line before the entries")
-                ys = [next((i for i in range(new + 1, len(side)) if entry in side[i]), None) for entry in ENTRIES]
-                self.assertNotIn(None, ys, "\n".join(side))
-                self.assertEqual(ys[0], new + 2, "\n".join(side))
-                self.assertEqual(ys, sorted(ys), "Unfiled, Sessions, Notes, Stats, top to bottom")
-                self.assertEqual(len(set(ys)), len(ENTRIES))  # four entries since Unfiled joined (step 3b-1)
-
-    # 2. The selection shows its view in the right pane
-
-    def test_moving_the_selection_onto_an_entry_shows_its_view_right_of_the_sidebar(self):
-        widget = {"Sessions": roost.SessionList, "Notes": roost.NoteList, "Stats": roost.StatsView}
-        seen, order = {}, []
-
-        def where(app):
-            name = self.shown(app)
-            box = app.query_one(widget[name]).region if name in widget else None
-            new = next(i for i, l in enumerate(self.side(screen_text(app))) if "+ New project" in l)
-            return name, app.ui.focus, box, new
-        steps = [self.on_new_project(), self.look(seen, "start", where)]
-        # four entries since Unfiled joined, first under the projects (step 3b-1): four downs reach Stats
-        for i, k in enumerate(["down"] * 4 + ["up"] * 4):
-            steps += [self.keys(k), self.look(seen, i, where)]
-            order.append(i)
-        self.start(steps, size=(120, 40))
-        self.assertEqual(seen["start"][:2], ("Projects", "side"))
-        self.assertEqual([seen[i][:2] for i in order],
-                         [(n, "side") for n in ("Unfiled", "Sessions", "Notes", "Stats", "Notes", "Sessions", "Unfiled", "Projects")])
-        for i in order[1:4]:  # Sessions, Notes, Stats: the views with a widget named here
-            name, _, box, new = seen[i]
-            self.assertTrue(box.width and box.height, (name, box))
-            self.assertGreaterEqual(box.x, roost.SIDEBAR_W, f"{name} draws over the sidebar: {box}")
-            self.assertLess(box.y, new, f"{name} starts below the sidebar's + New project, not beside the sidebar: {box}")
-
-    # 3. The top bar
-
-    def test_the_top_bar_has_no_tabs_and_a_click_where_they_were_does_nothing(self):
-        seen = {}
-        state = lambda app: (self.shown(app), app.ui.focus, app.ui.psel, app.ui.helping, app.ui.choosing)
-        steps = [self.look(seen, "bar", lambda app: (screen_text(app)[0], app.ui.corner)), self.look(seen, "before", state)]
-        for name, x in self.OLD_TABS.items():
-            for at in (x + 1, x + len(name)):  # the label's first and last letters
-                steps += [lambda pilot, at=at: pilot.click(offset=(at, 0)), self.look(seen, (name, at), state)]
-        self.start(steps)
-        bar, corner = seen["bar"]
-        self.assertTrue(bar.startswith(" Agent Roost"), bar)
-        self.assertNotIn("\U0001f413", bar)
-        for name in self.OLD_TABS:
-            self.assertNotRegex(bar, rf"\b{name}\b", bar)
-        self.assertTrue(corner and corner[0], corner)
-        self.assertIn(corner[0], bar)  # the corner note stays
-        for key, got in seen.items():
-            if isinstance(key, tuple):
-                self.assertEqual(got, seen["before"], key)
-
-    # 4. Focus
-
-    def test_roost_starts_with_the_focus_on_the_sidebar(self):
-        for tab in (None, "Projects", "Notes"):
-            with self.subTest(tab=tab):
-                self.assertEqual(self.start([], tab=tab).ui.focus, "side")
-
-    def test_enter_or_right_on_an_entry_focuses_the_pane_and_opens_no_menu(self):
-        for name in ENTRIES:
-            for key in ("enter", "right"):
-                seen = {}
-                app = self.start(self.to_entry(name) + [self.look(seen, "on it"), self.keys(key)])
-                with self.subTest(entry=name, key=key):
-                    self.assertEqual(seen["on it"], (name, "side"))
-                    self.assertEqual((self.shown(app), app.ui.focus), (name, "pane"))
-                    self.assertIsNone(app.ui.choosing)
-                    self.assertFalse(app.ui.nreading, "→ on the Notes entry only focuses the pane")
-
-    def test_tab_and_shift_tab_toggle_the_focus_on_an_entry_and_do_nothing_on_a_project_row(self):
-        seen = {}
-        steps = self.to_entry("Notes")
-        for i, k in enumerate(["tab", "tab", "shift+tab", "shift+tab"]):
-            steps += [self.keys(k), self.look(seen, i)]
-        self.start(steps)
-        self.assertEqual([seen[i] for i in range(4)], [("Notes", "pane"), ("Notes", "side"), ("Notes", "pane"), ("Notes", "side")])
-        seen = {}
-        # a project row with nothing to select in its detail pane: since step 3b-1 a Session line (or a Handoff or
-        # note) can be selected, so its one Session is closed and older than the Sessions list's 7 days
-        self.sessions = [TextualScreens.closed("Old printer audit", 8 * 1440)] + self.sessions[1:]
-        on_project = TextualScreens.on_project(self, self.PID)
-        state = lambda app: (self.shown(app), app.ui.focus, app.ui.psel)
-        self.start([on_project, self.look(seen, "before", state), self.keys("tab"), self.look(seen, "tab", state),
-                  self.keys("shift+tab"), self.look(seen, "shift+tab", state)])
-        self.assertEqual(seen["before"][:2], ("Projects", "side"))
-        self.assertEqual(seen["tab"], seen["before"])
-        self.assertEqual(seen["shift+tab"], seen["before"])
-
-    def test_with_the_pane_focused_the_keys_go_to_its_view(self):
-        seen = {}
-        title = lambda app: app.ui.choosing and app.ui.choosing["title"]
-        self.start([open_view("Sessions"), self.look(seen, "at", lambda app: (app.ui.sel, app.ui.view)),
-                  self.keys("down"), self.look(seen, "down", lambda app: app.ui.sel),
-                  self.keys("enter"), self.look(seen, "menu", lambda app: (title(app), app.ui.srows[app.ui.sel]["name"])),
-                  self.keys("escape"), self.keys("right"), self.look(seen, "right", lambda app: app.ui.view),
-                  self.look(seen, "after", lambda app: (self.shown(app), app.ui.focus))])
-        sel, view = seen["at"]
-        self.assertEqual(seen["down"], sel + 1, "↓ moves in the Sessions list")
-        self.assertEqual(seen["right"], (view + 1) % len(roost.VIEWS), "→ switches Sessions' views")
-        self.assertEqual(seen["menu"][0], seen["menu"][1], "enter opens the selected Session's menu")
-        self.assertEqual(seen["after"], ("Sessions", "pane"))
-        seen = {}
-        self.start([open_view("Notes"), self.look(seen, "at", lambda app: app.ui.nsel),
-                  self.keys("down"), self.look(seen, "down", lambda app: app.ui.nsel),
-                  self.keys("right"), self.look(seen, "reading", lambda app: app.ui.nreading), self.keys("left"),
-                  self.keys("enter"), self.look(seen, "menu", lambda app: (title(app), app.ui.nrows[app.ui.nsel]["name"])),
-                  self.look(seen, "after", lambda app: (self.shown(app), app.ui.focus))])
-        self.assertEqual(seen["down"], seen["at"] + 1, "↓ moves in the Notes list")
-        self.assertTrue(seen["reading"], "→ reads the note")
-        self.assertEqual(seen["menu"][0], seen["menu"][1], "enter opens the selected note's menu")
-        self.assertEqual(seen["after"], ("Notes", "pane"))
-        seen = {}
-        self.start([open_view("Stats"), self.look(seen, "at", lambda app: app.ui.srange), self.keys("right"),
-                  self.look(seen, "right", lambda app: app.ui.srange),
-                  self.look(seen, "after", lambda app: (self.shown(app), app.ui.focus))])
-        self.assertEqual(seen["right"], (seen["at"] + 1) % len(roost.statsdata.RANGES), "→ switches Stats' range")
-        self.assertEqual(seen["after"], ("Stats", "pane"))
-
-    def test_esc_in_the_pane_leaves_a_note_or_clears_a_search_first_then_focuses_the_sidebar(self):
-        seen = {}
-        reading = lambda app: (self.shown(app), app.ui.focus, app.ui.nreading)
-        self.start([open_view("Notes"), self.keys("right"), self.look(seen, "reading", reading),
-                  self.keys("escape"), self.look(seen, "esc", reading), self.keys("escape"), self.look(seen, "esc esc", reading)])
-        self.assertEqual(seen["reading"], ("Notes", "pane", True))
-        self.assertEqual(seen["esc"], ("Notes", "pane", False))
-        self.assertEqual(seen["esc esc"], ("Notes", "side", False))
-        seen = {}
-        search = lambda app: (self.shown(app), app.ui.focus, app.ui.query)
-        self.start([open_view("Sessions"), self.keys("slash", "x", "enter"), self.look(seen, "search", search),
-                  self.keys("escape"), self.look(seen, "esc", search), self.keys("escape"), self.look(seen, "esc esc", search)])
-        self.assertEqual(seen["search"], ("Sessions", "pane", "x"))
-        self.assertEqual(seen["esc"], ("Sessions", "pane", ""))
-        self.assertEqual(seen["esc esc"], ("Sessions", "side", ""))
-
-    def test_a_click_on_a_sidebar_row_selects_it_and_focuses_the_sidebar_and_a_click_in_the_pane_focuses_the_pane(self):
-        seen = {}
-        rows = lambda app: (self.side(screen_text(app)), dict(app.ui.row_y))
-        self.start([open_view("Sessions"), self.look(seen, "drawn", rows)])
-        side, row_y = seen["drawn"]
-        new = next((i for i, l in enumerate(side) if "+ New project" in l), None)
-        self.assertIsNotNone(new, "no sidebar on the Sessions view:\n" + "\n".join(side))
-        notes = next((i for i in range(new + 1, len(side)) if "Notes" in side[i]), None)
-        self.assertIsNotNone(notes, "no Notes entry in the sidebar:\n" + "\n".join(side))
-        second = next(y for y, idx in row_y.items() if idx == 1)  # the second Session's row, where it's drawn
-        seen = {}
-        self.start([open_view("Sessions"), lambda pilot: pilot.click(offset=(6, notes)), self.look(seen, "notes"),
-                  open_view("Sessions"), self.keys("tab"), self.look(seen, "side"),
-                  lambda pilot: pilot.click(offset=(roost.SIDEBAR_W + 10, second)),
-                  self.look(seen, "pane", lambda app: (self.shown(app), app.ui.focus, app.ui.sel))])
-        self.assertEqual(seen["notes"], ("Notes", "side"))
-        self.assertEqual(seen["side"], ("Sessions", "side"))
-        self.assertEqual(seen["pane"], ("Sessions", "pane", 1))
-
-    # 5. open_entry
-
-    def test_open_entry_selects_the_entry_and_focuses_the_pane(self):
-        above = {"Unfiled": "Projects", "Sessions": "Unfiled", "Notes": "Sessions", "Stats": "Notes"}  # Unfiled first (step 3b-1)
-        for name in ENTRIES:
+    def test_the_top_bar_reads_agent_roost_then_the_tabs_with_the_current_one_green_and_bold(self):
+        for name in TABS:
             seen = {}
 
-            async def open_it(pilot, name=name):
-                pilot.app.ui.open_entry(name)
-            self.start([open_it, self.look(seen, "opened"), self.keys("tab"), self.look(seen, "tab"),
-                      self.keys("up"), self.look(seen, "up")])
-            with self.subTest(entry=name):
-                self.assertEqual(seen["opened"], (name, "pane"))
-                self.assertEqual(seen["tab"], (name, "side"), "the selection is on the entry: tab toggles the focus")
-                self.assertEqual(seen["up"], (above[name], "side"), "↑ from the entry selects the row above it")
-                self.assertIn({"tab": name}, self.saved)
+            async def bar(pilot):
+                lines = screen_text(pilot.app)
+                seen["bar"] = lines[0]
+                seen["styles"] = {n: style_at(pilot.app, 0, self.label_x(lines[0], n)) for n in TABS
+                                  if self.label_x(lines[0], n) is not None}
+                seen["corner"] = pilot.app.ui.corner
+            app = self.start([open_view(name), bar])
+            with self.subTest(tab=name):
+                self.assertEqual(self.shown(app), name)
+                self.assertRegex(seen["bar"], r"^\s*Agent Roost\s+Projects\s+Sessions\s+Notes\s+Stats(\s|$)")
+                self.assertNotIn("\U0001f413", seen["bar"])
+                self.assertEqual(set(seen["styles"]), set(TABS), seen["bar"])
+                for n, st in seen["styles"].items():
+                    on = color_of(st) == self.GREEN and bool(st.bold)
+                    self.assertEqual(on, n == name, f"{n} on the {name} tab: {st}")
+                if name == "Projects":  # the projects folder stays at the top bar's right
+                    self.assertTrue(seen["corner"] and seen["corner"][0], seen["corner"])
+                    self.assertTrue(seen["bar"].rstrip().endswith(seen["corner"][0]), seen["bar"])
 
-    # 6. The status bar's running count
+    def test_the_current_tabs_name_is_bold_green_with_no_background_of_its_own_and_the_others_dim(self):
+        """No green tint: the current tab's name and the spaces each side of it are on the top bar's own
+        background (what the bar draws at its first column), as every other tab's name is."""
+        green_bg = importlib.import_module("roost.app.widgets").GREEN_BG.lower()
+        muted = roost.MUTED.lower()
+        for name in TABS:
+            seen = {}
 
-    def test_a_click_on_the_running_count_opens_sessions_on_its_running_view(self):
+            async def bar(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                line = screen_text(pilot.app)[0]
+                seen["bar"], seen["own"] = line, color_of(style_at(pilot.app, 0, 0), "bgcolor")
+                seen["tabs"] = {n: [style_at(pilot.app, 0, x) for x in range(self.label_x(line, n) - 1, self.label_x(line, n) + len(n) + 1)]
+                                for n in TABS if self.label_x(line, n) is not None}
+            self.start([open_view(name), bar])
+            with self.subTest(tab=name):
+                self.assertEqual(set(seen["tabs"]), set(TABS), seen["bar"])
+                for n, styles in seen["tabs"].items():
+                    letters = styles[1:-1]
+                    fills = {color_of(st, "bgcolor") for st in styles}
+                    self.assertEqual(fills, {seen["own"]}, f"{n} on the {name} tab: on the bar's own background")
+                    self.assertNotIn(green_bg, fills)
+                    if n == name:
+                        self.assertTrue(all(color_of(st) == self.GREEN and st.bold for st in letters), f"{n} is bold green")
+                    else:
+                        self.assertEqual({color_of(st) for st in letters}, {muted}, f"{n} on the {name} tab is dim")
+
+    def test_the_top_bar_has_no_background_fill_anywhere_on_every_tab(self):
+        """Agent Roost, the tab names, and the corner text all sit on the terminal's own background."""
+        for name in TABS:
+            seen = {}
+
+            async def bar(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                seen["bar"], seen["fills"] = screen_text(pilot.app)[0], backgrounds(pilot.app, 0)
+            self.start([open_view(name), bar])
+            with self.subTest(tab=name):
+                self.assertIn("Agent Roost", seen["bar"])
+                self.assertEqual(seen["fills"], set(), f"no background on the top bar: {seen['bar']!r}")
+
+    # 2. Moving between the tabs
+
+    def test_tab_and_shift_tab_move_to_the_next_and_previous_tab_wrapping(self):
+        seen, keys = {}, ["tab"] * 4 + ["shift+tab"] * 4
+        steps = [self.look(seen, "start")]
+        for i, k in enumerate(keys):
+            steps += [self.keys(k), self.look(seen, i)]
+        app = self.start(steps)
+        self.assertEqual([seen["start"]] + [seen[i] for i in range(len(keys))],
+                         ["Projects", "Sessions", "Notes", "Stats", "Projects", "Stats", "Notes", "Sessions", "Projects"])
+        self.assertIsNone(app.ui.choosing)
+
+    def test_tab_is_the_next_tab_with_the_keys_in_the_projects_details_or_reading_a_note(self):
+        seen = {}
+        on_project = TextualScreens.on_project(self, self.PID)  # it lists Printer fix: an item in its details
+        self.start([on_project, self.keys("right"), self.look(seen, "details", lambda app: (self.shown(app), app.ui.focus)),
+                    self.keys("tab"), self.look(seen, "tab"), self.keys("shift+tab"), self.look(seen, "back")])
+        self.assertEqual(seen["details"], ("Projects", "pane"), "the fixture: → moved the keys into the details")
+        self.assertEqual((seen["tab"], seen["back"]), ("Sessions", "Projects"))
+        seen = {}
+        self.start([open_view("Notes"), self.keys("right"), self.look(seen, "reading", lambda app: app.ui.nreading),
+                    self.keys("tab"), self.look(seen, "tab")])
+        self.assertTrue(seen["reading"], "the fixture: → reads the note")
+        self.assertEqual(seen["tab"], "Stats")
+
+    def test_a_click_on_a_tab_label_opens_its_tab(self):
+        """The labels sit after the name, wherever its length puts them, and a click where a label is drawn
+        opens that tab: the hit areas follow the labels."""
+        seen, order = [], list(reversed(TABS))  # every tab, from the last
+
+        async def click_each(pilot):
+            for name in order:
+                bar = screen_text(pilot.app)[0]  # no wide characters, so a string index is a column
+                first = self.label_x(bar, name)
+                assert first is not None, f"no {name} label in the top bar: {bar!r}"
+                for x in (first, first + len(name) - 1):  # the label's first and last letters
+                    await pilot.click(offset=(x, 0))
+                    await pilot.pause()
+                    seen.append((name, self.shown(pilot.app)))
+                    await pilot.press("tab")  # move off it, so the next click has to switch
+                    await pilot.pause()
+        self.start([click_each])
+        self.assertEqual(seen, [(name, name) for name in order for _ in range(2)])
+
+    # 3. The remembered tab
+
+    def test_roost_starts_on_the_tab_it_was_on_when_it_last_quit(self):
+        for name in TABS:
+            with self.subTest(tab=name):
+                self.assertEqual(self.shown(self.start([], tab=name)), name)
+
+    def test_the_tab_shown_is_remembered(self):
+        seen = {}
+        last = lambda app: next((kw["tab"] for kw in reversed(self.saved) if "tab" in kw), None)
+        self.start([self.keys("tab"), self.look(seen, "sessions", last), self.keys("tab", "tab"), self.look(seen, "stats", last),
+                    self.keys("tab"), self.look(seen, "projects", last)])
+        self.assertEqual((seen["sessions"], seen["stats"], seen["projects"]), ("Sessions", "Stats", "Projects"))
+
+    def test_roost_starts_on_projects_with_the_first_project_selected_and_the_keys_in_the_list(self):
+        for tab in ("Projects", None):
+            seen = {}
+            app = self.start([self.look(seen, "row", lambda app: app.ui.project_rows()[app.ui.psel])], tab=tab)
+            row = seen["row"]
+            with self.subTest(tab=tab):
+                self.assertEqual(self.shown(app), "Projects")
+                self.assertEqual((row.kind, row.item["id"]), ("project", self.PID))
+                self.assertEqual(app.ui.focus, "side")
+
+    # 4. No sidebar on Sessions, Notes, and Stats
+
+    def test_a_blank_row_a_rule_and_a_blank_row_separate_the_top_bar_from_the_content_on_every_tab(self):
+        """On every tab row 1 is blank, row 2 is a rule (─) across the whole width in the faint line color, row 3
+        is blank, and the content starts on row 4: on Projects the list's first row and the details' name line,
+        on Sessions the views row, on Notes and Stats their first row."""
+        seen, W = {}, roost.SIDEBAR_W
+
+        def grab(name):
+            async def step(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                seen[name] = (self.shown(pilot.app), screen_text(pilot.app), bold_text(pilot.app),
+                              [color_of(st) for x, text, st in runs(pilot.app, 2) for _ in text])
+            return step
+        steps = [grab("Projects")]
+        for name in TABS[1:]:
+            steps += [open_view(name), grab(name)]
+        self.start(steps, size=(120, 40))
+        blank = lambda l: not l.strip(" │┃▏▕")
+        for name in TABS:
+            shown, lines, bold, rule = seen[name]
+            with self.subTest(tab=name):
+                self.assertEqual(shown, name)
+                top = "\n".join(lines[:7])
+                self.assertEqual(lines[2], "─" * 120, "a rule across the whole width:\n" + top)
+                self.assertEqual(set(rule), {roost.LINE.lower()}, "the rule is in the faint line color")
+                self.assertTrue(blank(lines[1]) and blank(lines[3]), "a blank row each side of the rule:\n" + top)
+                first = next((y for y in range(3, len(lines)) if not blank(lines[y])), None)
+                self.assertEqual(first, 4, "then the content:\n" + top)
+                if name == "Projects":
+                    side = next((y for y in range(3, len(lines)) if not blank(lines[y][:W])), None)
+                    self.assertEqual(side, 4, "the list's first row:\n" + top)
+                    nm = min(((y, t) for y, x, t in bold if x >= W and y > 0), default=None)
+                    self.assertEqual(nm and nm[0], 4, ("the details' name line", nm))
+                if name == "Sessions":
+                    self.assertRegex(lines[4], r"^\s*Running \(\d+\)\s+Closed \(\d+\)\s+Unfiled \(\d+\)", "the views row")
+
+    def test_sessions_notes_and_stats_take_the_whole_window_with_no_project_list(self):
+        widget = {"Sessions": [roost.SessionList], "Notes": [roost.NoteList, roost.NoteCard], "Stats": [roost.StatsView]}
+        for name, kinds in widget.items():
+            seen = {}
+            self.start([open_view(name), self.look(seen, "x", lambda app: (screen_text(app), [app.query_one(k).region for k in kinds]))],
+                       size=(120, 40))
+            lines, boxes = seen["x"]
+            with self.subTest(tab=name):
+                self.assertFalse([l for l in lines if "+ New project" in l], "\n".join(lines))
+                self.assertLess(boxes[0].x, 4, f"{name} starts at the window's left, not right of a list: {boxes[0]}")
+                self.assertGreaterEqual(boxes[-1].right, 116, f"{name} runs to the window's right: {boxes[-1]}")
+
+    def test_no_entries_are_drawn_under_the_projects(self):
+        seen = {}
+        self.start([self.look(seen, "lines", screen_text)], size=(120, 40))
+        side = [l[:roost.SIDEBAR_W].strip(" ▌›│┃▏▕") for l in seen["lines"][1:-2]]
+        new = next((i for i, l in enumerate(side) if "+ New project" in l), None)
+        self.assertIsNotNone(new, "\n".join(side))
+        for entry in ("Unfiled", "Sessions", "Notes", "Stats"):
+            self.assertFalse([l for l in side[new + 1:] if re.fullmatch(rf"{entry}( +\d+)?", l)], (entry, side))
+
+    def test_a_click_on_a_session_row_works_at_its_own_columns(self):
+        seen = {}
+        self.start([open_view("Sessions"), self.look(seen, "lines", screen_text)])
+        y = next((i for i, l in enumerate(seen["lines"][:-10]) if "Laptop refresh" in l), None)
+        self.assertIsNotNone(y, "\n".join(seen["lines"]))
+        for x in (6, 20):  # in the columns a list at the left took, and further right
+            seen = {}
+            app = self.start([open_view("Sessions"), lambda pilot, x=x: pilot.click(offset=(x, y)), self.keys("enter"),
+                              self.look(seen, "menu", lambda app: app.ui.choosing and app.ui.choosing["title"])])
+            with self.subTest(x=x):
+                self.assertEqual(seen["menu"], "Laptop refresh")
+                self.assertEqual(self.shown(app), "Sessions")
+
+    def test_at_120_by_40_the_sessions_list_has_its_whole_header_across_the_window(self):
+        seen = {}
+        self.start([open_view("Sessions"), self.look(seen, "list", lambda app: app.query_one(roost.SessionList).region),
+                    self.look(seen, "lines", screen_text)], size=(120, 40))
+        box, lines = seen["list"], seen["lines"]
+        self.assertLess(box.x, 4, box)
+        self.assertGreater(box.width, 120 - roost.SIDEBAR_W, box)
+        head = next(l for l in lines if "NAME" in l)
+        for title in ("NAME", "STATUS", "LAST ACTIVE", "CONTEXT", "PROJECT"):
+            self.assertIn(title, head, f"{title} is cut off: {head!r}")
+
+    def test_the_notes_card_is_beside_its_list_at_120_columns(self):
+        seen = {}
+        self.start([open_view("Notes"), self.look(seen, "boxes", lambda app: (app.query_one(roost.NoteList).region,
+                                                                             app.query_one(roost.NoteCard).region))],
+                   size=(120, 40))
+        lst, card = seen["boxes"]
+        self.assertLess(lst.x, 4, lst)
+        self.assertGreaterEqual(card.x, lst.right, (lst, card))
+        self.assertLess(card.y, lst.bottom, (lst, card))
+        self.assertLessEqual(card.right, 120, card)
+
+    # 5. The status bar's running count
+
+    def test_a_click_on_the_running_count_opens_the_sessions_tab_on_running(self):
         seen = {}
 
         async def click_count(pilot):
@@ -1289,84 +1355,69 @@ class Sidebar(unittest.TestCase):
             await pilot.click(offset=(lines[y].rindex("2 running") + 3, y))
         app = self.start([click_count])
         self.assertGreater(seen["status row"], 20, "the count is on the status bar, at the bottom")
-        self.assertEqual((self.shown(app), app.ui.view, app.ui.focus), ("Sessions", RUNNING, "pane"))
+        self.assertEqual((self.shown(app), app.ui.view), ("Sessions", RUNNING))
 
-    # 7. The views fit the pane
-
-    def test_at_120_by_40_the_sessions_list_fits_beside_the_sidebar_with_its_whole_header(self):
+    def test_the_running_count_has_a_green_dot_before_it(self):
         seen = {}
-        self.start([open_view("Sessions"), self.look(seen, "list", lambda app: app.query_one(roost.SessionList).region),
-                  self.look(seen, "lines", screen_text)], size=(120, 40))
-        box, lines = seen["list"], seen["lines"]
-        self.assertGreaterEqual(box.x, roost.SIDEBAR_W, box)
-        self.assertLessEqual(box.right, 120, box)
-        self.assertLessEqual(box.width, 120 - roost.SIDEBAR_W, box)
-        head = next(l for l in lines if "NAME" in l[roost.SIDEBAR_W:])
-        for title in ("NAME", "STATUS", "LAST ACTIVE", "CONTEXT", "PROJECT"):
-            if title[:4] in head[roost.SIDEBAR_W:]:
-                self.assertIn(title, head, f"{title} is cut off: {head!r}")
-        self.assertIn("STATUS", head)
 
-    def test_the_notes_card_is_beside_its_list_in_a_pane_of_86_and_under_it_in_76(self):
-        for width, beside in ((120, True), (110, False)):
-            seen = {}
-            self.start([open_view("Notes"), self.look(seen, "boxes", lambda app: (app.query_one(roost.NoteList).region,
-                                                                                 app.query_one(roost.NoteCard).region))],
-                     size=(width, 40))
-            lst, card = seen["boxes"]
-            with self.subTest(window=width, pane=width - roost.SIDEBAR_W):
-                for box in (lst, card):
-                    self.assertGreaterEqual(box.x, roost.SIDEBAR_W, box)
-                    self.assertLessEqual(box.right, width, box)
-                    self.assertTrue(box.width and box.height, box)
-                if beside:
-                    self.assertGreaterEqual(card.x, lst.right, (lst, card))
-                    self.assertLess(card.y, lst.bottom, (lst, card))
-                else:
-                    self.assertGreaterEqual(card.y, lst.bottom, (lst, card))
-                    self.assertLess(card.x, lst.right, (lst, card))
+        async def look(pilot):
+            lines = screen_text(pilot.app)
+            y = max(i for i, l in enumerate(lines) if l.rstrip().endswith("2 running"))
+            seen["row"], seen["dot"] = lines[y], None
+            m = re.search(r"(●)\s+2 running$", lines[y].rstrip())
+            if m:
+                seen["dot"] = style_at(pilot.app, y, m.start(1))
+        self.start([look])
+        self.assertRegex(seen["row"].rstrip(), r"●\s+2 running$")
+        self.assertEqual(color_of(seen["dot"]), self.GREEN)
 
-    # 8. The remembered start view
+    # 6. The keys go to the tab shown
 
-    def test_roost_starts_with_the_selection_on_the_remembered_entry(self):
-        above = {"Unfiled": "Projects", "Sessions": "Unfiled", "Notes": "Sessions", "Stats": "Notes"}  # Unfiled first (step 3b-1)
-        for name in ENTRIES:
-            seen = {}
-            self.start([self.look(seen, "start"), self.keys("up"), self.look(seen, "up")], tab=name)
-            with self.subTest(tab=name):
-                self.assertEqual(seen["start"], (name, "side"))
-                self.assertEqual(seen["up"], (above[name], "side"), "↑ from the entry selects the row above it")
-
-    def test_roost_starts_on_projects_with_the_first_project_selected(self):
-        for tab in ("Projects", None):
-            seen = {}
-            app = self.start([self.look(seen, "row", lambda app: app.ui.project_rows()[app.ui.psel])], tab=tab)
-            row = seen["row"]
-            with self.subTest(tab=tab):
-                self.assertEqual(self.shown(app), "Projects")
-                self.assertEqual((row.kind, row.item["id"]), ("project", self.PID))
-
-    def test_the_view_shown_is_remembered_as_its_entry_name_or_projects(self):
+    def test_the_keys_go_to_each_tabs_view(self):
         seen = {}
-        last = lambda app: next((kw["tab"] for kw in reversed(self.saved) if "tab" in kw), None)
-        self.start(self.to_entry("Stats") + [self.look(seen, "stats", last), self.keys("up", "up", "up", "up"),  # past Unfiled too (step 3b-1)
-                                           self.look(seen, "projects", last), open_view("Notes"), self.look(seen, "notes", last)])
-        self.assertEqual(seen["stats"], "Stats")
-        self.assertEqual(seen["projects"], "Projects")
-        self.assertEqual(seen["notes"], "Notes")
+        title = lambda app: app.ui.choosing and app.ui.choosing["title"]
+        self.start([open_view("Sessions"), self.look(seen, "at", lambda app: (app.ui.sel, app.ui.view)),
+                    self.keys("down"), self.look(seen, "down", lambda app: app.ui.sel),
+                    self.keys("enter"), self.look(seen, "menu", lambda app: (title(app), app.ui.srows[app.ui.sel]["name"])),
+                    self.keys("escape"), self.keys("right"), self.look(seen, "right", lambda app: app.ui.view)])
+        sel, view = seen["at"]
+        self.assertEqual(seen["down"], sel + 1, "↓ moves in the Sessions list")
+        self.assertEqual(seen["right"], (view + 1) % len(roost.VIEWS), "→ switches Sessions' views")
+        self.assertEqual(seen["menu"][0], seen["menu"][1], "enter opens the selected Session's menu")
+        seen = {}
+        self.start([open_view("Notes"), self.look(seen, "at", lambda app: app.ui.nsel),
+                    self.keys("down"), self.look(seen, "down", lambda app: app.ui.nsel),
+                    self.keys("right"), self.look(seen, "reading", lambda app: app.ui.nreading), self.keys("left"),
+                    self.keys("enter"), self.look(seen, "menu", lambda app: (title(app), app.ui.nrows[app.ui.nsel]["name"]))])
+        self.assertEqual(seen["down"], seen["at"] + 1, "↓ moves in the Notes list")
+        self.assertTrue(seen["reading"], "→ reads the note")
+        self.assertEqual(seen["menu"][0], seen["menu"][1], "enter opens the selected note's menu")
+        seen = {}
+        self.start([open_view("Stats"), self.look(seen, "at", lambda app: app.ui.srange), self.keys("right"),
+                    self.look(seen, "right", lambda app: app.ui.srange)])
+        self.assertEqual(seen["right"], (seen["at"] + 1) % len(roost.statsdata.RANGES), "→ switches Stats' range")
 
-    # 9. ? help
+    def test_esc_leaves_a_note_or_clears_a_search_and_stays_on_the_tab(self):
+        seen = {}
+        reading = lambda app: (self.shown(app), app.ui.nreading)
+        self.start([open_view("Notes"), self.keys("right"), self.look(seen, "reading", reading),
+                    self.keys("escape"), self.look(seen, "esc", reading), self.keys("escape"), self.look(seen, "esc esc", reading)])
+        self.assertEqual((seen["reading"], seen["esc"], seen["esc esc"]), (("Notes", True), ("Notes", False), ("Notes", False)))
+        seen = {}
+        search = lambda app: (self.shown(app), app.ui.query)
+        self.start([open_view("Sessions"), self.keys("slash", "x", "enter"), self.look(seen, "search", search),
+                    self.keys("escape"), self.look(seen, "esc", search), self.keys("escape"), self.look(seen, "esc esc", search)])
+        self.assertEqual((seen["search"], seen["esc"], seen["esc esc"]), (("Sessions", "x"), ("Sessions", ""), ("Sessions", "")))
 
-    def test_help_shows_the_keys_of_the_selected_view(self):
+    def test_help_shows_the_current_tabs_keys(self):
         tabs = {t.name: t for t in roost.UI.TABS}
-        for name in ENTRIES:
-            for how, steps in (("side", self.to_entry(name)), ("pane", [open_view(name)])):
-                seen = {}
-                app = self.start(steps + [self.keys("question_mark"), self.look(seen, "help", lambda app: app.ui.help_rows())])
-                with self.subTest(entry=name, focus=how):
-                    self.assertTrue(app.ui.helping)
-                    self.assertEqual(seen["help"][-len(tabs[name].help):], tabs[name].help)
-                    self.assertTrue(any(f"Keys, then {name}" in l for l in self.screen(app)), "\n".join(self.screen(app)))
+        for name in TABS:
+            seen = {}
+            app = self.start([open_view(name), self.keys("question_mark"), self.look(seen, "help", lambda app: app.ui.help_rows())])
+            with self.subTest(tab=name):
+                self.assertTrue(app.ui.helping)
+                self.assertEqual(seen["help"][-len(tabs[name].help):], tabs[name].help)
+                self.assertTrue(any(f"Keys, then {name}" in l for l in self.screen(app)), "\n".join(self.screen(app)))
 
     screen = TextualScreens.screen
 

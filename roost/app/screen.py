@@ -3,7 +3,7 @@ import curses, time, traceback
 
 from roost.app.shell import QUIT
 from roost.app.ui import UI
-from roost.app.widgets import (BG, BLUE, CARD, FAINT, GREEN, GREEN_BG, LINE, MIN_SIZE, MUTED, PAIRS, RAISED, RED,
+from roost.app.widgets import (BG, BLUE, CARD, FAINT, GREEN, LINE, MIN_SIZE, MUTED, PAIRS, RAISED, RED,
                                TEXT, YELLOW, Widget)
 from roost.core import config
 
@@ -45,7 +45,7 @@ class TextualUI(UI):
         self.app, self.scr = app, Size(app)
         self.setup(sessions, query)
         self.GREEN, self.YELLOW, self.CYAN, self.RED, self.ACCENT = (self.pair(i) for i in range(1, 6))
-        self.DIM = self.pair(6)
+        self.DIM, self.FAINT = self.pair(6), self.pair(7)
         self.status = {k: self.pair(i) for i, k in enumerate(
             ["working", "idle", "input", "expiring", "expired", "opening", "compacted"], 20)}
         self.styles = {}
@@ -183,7 +183,7 @@ if Widget:
         # the app's CSS, so it wins over the Textual widgets' own
         CSS = """
         Screen { background: ansi_default; layers: base over top; }
-        TopBar { height: 1; }
+        TopBar { height: 3; }  /* the tabs, a blank row, a rule; each view's own blank row follows */
         #body { height: 1fr; }
         #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 1 0 0 0; border-right: vkey #2c313a; }
         #pane { width: 1fr; height: 100%; }
@@ -213,7 +213,7 @@ if Widget:
         def compose(self):
             yield Keys()
             yield TopBar()
-            with Horizontal(id="body"):  # the sidebar on every view, and the selected view beside it
+            with Horizontal(id="body"):  # on Projects, the list and the details beside it; any other tab alone
                 yield ProjectList()
                 with Vertical(id="pane"):
                     for tab in self.ui.TABS:
@@ -250,6 +250,7 @@ if Widget:
                 small.refresh()
                 return
             self.drawn = ui.draw()
+            self.query_one(ProjectList).display = ui.TABS[ui.tab].name == "Projects"  # the other tabs take the whole width
             for i, tab in enumerate(ui.TABS):
                 view = self.query_one(tab.widget)
                 view.display = i == ui.tab

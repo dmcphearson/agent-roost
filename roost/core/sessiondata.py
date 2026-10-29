@@ -520,6 +520,8 @@ def span(secs):
 def in_view(s, view, keep=()):
     """keep: Sessions that count as running while roost writes their Handoff or recap (it stopped
     them first), so they stay where the person started it."""
+    if VIEWS[view] == "Unfiled":  # its own list: the Sessions no project lists, and loose notes
+        return False
     running = s["state"] not in ("closed",) or s.get("id") in keep
     return running if VIEWS[view] == "Running" else not running
 

@@ -100,26 +100,46 @@ def dim_text(app):
     return out
 
 
-# the sidebar's entries, under the projects, top to bottom; Unfiled (the Sessions no project lists, and the
-# notes in ~/.roost/notes) comes first
-ENTRIES = ("Unfiled", "Sessions", "Notes", "Stats")
+TABS = ("Projects", "Sessions", "Notes", "Stats")  # the top bar's tabs, left to right
 
 
 def open_view(name):
-    """A pilot step that shows the view name in the right pane, as the sidebar does. An entry (Unfiled,
-    Sessions, Notes, Stats): ui.open_entry(name) selects it and focuses the pane, so the keys that follow go to
-    that view. Projects: the focus goes back to the sidebar and home puts its selection on the top row."""
+    """A pilot step that shows the tab name as a person does: Tab until it's the current tab, at most once
+    round the tabs. The keys that follow go to its view (on Projects, to its list)."""
     async def step(pilot):
         ui = pilot.app.ui
-        if name == "Projects":
-            ui.focus = "side"
-            pilot.app.redraw()
-            await pilot.press("home")
-        else:
-            ui.open_entry(name)
-            pilot.app.redraw()
-        await pilot.pause()
+        for _ in range(len(ui.TABS)):
+            if ui.TABS[ui.tab].name == name:
+                return
+            await pilot.press("tab")
+            await pilot.pause()
+        assert ui.TABS[ui.tab].name == name, f"Tab never reached the {name} tab: still on {ui.TABS[ui.tab].name}"
     return step
+
+
+def runs(app, y):
+    """Screen row y as Textual draws it: (x, text, style) for each run."""
+    from rich.cells import cell_len
+    out, x = [], 0
+    for seg in app.screen._compositor.render_strips()[y]:
+        out.append((x, seg.text, seg.style))
+        x += cell_len(seg.text)
+    return out
+
+
+def style_at(app, y, x):
+    """The Rich style the screen draws column x of row y in, or None."""
+    from rich.cells import cell_len
+    for x0, text, style in runs(app, y):
+        if x0 <= x < x0 + cell_len(text):
+            return style
+    return None
+
+
+def color_of(style, part="color"):
+    """A style's foreground (or, with part "bgcolor", background) as a lowercase hex, or None for the default."""
+    c = style and getattr(style, part)
+    return c.triplet.hex.lower() if c and c.triplet else None
 
 
 def session(name, state="idle", kind="background", pinned=False, attached=False, mins=0, tokens=0, cwd="/tmp"):
@@ -129,18 +149,33 @@ def session(name, state="idle", kind="background", pinned=False, attached=False,
             "tokens": tokens, "cwd": cwd, "summary": "", "files": []}
 
 
-def pane_raised(app):
-    """The screen rows where the right pane (right of the sidebar) draws the selected style: a raised band."""
+def pane_selected(app):
+    """The screen rows where the right pane (right of the sidebar) draws a selected item's marks: a green ▌,
+    then text in bold green to its right."""
     from rich.cells import cell_len
-    raised = importlib.import_module("roost.app.widgets").RAISED.lower()
+    green = importlib.import_module("roost.app.widgets").GREEN.lower()
     out = set()
     for y, strip in enumerate(app.screen._compositor.render_strips()):
-        x = 0
+        x, bar = 0, None
         for seg in strip:
-            bg = seg.style and seg.style.bgcolor
-            if x >= roost.SIDEBAR_W and bg and bg.triplet and bg.triplet.hex.lower() == raised and seg.text.strip():
+            st = seg.style
+            if bar is None and x >= roost.SIDEBAR_W and "▌" in seg.text and color_of(st) == green:
+                bar = x + seg.text.index("▌")
+            elif bar is not None and len(seg.text.strip()) > 1 and color_of(st) == green and st.bold:
                 out.add(y)
+                break
             x += cell_len(seg.text)
+    return out
+
+
+def backgrounds(app, y, x0=0, x1=None):
+    """The background colors screen row y draws in columns x0 up to x1 (to the row's end unless asked), as
+    lowercase hex: empty where all of it is on the frame's own background."""
+    from rich.cells import cell_len
+    out = set()
+    for x, text, style in runs(app, y):
+        if x + cell_len(text) > x0 and (x1 is None or x < x1) and color_of(style, "bgcolor"):
+            out.add(color_of(style, "bgcolor"))
     return out
 
 

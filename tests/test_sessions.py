@@ -47,8 +47,8 @@ class Sorting(unittest.TestCase):
 
 class Views(unittest.TestCase):
     """The Sessions entry is a simple history: Running and Closed, and nothing else."""
-    def test_the_views_are_running_then_closed(self):
-        self.assertEqual(roost.VIEWS, ["Running", "Closed"])
+    def test_the_views_are_running_then_closed_then_unfiled(self):
+        self.assertEqual(roost.VIEWS, ["Running", "Closed", "Unfiled"])
 
     def test_every_session_is_in_exactly_one_view(self):
         """Running: every Session that isn't closed, and one roost is wrapping up (keep). Closed: every
@@ -502,7 +502,6 @@ class StartingSessions(unittest.TestCase):
 
     def open_here(self, ui):
         """Enter on the Sessions tab's only Session, then enter on Open here, through dispatch."""
-        # Unfiled is now view 1; find Sessions by name
         ui.tab, ui.view, ui.top, ui.quit_anyway = [t.name for t in ui.TABS].index("Sessions"), 0, 0, False
         ui.focus = "pane"  # the Sessions view focused, so enter goes to it
         ui.dispatch("enter", ui.sessions)
@@ -975,9 +974,9 @@ class SessionColumns(unittest.TestCase):
         return [self.proj("p1", self.sessions[:2], label=label)]
 
     def drawn(self, projects, w, sort=None, config=None):
-        """The Sessions view in a pane w wide (the window w + SIDEBAR_W): its lines from the list's left
-        edge, the list's lines (header first), the list's width, and each Session's status text, LAST
-        ACTIVE value and PROJECT label as roost works them out."""
+        """The Sessions tab in a window w wide (it has no sidebar): its lines from the list's left edge, the
+        list's lines (header first), the list's width, and each Session's status text, LAST ACTIVE value and
+        PROJECT label as roost works them out."""
         seen = {}
 
         async def look(pilot):
@@ -989,7 +988,7 @@ class SessionColumns(unittest.TestCase):
             seen["list"] = pilot.app.query_one(roost.SessionList).region.width
             seen["x"] = pilot.app.query_one(roost.SessionList).region.x
             seen["cells"] = {s["name"]: (ui.status_cell(s)[0], roost.ago(s), s.get("proj") or "") for s in ui.srows}
-        lines = self.run_on(projects, [open_view("Sessions"), look], size=(w + roost.SIDEBAR_W, 30), tab="Sessions", config=config).lines
+        lines = self.run_on(projects, [open_view("Sessions"), look], size=(w, 30), tab="Sessions", config=config).lines
         lines = [l[seen["x"]:] for l in lines]  # the list's part of each line
         h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
         edge = next(i for i in range(h + 1, len(lines)) if lines[i].strip() and set(lines[i].strip()) == {"─"})
@@ -1100,7 +1099,7 @@ class SessionColumns(unittest.TestCase):
         async def where(pilot):
             seen["x"] = pilot.app.query_one(roost.SessionList).region.x
         lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", CLOSED)), where], size=(160, 30), tab="Sessions").lines
-        lines = [l[seen["x"]:] for l in lines]  # the list's part of each line, right of the sidebar
+        lines = [l[seen["x"]:] for l in lines]  # the list's part of each line
         h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
         x = self.starts(lines[h])
         row = next(l for l in lines[h + 1:] if "Old printer audit" in l)

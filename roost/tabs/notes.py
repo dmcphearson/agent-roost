@@ -323,23 +323,22 @@ if Region:
                 out.append(row)
                 ui.nrow_y[y0 + i] = idx
                 hl = idx == ui.nsel
-                look = ui.selected if hl else (lambda a: a)
-                if hl:
-                    row.put(1, " " * list_w, look(0))
+                if hl:  # a bar at the list's left edge, green while the list has the keys
+                    row.put(1, "▌", ui.DIM if reading else ui.ACCENT)
                 if n.get("new"):
-                    row.put(3, "+ New note", look(ui.ACCENT | (curses.A_BOLD if hl else 0)))
-                    row.put(list_w - len("ctrl+n"), "ctrl+n", look(ui.pair(7)))  # as the key bar names it
+                    row.put(3, "+ New note", ui.ACCENT | (curses.A_BOLD if hl else 0))
+                    row.put(list_w - len("ctrl+n"), "ctrl+n", ui.pair(7))  # as the key bar names it
                     continue
                 if n.get("head"):  # as the Projects tab draws its section headers
                     label = f"{'▸' if n['head'] in ui.nfolded else '▾'} {n['head']} ({n['count']}) "
-                    row.put(3, label, look(curses.A_BOLD | (ui.ACCENT if n["head"] == "Backlog" else 0)))
+                    row.put(3, label, curses.A_BOLD | (ui.ACCENT if n["head"] == "Backlog" else 0))
                     if not hl:
                         row.rule(3 + len(label), list_w - 3 - len(label), ui.DIM)
                     continue
                 when = short_when(n["last"])
                 row.put(3, clip(n["name"], list_w - len(when) - 5),
-                        look(ui.ACCENT | curses.A_BOLD if hl and not reading else curses.A_BOLD if hl else 0))
-                row.put(list_w - len(when), when, look(ui.DIM))
+                        curses.A_BOLD if hl and reading else ui.picked(0) if hl else 0)
+                row.put(list_w - len(when), when, ui.DIM)
             if len(rows) == 1 and ui.nquery:
                 row = self.line()
                 row.put(3, "No note matches. esc clears it.", ui.DIM)

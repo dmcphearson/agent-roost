@@ -38,7 +38,7 @@ class Notes(unittest.TestCase):
         ui.term, ui.tab, ui.helping, ui.sel, ui.query, ui.warning = "ghostty", 2, False, 0, "", ""
         ui.nsel, ui.ntop, ui.nrow_y, ui.nquery, ui.quit_anyway, ui.nfolded = 0, 0, {}, "", False, {"Recaps"}
         ui.nreading, ui.nscroll, ui.npane, ui.nlist_w, ui.TABS = False, 0, (4, 40, 10, 40), 200, roost.UI.TABS
-        ui.focus = "pane"  # the Notes view shown (tab 2) and focused, so the keys go to it
+        ui.focus = "pane"  # the Notes tab shown (tab 2), so the keys go to it
         ui.edited = []
         ui.edit = lambda path: ui.edited.append(path)  # no editor in tests
         return ui
@@ -458,7 +458,7 @@ class NoteCardRendering(unittest.TestCase):
             return real(md, text)
         patches = [unittest.mock.patch.object(Markdown, "update", spy),
                    unittest.mock.patch.multiple(roost, read_config=lambda: {"tab": "Notes"})]
-        steps = [open_view("Notes")] + list(steps)  # roost starts on the sidebar's Notes entry: the keys go to its pane
+        steps = [open_view("Notes")] + list(steps)  # roost starts on the Notes tab, as remembered
         if settle is not None:
             # in the module that defines it; create: before the fix there's none, and the test fails on what the card does
             patches.append(unittest.mock.patch.object(importlib.import_module("roost.tabs.notes"), "NOTE_SETTLE", settle, create=True))
@@ -560,3 +560,80 @@ class NoteCardRendering(unittest.TestCase):
         self.assertEqual(seen["moved"][0], seen["start"][0], "the card rendered before the selection settled")
         self.assertEqual(seen["settled"][0], seen["start"][0] + 1)
         self.assertIn("Body of note 2", seen["settled"][1])
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class NoteListLook(unittest.TestCase):
+    """The Notes list on a real screen, with the keys in the list: the selected note's row has no background
+    fill; a green ▌ at the list's left edge marks it, and its name is bold green."""
+    setUp = TextualScreens.setUp
+    keys = staticmethod(TextualScreens.keys)
+
+    def run_notes(self, steps):
+        import unittest.mock
+        now = time.time()
+        for i, title in enumerate(("Printer idea", "Laptop idea", "Toner idea")):
+            path = roost.create_note(title, body="first line")
+            os.utime(path, (now - (i + 1) * 60, now - (i + 1) * 60))
+        with unittest.mock.patch.multiple(roost, read_config=lambda: {"tab": "Notes"}):
+            return TextualScreens.run_app(self, [open_view("Notes")] + list(steps), size=(120, 40))
+
+    @staticmethod
+    def rows(seen, label):
+        """A step that keeps, under label: the selected note's name, and for each note row on screen its line,
+        its name's styles, its ▌ marks, and its background colors across the list."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            app, ui = pilot.app, pilot.app.ui
+            box = app.query_one(roost.NoteList).region
+            lines, out = screen_text(app), {}
+            for y, idx in ui.nrow_y.items():
+                r = ui.nrows[idx]
+                if r.get("new") or r.get("head"):
+                    continue
+                x = lines[y].index(r["name"], box.x)
+                out[r["name"]] = {"line": lines[y][box.x:box.right], "name_x": x,
+                                  "name": [style_at(app, y, x + i) for i in range(len(r["name"]))],
+                                  "bars": [(i, color_of(style_at(app, y, i))) for i in range(box.x, box.right) if lines[y][i:i + 1] == "▌"],
+                                  "first": next((i for i in range(box.x, box.right) if lines[y][i:i + 1].strip()), None),
+                                  "fills": backgrounds(app, y, box.x, box.right)}
+            seen[label] = (ui.nrows[ui.nsel].get("name"), ui.nreading, out)
+        return step
+
+    def test_the_selected_note_has_no_fill_a_green_bar_at_the_lists_left_edge_and_a_bold_green_name(self):
+        seen = {}
+        self.run_notes([self.rows(seen, "first"), self.keys("down"), self.rows(seen, "second")])
+        green = roost.GREEN.lower()
+        self.assertNotEqual(seen["first"][0], seen["second"][0], "the fixture: ↓ moved to another note")
+        for when in ("first", "second"):
+            sel, reading, out = seen[when]
+            with self.subTest(selected=sel):
+                self.assertFalse(reading, "the fixture: the keys are in the list")
+                got = out[sel]
+                self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+                self.assertEqual(len(got["bars"]), 1, got["line"])
+                bx, color = got["bars"][0]
+                self.assertEqual(color, green, "the ▌ is green")
+                self.assertEqual(bx, got["first"], f"the ▌ is the first thing on the row, at the list's left: {got['line']!r}")
+                self.assertLess(bx, got["name_x"])
+                self.assertTrue(all(st and st.bold and color_of(st) == green for st in got["name"]), "the name is bold green")
+                for name, other in out.items():
+                    if name != sel:
+                        self.assertEqual(other["bars"], [], f"{name} has no ▌")
+                        self.assertFalse([st for st in other["name"] if color_of(st) == green], f"{name} isn't green")
+
+    def test_while_reading_the_selected_note_keeps_a_dim_bar_and_a_bold_name_that_isnt_green(self):
+        seen = {}
+        self.run_notes([self.keys("right"), self.rows(seen, "reading")])
+        sel, reading, out = seen["reading"]
+        muted, green = roost.MUTED.lower(), roost.GREEN.lower()
+        self.assertTrue(reading, "the fixture: → reads the note, the keys in the card")
+        got = out[sel]
+        self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+        self.assertEqual(len(got["bars"]), 1, got["line"])
+        bx, color = got["bars"][0]
+        self.assertEqual(color, muted, "the ▌ is dim while reading")
+        self.assertEqual(bx, got["first"], f"the ▌ is the first thing on the row: {got['line']!r}")
+        self.assertTrue(all(st and st.bold for st in got["name"]), "the name is bold")
+        self.assertFalse([st for st in got["name"] if color_of(st) == green], "the name isn't green while reading")

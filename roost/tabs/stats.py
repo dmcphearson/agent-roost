@@ -7,7 +7,6 @@ from roost.core import projectdata
 from roost.core.projectdata import plural
 from roost.core import statsdata
 from roost.core.formatting import clip
-from roost.app.shell import SIDEBAR_W
 
 try:
     from rich.text import Text
@@ -164,7 +163,7 @@ if Static:
             if not v:
                 return t
             today, days = v["today"], v["calendar"]
-            weeks = max(min((self.app.size.width - SIDEBAR_W - 70) // 2, 53), 4)  # Facts sits beside it, in the right pane
+            weeks = max(min((self.app.size.width - 70) // 2, 53), 4)  # Facts sits beside it
             if days:  # no further back than the first day with spend, but at least 13 weeks
                 first_day = date.fromisoformat(min(days))
                 weeks = min(weeks, max((today - first_day).days // 7 + 2, 13))
@@ -380,12 +379,16 @@ if Static:
             super().watch_scroll_y(old, new)
             self.app.ui.sscroll = round(new)
     class StatsPage(Vertical):
-        """The Stats tab: the search row, then StatsView."""
+        """The Stats tab: the search row while a project search is typed or set, then StatsView."""
         def compose(self):
             yield SearchRow()
             yield StatsView()
 
         def settle(self):
+            ui = self.app.ui
+            shown = bool(ui.searching or ui.squery)
+            self.query_one(SearchRow).display = shown
+            self.query_one(StatsView).styles.margin = (0, 1, 1, 1) if shown else (1, 1, 1, 1)
             self.query_one(StatsView).settle()
 else:
     StatsView = StatsPage = None

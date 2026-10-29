@@ -35,6 +35,7 @@ from roost.core import terminals
 if Widget:
     from textual.containers import Vertical
     from roost.app.widgets import Region, wren_below
+    from roost.tabs.unfiled import UnfiledList
 else:
     Region = None
 
@@ -96,8 +97,12 @@ class SessionsTab:
             x["projids"] = [i for q in self.all_projects() if ids & set(q["sessions"]) for i in (q["id"], q.get("parent")) if i]
             x["dismissed"] = x["id"] in dismissed and x["state"] == "closed"
         self.wrapping = self.summarizing()  # the Wrapping up section, fixed for this draw
-        rows = self.srows = visible(self.sessions, self.view, self.query, self.sort, self.wrapping)
-        self.sel = max(0, min(self.sel, len(rows) - 1))
+        if VIEWS[self.view] == "Unfiled":  # its own list (roost.tabs.unfiled)
+            self.srows = []
+            rows = self.draw_unfiled()
+        else:
+            rows = self.srows = visible(self.sessions, self.view, self.query, self.sort, self.wrapping)
+        self.sel = max(0, min(self.sel, len(self.srows) - 1))
         live = sum(s["state"] != "closed" for s in self.sessions)
         waiting = sum(s["state"] in ("waiting", "blocked") for s in self.sessions)
         self.corner = (f"{live} live · {waiting} need you · {len(self.sessions)} in 90 days", self.DIM)
@@ -320,7 +325,7 @@ class SessionsTab:
         self.refresh()
 
     SESSIONS_HELP = [
-        ("Views", "←→ Running · Closed (newest first)"),
+        ("Views", "←→ Running · Closed (newest first) · Unfiled: the Sessions no project lists, and loose notes, to add to a project, make one, or let go"),
         ("Sort", "click a column header to sort by it, again to reverse"),
         ("Status", "● working · ◆ needs input · ○ idle · ◔ expires in 8m: next prompt cheap 8 more min · ✕ cache expired: costs ~2× · ○ compacted: small again · ✓ wrapped up: its Handoff or recap has it all"),
     ]
@@ -505,12 +510,15 @@ class SessionsTab:
         return self.ask_project(s["name"], s["name"], made)
 
     def keys_sessions(self, k, rows):
+        unfiled = VIEWS[getattr(self, "view", 0)] == "Unfiled"  # a stand-in UI may have no view
         if isinstance(k, tuple):
             _, mx, my, bstate = k
             if my == getattr(self, "view_row_y", 2) and bstate & CLICK:
                 for x0, x1, i in self.tabs:
                     if x0 <= mx < x1:
                         self.view, self.sel, self.top = i, 0, 0
+            elif unfiled:
+                return self.keys_unfiled(k, rows)
             elif my == self.list_top and bstate & CLICK:
                 for x0, x1, title in self.col_x:
                     if x0 <= mx <= x1:
@@ -529,6 +537,12 @@ class SessionsTab:
                     return fn() if fn else None
             self.sel = max(0, min(self.sel, len(rows) - 1))
             return None
+        if k in ("right", "left"):
+            self.view = (self.view + (1 if k == "right" else -1)) % len(VIEWS)
+            self.sel = self.top = self.usel = self.utop = 0
+            return None
+        if unfiled:
+            return self.keys_unfiled(k, rows)
         to = self.move(k, self.sel, len(rows))
         if to is not None:
             self.sel = to
@@ -550,13 +564,15 @@ if Region:
             row, x, ui.tabs = self.line(), TAB_X - 1, []  # each view's label starts with a space, as the tab names do
             ui.view_row_y, x0 = self.region.y, self.region.x
             for i, label in enumerate(VIEWS):
-                count = sum(in_view(s, i, ui.summarizing()) and matches(s, ui.query) for s in ui.sessions)
+                count = (len(ui.unfiled()) if label == "Unfiled" else
+                         sum(in_view(s, i, ui.summarizing()) and matches(s, ui.query) for s in ui.sessions))
                 tab = f" {label} ({count}) "  # a count in ( ), as the Projects sections show theirs
                 ui.tabs.append((x0 + x, x0 + x + len(tab), i))  # in the screen's columns, as a click gives them
                 row.put(x, tab, curses.A_REVERSE | curses.A_BOLD if i == ui.view else ui.DIM)
                 x += len(tab) + 1
-            if ui.searching or ui.query:
-                row.put(x + 2, f"/ {ui.query}" + ("▏" if ui.searching else ""), ui.ACCENT if ui.searching else ui.DIM)
+            query = getattr(ui, ui.query_attr())
+            if ui.searching or query:
+                row.put(x + 2, f"/ {query}" + ("▏" if ui.searching else ""), ui.ACCENT if ui.searching else ui.DIM)
             return [row]
 
     class SessionList(Region):
@@ -597,19 +613,17 @@ if Region:
                 idx, s = val, rows[val]
                 ui.row_y[y] = idx
                 hl = idx == ui.sel
-                look = ui.selected if hl else (lambda a: a)
                 row = self.line()
                 if hl:
-                    row.put(1, " " * (w - 2), look(0))
-                    row.put(1, "›", look(curses.A_BOLD | ui.ACCENT))
+                    row.put(1, "›", curses.A_BOLD | ui.ACCENT)
                 text, attr = ui.status_cell(s)
                 done = s["state"] == "closed" and ui.wrapped(s)  # never re-read, so its size costs nothing
-                cells = {"NAME": (shown_name(s), look(curses.A_BOLD if hl or group(s) == 0 else 0)),
-                         "STATUS": (text, look(attr)),
-                         "LAST ACTIVE": (ago(s), look(0)),
+                cells = {"NAME": (shown_name(s), ui.picked(0) if hl else curses.A_BOLD if group(s) == 0 else 0),
+                         "STATUS": (text, attr),
+                         "LAST ACTIVE": (ago(s), 0),
                          # right-aligned under the word CONTEXT, so the sizes line up
-                         "CONTEXT": (("—" if done else ktok(s["tokens"])).rjust(len("CONTEXT")), look(ui.DIM if done else 0)),
-                         "PROJECT": (s.get("proj") or "", look(0))}  # its folder is in the panel
+                         "CONTEXT": (("—" if done else ktok(s["tokens"])).rjust(len("CONTEXT")), ui.DIM if done else 0),
+                         "PROJECT": (s.get("proj") or "", 0)}  # its folder is in the panel
                 cx = 5
                 for title, cw in cols.items():
                     if cw:
@@ -675,11 +689,19 @@ if Region:
         SessionsView ViewRow { height: 1; margin: 1 0 1 0; }
         SessionsView SessionList { height: 1fr; }
         SessionsView SessionPanel { height: 10; }
+        SessionsView UnfiledList { height: 1fr; }
         """
 
         def compose(self):
             yield ViewRow()
             yield SessionList()
             yield SessionPanel()
+            yield UnfiledList()
+
+        def settle(self):
+            """The Unfiled view shows its own list in place of the Sessions table and panel."""
+            unfiled = VIEWS[self.app.ui.view] == "Unfiled"
+            self.query_one(SessionList).display = self.query_one(SessionPanel).display = not unfiled
+            self.query_one(UnfiledList).display = unfiled
 else:
     SessionsView = None

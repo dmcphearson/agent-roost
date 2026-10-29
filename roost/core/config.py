@@ -16,7 +16,7 @@ JOBS = Path.home() / ".claude" / "jobs"
 PINS = JOBS / "pins.json"
 HOME = str(Path.home())
 TITLE_KEYS = ('"agent-name"', '"custom-title"', '"ai-title"')
-VIEWS = ["Running", "Closed"]
+VIEWS = ["Running", "Closed", "Unfiled"]  # the Sessions tab's views; Unfiled lists from roost.tabs.unfiled
 STATE_ORDER = {"waiting": 0, "blocked": 0, "busy": 1, "opening": 1, "watching": 2, "idle": 2, "live": 2, "closed": 3}
 
 
