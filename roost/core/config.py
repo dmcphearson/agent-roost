@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 
-VERSION = "2026.10.25"
+VERSION = "2026.10.29"
 TESTED_CLAUDE = "2.1.291"  # newest Claude Code release roost has been checked against
 AGENT_KEYS = {"id", "kind", "name", "pid", "sessionId", "state", "status"}  # fields roost reads
 LOG = Path.home() / ".cache" / "roost.log"
@@ -16,8 +16,7 @@ JOBS = Path.home() / ".claude" / "jobs"
 PINS = JOBS / "pins.json"
 HOME = str(Path.home())
 TITLE_KEYS = ('"agent-name"', '"custom-title"', '"ai-title"')
-VIEWS = ["Running", "Recently closed", "Closed", "Stale", "All"]
-RECENT_HOURS = 3
+VIEWS = ["Running", "Closed", "Unfiled"]  # the Sessions tab's views; Unfiled lists from roost.tabs.unfiled
 STATE_ORDER = {"waiting": 0, "blocked": 0, "busy": 1, "opening": 1, "watching": 2, "idle": 2, "live": 2, "closed": 3}
 
 

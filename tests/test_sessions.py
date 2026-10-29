@@ -1,6 +1,6 @@
 from support import *  # noqa: F401,F403 (the shared namespace, helpers, and fixtures)
 from support import _SCRATCH, own_tests  # noqa: F401
-from test_projects import Projects, ProjectRows  # for their helpers; their tests run in test_projects.py
+from test_projects import Projects, ProjectRows, SubProjects  # for their helpers; their tests run in test_projects.py
 from test_screens import TextualScreens  # for its helpers; its tests run in test_screens.py
 
 load_tests = own_tests(__name__)
@@ -25,24 +25,69 @@ class Sections(unittest.TestCase):
         rows = [session("zeta", kind="interactive"), session("alpha"), session("mid", pinned=True)]
         for col in roost.SORTS:
             for desc in (False, True):
-                got = roost.visible(rows, ALL, "", (col, desc))
+                got = roost.visible(rows, RUNNING, "", (col, desc))  # all three are running
                 self.assertEqual([roost.group(s) for s in got], sorted(roost.group(s) for s in got), (col, desc))
 
 
 class Sorting(unittest.TestCase):
     def test_default_is_most_recent_first(self):
-        rows = roost.visible([session("old", mins=50), session("new", mins=1)], ALL, "")
+        rows = roost.visible([session("old", mins=50), session("new", mins=1)], RUNNING, "")
         self.assertEqual([s["name"] for s in rows], ["new", "old"])
 
     def test_sort_by_context_descending(self):
         rows = [session("small", tokens=10), session("big", tokens=900)]
-        got = roost.visible(rows, ALL, "", ("CONTEXT", True))
+        got = roost.visible(rows, RUNNING, "", ("CONTEXT", True))
         self.assertEqual([s["name"] for s in got], ["big", "small"])
 
     def test_sort_by_name_ascending_ignores_case(self):
         rows = [session("bravo"), session("Alpha")]
-        got = roost.visible(rows, ALL, "", ("NAME", False))
+        got = roost.visible(rows, RUNNING, "", ("NAME", False))
         self.assertEqual([s["name"] for s in got], ["Alpha", "bravo"])
+
+
+class Views(unittest.TestCase):
+    """The Sessions entry is a simple history: Running and Closed, and nothing else."""
+    def test_the_views_are_running_then_closed_then_unfiled(self):
+        self.assertEqual(roost.VIEWS, ["Running", "Closed", "Unfiled"])
+
+    def test_every_session_is_in_exactly_one_view(self):
+        """Running: every Session that isn't closed, and one roost is wrapping up (keep). Closed: every
+        other closed Session, however long ago it closed and however big it is."""
+        now = time.time()
+        rows = [session("idle"), session("asks", state="waiting"), session("works", state="busy"),
+                dict(session("wrapping", state="closed", kind=None), id="keep-0000"),
+                session("just closed", state="closed", kind=None),
+                session("closed weeks ago", state="closed", kind=None, mins=60 * 24 * 40),
+                dict(session("big and cold", state="closed", kind=None, tokens=900_000), last=now - 9 * 86400)]
+        keep = {"keep-0000"}
+        running, closed = roost.VIEWS.index("Running"), roost.VIEWS.index("Closed")
+        for s in rows:
+            views = [roost.VIEWS[i] for i in range(len(roost.VIEWS)) if roost.in_view(s, i, keep)]
+            want = "Closed" if s["state"] == "closed" and s["id"] not in keep else "Running"
+            self.assertEqual(views, [want], s["name"])
+        self.assertEqual({s["name"] for s in roost.visible(rows, running, "", keep=keep)}, {"idle", "asks", "works", "wrapping"})
+        self.assertEqual({s["name"] for s in roost.visible(rows, closed, "", keep=keep)},
+                         {"just closed", "closed weeks ago", "big and cold"})
+
+    def test_closed_lists_newest_first_under_the_default_sort(self):
+        rows = [session("middle", state="closed", kind=None, mins=60 * 24 * 3),
+                session("newest", state="closed", kind=None, mins=5),
+                session("oldest", state="closed", kind=None, mins=60 * 24 * 30), session("running", mins=1)]
+        got = roost.visible(rows, roost.VIEWS.index("Closed"), "")
+        self.assertEqual([s["name"] for s in got], ["newest", "middle", "oldest"])
+
+    def starting_view(self, sessions):
+        """The view setup() opens Sessions on, by its label."""
+        import unittest.mock
+        ui = object.__new__(roost.UI)
+        with unittest.mock.patch.multiple(roost, read_config=lambda: {}):
+            ui.setup(sessions, "")
+        return roost.VIEWS[ui.view]
+
+    def test_roost_opens_sessions_on_running_when_one_is_running_else_on_closed(self):
+        closed = [session("gone", state="closed", kind=None), session("long gone", state="closed", kind=None, mins=60 * 24 * 20)]
+        self.assertEqual(self.starting_view(closed + [session("live", state="waiting")]), "Running")
+        self.assertEqual(self.starting_view(closed), "Closed")
 
 
 class Search(unittest.TestCase):
@@ -261,15 +306,9 @@ class Governor(unittest.TestCase):
         closed = self.sess(id="old", state="closed", kind=None, last=now - 120)
         self.assertEqual(roost.SECTIONS[roost.group(wrapping, keep={"abc"})], "Wrapping up")
         self.assertEqual(roost.SECTIONS[roost.group(wrapping)], "Closed")  # once the run ends, it moves to Closed
-        rows = roost.visible([wrapping, bg, closed], ALL, "", keep={"abc"})
-        self.assertEqual([s["id"] for s in rows], ["bg", "old", "abc"])
+        rows = roost.visible([wrapping, bg, closed], CLOSED, "", keep={"abc"})
+        self.assertEqual([s["id"] for s in rows], ["old"])  # while roost wraps it up it counts as running, not closed
         self.assertEqual([s["id"] for s in roost.visible([wrapping, bg, closed], RUNNING, "", keep={"abc"})], ["bg", "abc"])
-
-    def test_stale_tab(self):
-        i = roost.VIEWS.index("Stale")
-        old = time.time() - 3 * 86400
-        self.assertTrue(roost.in_view(self.sess(last=old), i))
-        self.assertFalse(roost.in_view(self.sess(last=time.time()), i))
 
     def test_parse_reads_cache_lifetime_and_times(self):
         recs = [{"type": "user", "uuid": "u1", "timestamp": "2026-10-06T10:00:00.000Z"},
@@ -463,7 +502,8 @@ class StartingSessions(unittest.TestCase):
 
     def open_here(self, ui):
         """Enter on the Sessions tab's only Session, then enter on Open here, through dispatch."""
-        ui.tab, ui.view, ui.top, ui.quit_anyway = 1, 0, 0, False
+        ui.tab, ui.view, ui.top, ui.quit_anyway = [t.name for t in ui.TABS].index("Sessions"), 0, 0, False
+        ui.focus = "pane"  # the Sessions view focused, so enter goes to it
         ui.dispatch("enter", ui.sessions)
         opts = ui.choosing["options"]
         ui.choosing["sel"] = next(i for i, (l, _) in enumerate(opts) if l == "Open here")
@@ -482,7 +522,7 @@ class StartingSessions(unittest.TestCase):
         repo = Path(self.tmp.name) / "my repo"  # a space: the folder comes out quoted
         repo.mkdir()
         ui = self.ui(term=None)
-        ui.quit_anyway, ui.psel = False, 1
+        ui.quit_anyway, ui.psel = False, 0  # the project: no header above it
         ui.sessions = [dict(session("Mine", cwd=str(repo)), id="aa1b9a71-0000", home=str(repo))]
         ui.load_projects()
         ide, clip = self.in_ide("vscode")
@@ -539,7 +579,7 @@ class StartingSessions(unittest.TestCase):
     def test_s_starts_in_the_only_folder_or_asks_which(self):
         folder = self.project("p", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
         ui = self.ui()
-        ui.psel = 1
+        ui.psel = 0  # the project: no header above it
         act(ui, ui.keys_projects, ui.project_rows(), "Start a Session")
         self.assertEqual((len(self.scripts), ui.choosing), (1, None))
         repo = Path(self.tmp.name) / "repo"
@@ -555,7 +595,7 @@ class StartingSessions(unittest.TestCase):
     def test_s_on_a_closed_project_starts_nothing(self):
         self.project("p", README.replace("status: active", "status: closed"))
         ui = self.ui()
-        ui.folded.discard("Closed")
+        ui.pquery = "title"  # closed: only a search lists it in the sidebar
         rows = ui.project_rows()
         ui.psel = next(i for i, r in enumerate(rows) if r.kind == "project")
         self.assertNotIn("Start a Session", labels(ui, ui.keys_projects, rows))
@@ -615,18 +655,19 @@ class StartingSessions(unittest.TestCase):
             ui.sessions = [dict(session("Live"), id="aa1b9a71-0000"), dict(session("Old", state="closed", kind=None, mins=60), id="bb2c0000-0000")]
             ui.load_projects()
             rows = ui.project_rows()
-            ui.psel = 1
-            self.assertFalse([a for a in labels(ui, ui.keys_projects, rows) if a.startswith(("Stop", "Delete"))])
+            ui.psel = 0  # the project: no header above it
+            self.assertFalse([a for a in labels(ui, ui.keys_projects, rows)  # no Session Stop or Delete: the project's own Delete is allowed
+                              if a.startswith(("Stop", "Delete")) and a != "Delete"])
             live, old = 0, 1  # on the Sessions tab: the Projects tab lists no Sessions
             ui.sel = live
-            act(ui, ui.keys_sessions, ui.sessions, "Stop…")
+            act(ui, ui.keys_sessions, ui.sessions, "Stop")
             self.assertTrue(ui.sessions_typing())
             ui.keys_confirm("n")  # any other key cancels
             self.assertEqual((did, ui.msg), ([], "Cancelled"))
-            act(ui, ui.keys_sessions, ui.sessions, "Stop…")
+            act(ui, ui.keys_sessions, ui.sessions, "Stop")
             ui.keys_confirm("y")
             ui.sel = old
-            act(ui, ui.keys_sessions, ui.sessions, "Delete to the Trash…")
+            act(ui, ui.keys_sessions, ui.sessions, "Delete to the Trash")
             ui.keys_confirm("y")
             self.assertEqual(did, [("stop", ui.sessions[0]["attach"]), ("delete", "Old")])
         finally:
@@ -661,9 +702,9 @@ class StartingSessions(unittest.TestCase):
         self.assertEqual(ui.asking["text"], "Printer Fix!")  # then the summary
         typed(ui, "\x15Fix the printers.\n")
         meta = roost.frontmatter((self.root / "printer-fix" / "README.md").read_text())
-        self.assertEqual((meta["summary"], meta["sessions"]), ("Fix the printers.", [{"name": "Printer Fix!", "id": "dd4e0000-0000"}]))
+        self.assertEqual((meta["description"], meta["sessions"]), ("Fix the printers.", [{"name": "Printer Fix!", "id": "dd4e0000-0000"}]))
         self.assertEqual(offered, ui.sessions)  # its first Handoff, after the cost is shown
-        self.assertNotIn("New project from this Session…", labels(ui, ui.keys_sessions, ui.sessions))
+        self.assertNotIn("New project from this Session", labels(ui, ui.keys_sessions, ui.sessions))
         # a Session open in a window writes its own Handoff with /wrap-up
         ui.sessions = [dict(session("Other", kind="interactive"), id="ee5f0000-0000")]
         act(ui, ui.keys_sessions, ui.sessions, "New project from this Session")
@@ -719,6 +760,73 @@ class StartingSessions(unittest.TestCase):
         self.assertIn("--session ${CLAUDE_SESSION_ID}", skill)
         self.assertIn("roost project list", skill)
         self.assertEqual(json.loads((ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text())["name"], "roost")
+
+
+class SubProjectSessions(unittest.TestCase):
+    """A Session listed in a sub-project belongs to it: its project, its menu, project: search, and
+    Add to a project / Move to another project."""
+    setUp, tearDown, project, ui = StartingSessions.setUp, StartingSessions.tearDown, StartingSessions.project, StartingSessions.ui
+    sub = SubProjects.sub
+
+    def fixture(self):
+        """Project rollout (listing aa1b9a71-0000) with sub-project alpha (listing cc3d0000-1111), done gamma;
+        project other. Sessions: the sub-project's, the parent's, and a loose one."""
+        self.project("rollout", "---\nsummary: Rollout work.\nstatus: active\nsessions:\n  - name: Parent one\n"
+                                "    id: aa1b9a71-0000\n---\n\n# Rollout\n")
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n")
+        self.alpha = self.sub("rollout", "alpha", "feature", "active", "Badge printers.", [("Sub one", "cc3d0000-1111")])
+        self.sub("rollout", "gamma", "research", "done", "Old survey.")
+        ui = self.ui()
+        ui.sessions = [dict(session("Sub one"), id="cc3d0000-1111"), dict(session("Parent one"), id="aa1b9a71-0000"),
+                       dict(session("Loose"), id="dd4e0000-0000")]
+        ui.load_projects()
+        return ui
+
+    def test_a_session_listed_in_a_sub_project_belongs_to_it(self):
+        ui = self.fixture()
+        p = ui.project_of(ui.sessions[0])
+        self.assertIsNotNone(p)
+        self.assertEqual(p["id"], "rollout/alpha")
+        self.assertEqual(ui.project_of(ui.sessions[1])["id"], "rollout")
+        ui.sel = 0
+        acts = labels(ui, ui.keys_sessions, ui.sessions)
+        self.assertTrue([l for l in acts if l.startswith("Write its Handoff from the transcript")], acts)
+        self.assertFalse([l for l in acts if l.startswith("Write its Session recap")], acts)
+
+    def test_project_search_matches_a_sub_projects_sessions_by_its_id_or_its_parents(self):
+        ui = self.fixture()
+        ui.view, ui.sort, ui.summaries, ui.update_note, ui.warning = RUNNING, ("LAST ACTIVE", True), {}, "", ""  # the fixture's are all running
+        ui.DIM = ui.GREEN = ui.YELLOW = ui.RED = ui.CYAN = ui.ACCENT = 0
+        ui.scr = type("Screen", (), {"getmaxyx": lambda self: (40, 120)})()  # draw_sessions only asks its size
+        for q, want in [("project:rollout/alpha", {"cc3d0000-1111"}), ("project:rollout", {"cc3d0000-1111", "aa1b9a71-0000"})]:
+            ui.query = q
+            ui.draw_sessions()
+            self.assertEqual({s["id"] for s in ui.srows}, want, q)
+
+    def test_add_to_a_project_offers_open_sub_projects_and_lists_the_session_in_one(self):
+        ui = self.fixture()
+        ui.sel = 2  # Loose
+        act(ui, ui.keys_sessions, ui.sessions, "Add to a project")
+        opts = [l for l, _ in ui.choice_options()]
+        for pid in ("rollout", "other", "rollout/alpha"):  # rollout is labeled by its heading, Rollout
+            self.assertTrue([l for l in opts if pid in l.lower()], (pid, opts))
+        self.assertFalse([l for l in opts if "gamma" in l], opts)  # done: not offered
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "rollout/alpha" in l)
+        ui.keys_choice("enter")
+        listed = [x["id"] for x in roost.frontmatter((self.alpha / "README.md").read_text())["sessions"]]
+        self.assertEqual(listed, ["cc3d0000-1111", "dd4e0000-0000"])
+
+    def test_move_to_another_project_offers_open_sub_projects(self):
+        ui = self.fixture()
+        ui.sel = 1  # Parent one, in rollout
+        act(ui, ui.keys_sessions, ui.sessions, "Move to another project")
+        opts = [l for l, _ in ui.choice_options()]
+        self.assertTrue([l for l in opts if "rollout/alpha" in l], opts)
+        ui.choosing["sel"] = next(i for i, l in enumerate(opts) if "rollout/alpha" in l)
+        ui.keys_choice("enter")
+        listed = [x["id"] for x in roost.frontmatter((self.alpha / "README.md").read_text())["sessions"]]
+        self.assertEqual(listed, ["cc3d0000-1111", "aa1b9a71-0000"])
+        self.assertEqual(roost.frontmatter((self.root / "rollout" / "README.md").read_text())["sessions"], [])
 
 
 class Dismissing(unittest.TestCase):
@@ -809,6 +917,45 @@ class Dismissing(unittest.TestCase):
         self.assertNotIn("Undismiss", acts)
 
 
+class SessionMenuGroups(unittest.TestCase):
+    """A Session's actions, in groups split by dividers (| here): work on it, organize it, then stop or delete it."""
+    project, ui, fresh, acts = StartingSessions.project, StartingSessions.ui, Dismissing.fresh, Dismissing.acts
+    setUp = Dismissing.setUp
+
+    def fixture(self):
+        """Dismissing's: project p, Live (idle in the background, in p), and Loose (closed, no project);
+        plus project other, so each can go to a project."""
+        Dismissing.fixture(self)
+        self.project("other", "---\nsummary: Other work.\nstatus: active\nsessions: []\n---\n")
+        return self.fresh()
+
+    def test_a_live_background_sessions_actions_in_groups(self):
+        ui = self.fixture()
+        self.assertEqual(self.acts(ui, "Live"),
+                         ["Open in a new window", "Write its Handoff from the transcript", "Ask what to do with it",
+                          "Pin: keep it running when idle", DIV,
+                          "Move to another project", "Rename", "Copy its id", "Show its folder in Finder", DIV,
+                          "Stop"])
+
+    def test_a_closed_sessions_actions_in_groups(self):
+        ui = self.fixture()
+        self.assertEqual(self.acts(ui, "Loose"),
+                         ["Open in a new window", "Write its Session recap from the transcript", "Ask what to do with it",
+                          "Restart in the background, pinned", DIV,
+                          "New project from this Session", "Add to a project", "Rename", "Dismiss", "Copy its id",
+                          "Show its folder in Finder", DIV,
+                          "Delete to the Trash"])
+
+
+    def test_no_action_label_has_an_ellipsis(self):
+        """A menu label is just its action's name: none ends in, or holds, "…". Rows: a live background
+        Session in a project, and a closed Session in no project."""
+        ui = self.fixture()
+        for name in ("Live", "Loose"):
+            real = [a for a in self.acts(ui, name) if a != DIV]
+            self.assertTrue(real, name)
+            self.assertEqual([a for a in real if "…" in a], [], name)
+
 class SessionColumns(unittest.TestCase):
     """The Sessions tab's columns scale with the window, read off the drawn header and rows. NAME
     starts at column 5; then STATUS, LAST ACTIVE, CONTEXT, PROJECT."""
@@ -827,8 +974,9 @@ class SessionColumns(unittest.TestCase):
         return [self.proj("p1", self.sessions[:2], label=label)]
 
     def drawn(self, projects, w, sort=None, config=None):
-        """The Sessions tab w wide: its lines, the list's lines (header first), the list's width, and
-        each Session's status text, LAST ACTIVE value and PROJECT label as roost works them out."""
+        """The Sessions tab in a window w wide (it has no sidebar): its lines from the list's left edge, the
+        list's lines (header first), the list's width, and each Session's status text, LAST ACTIVE value and
+        PROJECT label as roost works them out."""
         seen = {}
 
         async def look(pilot):
@@ -838,8 +986,10 @@ class SessionColumns(unittest.TestCase):
             pilot.app.redraw()
             await pilot.pause()
             seen["list"] = pilot.app.query_one(roost.SessionList).region.width
+            seen["x"] = pilot.app.query_one(roost.SessionList).region.x
             seen["cells"] = {s["name"]: (ui.status_cell(s)[0], roost.ago(s), s.get("proj") or "") for s in ui.srows}
-        lines = self.run_on(projects, [look], size=(w, 30), tab="Sessions", config=config).lines
+        lines = self.run_on(projects, [open_view("Sessions"), look], size=(w, 30), tab="Sessions", config=config).lines
+        lines = [l[seen["x"]:] for l in lines]  # the list's part of each line
         h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
         edge = next(i for i in range(h + 1, len(lines)) if lines[i].strip() and set(lines[i].strip()) == {"─"})
         return lines[h:edge], seen["list"], seen["cells"]
@@ -944,7 +1094,12 @@ class SessionColumns(unittest.TestCase):
         old = dict(session("Old printer audit", state="closed", kind=None, mins=120), attach=None)
         self.sessions = self.sessions + [old]
         proj = self.proj("printer-fleet", [old], covered=[old])
-        lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", ALL))], size=(160, 30), tab="Sessions").lines
+        seen = {}
+
+        async def where(pilot):
+            seen["x"] = pilot.app.query_one(roost.SessionList).region.x
+        lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", CLOSED)), where], size=(160, 30), tab="Sessions").lines
+        lines = [l[seen["x"]:] for l in lines]  # the list's part of each line
         h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
         x = self.starts(lines[h])
         row = next(l for l in lines[h + 1:] if "Old printer audit" in l)

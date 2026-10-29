@@ -3,7 +3,7 @@ import curses, time, traceback
 
 from roost.app.shell import QUIT
 from roost.app.ui import UI
-from roost.app.widgets import (BG, BLUE, CARD, FAINT, GREEN, GREEN_BG, LINE, MIN_SIZE, MUTED, PAIRS, RAISED, RED,
+from roost.app.widgets import (BG, BLUE, CARD, FAINT, GREEN, LINE, MIN_SIZE, MUTED, PAIRS, RAISED, RED,
                                TEXT, YELLOW, Widget)
 from roost.core import config
 
@@ -21,7 +21,9 @@ if Widget:
     from textual.screen import Screen
     from textual.containers import Horizontal, Vertical
     from textual.widgets import Input, Label
-    from roost.app.widgets import AlertBox, ConfirmBox, HelpBox, KeyBar, Menu, Region, TooSmall, TopBar
+    from roost.app.widgets import AlertBox, ConfirmBox, HelpBox, KeyBar, Menu, Region, StatusBar, TooSmall, TopBar
+    from roost.app.shell import SIDEBAR_W
+    from roost.tabs.projects import ProjectList
 else:  # the CLI commands need none of it; main() says how to get it
     App = None
 
@@ -43,7 +45,7 @@ class TextualUI(UI):
         self.app, self.scr = app, Size(app)
         self.setup(sessions, query)
         self.GREEN, self.YELLOW, self.CYAN, self.RED, self.ACCENT = (self.pair(i) for i in range(1, 6))
-        self.DIM = self.pair(6)
+        self.DIM, self.FAINT = self.pair(6), self.pair(7)
         self.status = {k: self.pair(i) for i, k in enumerate(
             ["working", "idle", "input", "expiring", "expired", "opening", "compacted"], 20)}
         self.styles = {}
@@ -181,7 +183,10 @@ if Widget:
         # the app's CSS, so it wins over the Textual widgets' own
         CSS = """
         Screen { background: ansi_default; layers: base over top; }
-        TopBar { height: 1; }
+        TopBar { height: 3; }  /* the tabs, a blank row, a rule; each view's own blank row follows */
+        #body { height: 1fr; }
+        #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 1 0 0 0; border-right: vkey #2c313a; }
+        #pane { width: 1fr; height: 100%; }
         KeyBar { height: 1; }
         Prompt { layer: top; position: absolute; display: none; background: #22262d; color: #d6dae0; height: auto; }
         Prompt.box { width: 64; border: edge #6bd968; border-title-color: #6bd968;
@@ -194,7 +199,7 @@ if Widget:
         Prompt Input:focus { border: none; }
         Prompt Label#hint { color: #8b929c; width: auto; }
         Prompt.line Label#hint { padding: 0 0 0 3; }
-        """
+        """.replace("SIDEBAR_W", str(SIDEBAR_W))
         ENABLE_COMMAND_PALETTE = False
 
         def __init__(self, sessions, query):
@@ -208,8 +213,12 @@ if Widget:
         def compose(self):
             yield Keys()
             yield TopBar()
-            for tab in self.ui.TABS:
-                yield tab.widget()
+            with Horizontal(id="body"):  # on Projects, the list and the details beside it; any other tab alone
+                yield ProjectList()
+                with Vertical(id="pane"):
+                    for tab in self.ui.TABS:
+                        yield tab.widget()
+            yield StatusBar()
             yield KeyBar()
             yield ConfirmBox()
             yield Prompt()
@@ -241,6 +250,7 @@ if Widget:
                 small.refresh()
                 return
             self.drawn = ui.draw()
+            self.query_one(ProjectList).display = ui.TABS[ui.tab].name == "Projects"  # the other tabs take the whole width
             for i, tab in enumerate(ui.TABS):
                 view = self.query_one(tab.widget)
                 view.display = i == ui.tab
@@ -250,6 +260,8 @@ if Widget:
                     for part in view.query(Region):
                         part.refresh()
             self.query_one(TopBar).refresh()
+            self.query_one(ProjectList).refresh()
+            self.query_one(StatusBar).refresh()
             bar = self.query_one(KeyBar)
             bar.styles.height = max(len(ui.bar[0]) if ui.bar else 1, 1)
             bar.refresh()

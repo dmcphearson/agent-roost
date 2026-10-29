@@ -1,12 +1,14 @@
 """The screens' shell: tabs, keys, menus, pickers, prompts, and the confirm and alert boxes."""
 import curses, os, re, subprocess, textwrap, threading, time
 from collections import namedtuple
+from pathlib import Path
 
 from roost.core.sessiondata import CACHE_WARN, cache_left, span, visible
-from roost.core.projectdata import clean_tags, label_of
+from roost.core.projectdata import clean_tags, label_of, plural
 from roost.core.plugin import plugin_version
 from roost.core.formatting import clip, short, slug
 from roost.core.summaries import run_cap
+from roost.core.config import VIEWS
 from roost.core import config
 from roost.core import sessiondata
 from roost.core import install
@@ -29,6 +31,17 @@ NOTE_SECTIONS = {"Backlog": "tagged backlog: ideas and maybe-projects",  # the N
                  "Notes": "everything else"}
 QUIT = object()  # what a key handler returns to close roost
 SAVE = object()  # the picker's Save row, when it ticks several
+DIVIDER = ("─", object())  # a line between an actions list's groups: shown, never picked
+
+
+def grouped(*groups):
+    """An actions list from its groups (work on it, organize it, delete it), a DIVIDER between them."""
+    return [a for g in groups if g for a in [DIVIDER] + list(g)][1:]
+
+
+def first_action(acts):
+    """The function of the first real action (what a double-click runs), or None."""
+    return next((fn for label, fn in acts if (label, fn) != DIVIDER), None)
 
 
 def printable(k):
@@ -36,7 +49,10 @@ def printable(k):
     return isinstance(k, str) and len(k) == 1 and k.isprintable()
 CLICK = curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON1_DOUBLE_CLICKED
 RIGHT_CLICK = curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED
-BAR_KEYS = "↑↓ move   ←→ views   enter actions   / search   ctrl+n new   tab switch tab   ? help   ctrl+q quit"
+BAR_KEYS = "↑↓ move   ←→ views   enter actions   / search   ctrl+n new   tab next tab   ? help   ctrl+q quit"
+LIST_KEYS = BAR_KEYS.replace("←→ views", "→ into details")  # the Projects tab, with the keys in its list
+DETAIL_KEYS = BAR_KEYS.replace("←→ views", "← back   page up/down scroll")  # and with them in a project's details
+SIDEBAR_W = 34  # the Projects tab's list; its details take the rest
 PIN = "\uf435"  # a pinned Session's mark: Nerd Font's pin (nf-oct-pin), which Ghostty ships
 TAB_X = 12  # where the first tab's name starts: the views and searches under the tabs line up with it
 SEARCH_KEYS = "type to search · enter keep it · esc clear"
@@ -44,9 +60,11 @@ NOTE_READ_KEYS = "↑↓ scroll   page up/down a screen   ← or esc back to the
 
 
 def start_tab(names):
-    """Index of the tab roost opens on: the last one used, if it still exists."""
+    """Index of the view roost opens on: the last one used, if it still exists."""
     last = config.read_config().get("tab")
     return names.index(last) if last in names else 0
+
+
 FAILED = re.compile(r"^(Couldn't|Can't|No editor found|Its folder no longer exists|Summary of .+ failed|Handoffs for .+ stopped)")
 REFUSED = re.compile(r"^(Wait for |It's working|It's open in a window|\d summaries are running|Its summary is already running|That's .+ work:|"
                      r"It's wrapped up:|.+ is closed$|.+ (is|are) running in it)|· no Handoff yet for ")
@@ -56,6 +74,7 @@ class Shell:
     """The screens' shell: what every tab shares. Each tab's module adds its own draw, keys, and actions (see roost.app.ui)."""
     reading, fresh, told = False, None, None  # a refresh's reads in a thread (see read_later)
     keys_seen = 0  # keys so far: a read that a key came during may be out of date
+    focus, dsel = "side", 0  # on the Projects tab, where keys go: its list ("side") or the details ("pane")
 
     def setup(self, sessions, query):
         """Everything the screens keep, read once at start: no terminal is touched."""
@@ -73,7 +92,8 @@ class Shell:
         self.alerting = None  # a failure, or why an action didn't run, shown as a box until a key
         names = [tab.name for tab in self.TABS]
         self.tab = names.index("Sessions") if query else start_tab(names)  # a search is for Sessions
-        self.psel, self.ptop, self.prow_y = 0, 0, {}
+        self.focus = "side"
+        self.psel, self.ptop, self.prow_y, self.tab_x = 0, 0, {}, []
         self.pquery = ""  # the Projects tab's search
         self.folded = {"Inactive", "Closed"}  # closed sections
         self.nsel, self.ntop, self.nrow_y, self.nquery = 0, 0, {}, ""  # Notes: selection, scroll, rows, search
@@ -86,7 +106,7 @@ class Shell:
         self.offer = None  # (model, cap, estimate) while a summary run waits on its confirmation
         self.quit_anyway = False  # q was pressed once while a summary was running
         self.load_projects()
-        self.tab_x = []  # (x0, x1, index) of each name in the tab bar, filled in by draw()
+        self.psel = next((i for i, r in enumerate(self.project_rows()) if r.kind == "project"), 0)
         self.warning = plugin.plugin_problem() or sessiondata.check_compat()
         self.plugin_ok = plugin.plugin_registered() or plugin_version() is not None  # can a Session get /roost:pickup
         self.msg = plugin.taken_plugin_change()
@@ -106,8 +126,12 @@ class Shell:
     def label(cls, state):
         return cls.LABELS.get(state, state)
 
+    def picked(self, attr):
+        """attr as the selected row's name shows it in a list: bold green, with no band behind it."""
+        return (attr & ~curses.A_COLOR & ~curses.A_DIM) | curses.A_BOLD | self.ACCENT
+
     def selected(self, attr):
-        """attr as it should look on the selected row."""
+        """attr as it should look in a raised box (a menu, a card, the help)."""
         return (attr & ~curses.A_COLOR & ~curses.A_DIM) | self.pair(100 + self.pair_of(attr))
 
     @staticmethod
@@ -229,7 +253,16 @@ class Shell:
         if self.msg and (FAILED.search(self.msg) or REFUSED.search(self.msg)):
             self.alerting, self.msg = self.msg, ""
         self.corner, self.bar = None, None
-        return self.TABS[self.tab].draw(self)
+        drawn = self.draw_projects()  # the sidebar, on every view
+        if self.tab:
+            self.subhead = None
+            drawn = self.TABS[self.tab].draw(self)
+        return drawn
+
+    def status_line(self):
+        """The status bar's two sides: the left kept for Sessions waiting on you, the right how many run."""
+        n = sum(s["state"] != "closed" for s in self.sessions)
+        return "", f"{n} running" if n else "nothing running"
 
     def key_bar(self, keys, note="", note_attr=0):
         """The tab's key bar: its keys (or the search's while typing one) and a note at the right. A
@@ -308,6 +341,8 @@ class Shell:
                 config.log(f"clear archive {s['path']}: {e}")
                 self.msg = f"Couldn't move it: {e}"
             self.load_projects()
+        elif action == "project-delete" and k in ("y", "Y"):
+            self.ask_delete_typed(s)
         elif action == "note" and k in ("y", "Y"):
             try:
                 adopting.trash(s["path"])
@@ -320,7 +355,7 @@ class Shell:
             def stop():
                 try:
                     sessiondata.stop_session(s["attach"])
-                    return f"Stopped {s['name']}. It's under Recently closed"
+                    return f"Stopped {s['name']}. It's under Closed"
                 except Exception as e:
                     config.log(f"stop {s['id'][:8]}: {e}")
                     return f"Couldn't stop it: {e}"
@@ -352,6 +387,14 @@ class Shell:
         if action == "archive":
             return (f"Move {c['name']} to the Trash?", ["It holds the files roost adopt replaced."],
                     "y to move it · any other key cancels", self.RED)
+        if action == "project-delete":
+            subs = len([d for d in (Path(c["path"]) / "sub").glob("*/") if d.is_dir()]) if not c.get("parent") else 0
+            live = [x for x in self.linked(c) if x["state"] != "closed"]
+            return (f"Move {clip(c['id'], 50)} to the Trash?",
+                    ([f"Its {plural(subs, 'sub-project')} {'goes' if subs == 1 else 'go'} with it."] if subs else [])
+                    + ([f"{plural(len(live), 'Session')} running in it keep running, with no project."] if live else [])
+                    + ["Next, type its name to confirm."],
+                    "y to go on · any other key cancels", self.RED)
         if action == "note":
             return (f"Move the note {clip(c['name'], 50)} to the Trash?", [], "y to move it · any other key cancels", self.RED)
         if action == "summary":
@@ -389,11 +432,11 @@ class Shell:
     # The keys are the same on every tab; everything else is in a row's actions.
     GLOBAL_HELP = [
         ("Move", "↑↓ · page up/down or option+↑↓ a screen · home/end top and bottom · click a row"),
-        ("Views", "←→ switch views on Sessions (or click one) · open and close on Projects · read on Notes"),
+        ("Views", "←→ switch views on Sessions (or click one) · → into a project's details, ← back · → reads a note"),
         ("Actions", "enter or right-click opens the selected row's actions · double-click runs the first one"),
         ("Search", "/ then type · enter keeps it · esc clears it"),
-        ("New", "ctrl+n from any tab: a new Project (P), Session (S), or Note (N)"),
-        ("Tabs", "tab next · shift+tab previous · or click a tab's name"),
+        ("New", "ctrl+n from anywhere: a new Project (P), Session (S), or Note (N)"),
+        ("Tabs", "tab the next tab · shift+tab the one before · or click a tab's name"),
         ("Close", "esc closes a list or prompt · ? these keys · ctrl+q quit"),
     ]
 
@@ -461,11 +504,13 @@ class Shell:
             if k == "escape" and getattr(self, "nreading", False):  # esc leaves a note's text
                 self.nreading = False
                 return None
-            if k == "escape":  # esc clears the search; it never quits
+            if k == "escape":  # esc clears the search, then leaves a project's details; it never quits
                 if getattr(self, self.query_attr()):
                     setattr(self, self.query_attr(), "")
+                elif self.focus == "pane":
+                    self.focus = "side"
                 return None
-            if isinstance(k, tuple) and k[2] == 0:
+            if isinstance(k, tuple) and k[2] == 0:  # the top bar: a click on a tab's name shows it
                 if k[3] & CLICK:
                     for x0, x1, i in self.tab_x:
                         if x0 <= k[1] < x1:
@@ -475,7 +520,10 @@ class Shell:
 
     def query_attr(self):
         """Each tab keeps its own search."""
-        return {"Sessions": "query", "Notes": "nquery", "Stats": "squery"}.get(self.TABS[self.tab].name, "pquery")
+        name = self.TABS[self.tab].name
+        if name == "Sessions" and VIEWS[self.view] == "Unfiled":
+            return "uquery"
+        return {"Sessions": "query", "Notes": "nquery", "Stats": "squery"}.get(name, "pquery")
 
     def keys_search(self, k):
         attr = self.query_attr()
@@ -489,7 +537,7 @@ class Shell:
             setattr(self, attr, text[:-1])
         elif printable(k):
             setattr(self, attr, text + k)
-            self.sel = self.top = self.psel = self.ptop = 0
+            self.sel = self.top = self.psel = self.ptop = self.usel = self.utop = 0
             if attr == "nquery":
                 self.nsel, self.ntop = self.first_note(self.note_rows()), 0  # the first match
         return None
@@ -500,9 +548,13 @@ class Shell:
         handler returns; esc cancels."""
         self.asking = {"prompt": prompt, "text": text, "done": done, "verb": verb, "title": title}
 
+    def all_projects(self):
+        """Every project, each followed by its sub-projects: what a Session can belong to."""
+        return [x for p in self.projects or [] for x in [p] + (p.get("subs") or [])]
+
     def ask_project(self, label, summary, made, what="New project"):
         """A new project, in three prompts: its name as people read it (the README's heading), its
-        folder (made from the name, editable), then a one-sentence summary. made(pid, label, summary)
+        folder (made from the name, editable), then an optional one-sentence description. made(pid, label, summary)
         creates it and returns what the key handler returns."""
         def got_label(text):
             label = " ".join(text.split())
@@ -515,7 +567,7 @@ class Shell:
 
         def got_id(label, pid):
             self.ask("", summary, lambda text: made(pid, label, text), "create",
-                     title=f"{clip(label, 30)}: a one-sentence summary")
+                     title=f"{clip(label, 30)}: a one-sentence description (optional: enter skips)")
             return None
 
         self.ask("", label, got_label, "next", title=f"{what}: its name")
@@ -604,11 +656,29 @@ class Shell:
         self.choosing = {"title": title, "options": list(options), "sel": 0, "typed": "" if filtering else None,
                          "done": done, "add": add, "multi": None if multi is None else list(multi), "body": body or [],
                          "keys": keys or {}}
+        self.choosing["sel"] = self.next_option(self.choice_options(), -1, 1)
+
+    @staticmethod
+    def next_option(opts, at, step):
+        """The option after at (step 1) or before it (-1), wrapping and stepping over dividers."""
+        for i in range(1, len(opts) + 1):
+            j = (at + step * i) % len(opts)
+            if tuple(opts[j]) != DIVIDER:
+                return j
+        return 0
 
     def choice_options(self):
         c = self.choosing
         q = (c["typed"] or "").lower()
-        out = [o for o in c["options"] if q in o[0].lower()]
+        out = []
+        for o in c["options"]:  # a divider only between two groups, and none while filtering
+            if tuple(o) != DIVIDER:
+                if q in o[0].lower():
+                    out.append(o)
+            elif not q and out and tuple(out[-1]) != DIVIDER:
+                out.append(o)
+        if out and tuple(out[-1]) == DIVIDER:
+            out.pop()
         if c.get("add") and q:
             try:
                 new = clean_tags(q)
@@ -623,6 +693,8 @@ class Shell:
     def pick(self, value):
         """Enter (or a click) on a picker row: tick it, add it, save, or pick it."""
         c = self.choosing
+        if value is DIVIDER[1]:
+            return None
         if isinstance(value, tuple) and value[0] == "new":
             value = value[1]
             if c["multi"] is not None:
@@ -651,9 +723,9 @@ class Shell:
         if not isinstance(k, tuple) and k in c["keys"]:
             return self.pick(c["keys"][k])
         if k == "up":
-            c["sel"] = (c["sel"] - 1) % max(len(opts), 1)
+            c["sel"] = self.next_option(opts, c["sel"], -1) if opts else 0
         elif k == "down":
-            c["sel"] = (c["sel"] + 1) % max(len(opts), 1)
+            c["sel"] = self.next_option(opts, c["sel"], 1) if opts else 0
         elif k == "escape":
             self.choosing, self.msg = None, "Cancelled"
         elif k == "enter":
@@ -666,15 +738,17 @@ class Shell:
         return None
 
     def switch_tab(self, i):
-        """Show tab i (wrapping around) and remember it for the next start."""
-        i %= len(self.TABS)
-        if i == self.tab:
-            return
-        self.tab = i
+        """Show tab i (wrapping), with the keys in its list, and remember it for the next start."""
+        self.tab, self.focus = i % len(self.TABS), "side"
         try:
-            config.save_config(tab=self.TABS[i].name)
+            config.save_config(tab=self.TABS[self.tab].name)
         except OSError:
             pass
+
+    def open_running(self):
+        """The status bar's running count: every running Session."""
+        self.view, self.sel, self.top = VIEWS.index("Running"), 0, 0
+        self.switch_tab([tab.name for tab in self.TABS].index("Sessions"))
 
     def copy_id(self, s):
         self.copy_text(s["id"], f"Copied {s['id'][:8]}… to the clipboard")

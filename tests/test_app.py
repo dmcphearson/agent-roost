@@ -70,6 +70,19 @@ class Demo(unittest.TestCase):
         self.assertIn("(demo)", r.stdout)
 
 
+    def test_the_demo_makes_a_project_with_no_description(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as home:  # use_demo() patches every module, so it runs on its own
+            r = subprocess.run([sys.executable, "-c", "from roost.demo import use_demo; use_demo()\n"
+                                "from roost.core import projectdata\n"
+                                "print(projectdata.create_project('demo-blank', ''))\n"
+                                "print([p['summary'] for p in projectdata.read_projects() if p['id'] == 'demo-blank'])"],
+                               cwd=ROOT, env={**os.environ, "HOME": home}, stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("demo-blank", r.stdout)
+        self.assertIn("['']", r.stdout)
+
 class Compat(unittest.TestCase):
     def test_a_newer_claude_code_alone_is_only_logged(self):
         import unittest.mock
@@ -383,7 +396,7 @@ class Commands(unittest.TestCase):
 
 
 class Tabs(unittest.TestCase):
-    """The tab bar, using a UI built without a screen and two stand-in tabs."""
+    """The keys every view shares, using a UI built without a screen and two stand-in views, the pane focused."""
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = roost.CONFIG
@@ -397,6 +410,7 @@ class Tabs(unittest.TestCase):
         self.ui.choosing, self.ui.confirm, self.ui.summaries, self.ui.quit_anyway = None, None, {}, False
         self.ui.load_projects = lambda: None
         self.ui.asking, self.ui.searching, self.ui.query, self.ui.pquery = None, False, "", ""
+        self.ui.focus = "pane"  # the keys go to the view shown, ui.tab
 
     def tearDown(self):
         roost.CONFIG = self.saved
@@ -405,39 +419,31 @@ class Tabs(unittest.TestCase):
     def test_projects_is_the_home_tab(self):
         self.assertEqual([t.name for t in roost.UI.TABS], ["Projects", "Sessions", "Notes", "Stats"])
 
-    def test_switching_wraps_and_is_remembered(self):
+    def test_tab_and_shift_tab_switch_tabs_wrapping_and_the_tab_is_remembered(self):
         self.ui.dispatch("tab", None)
-        self.assertEqual((self.ui.tab, roost.read_config()["tab"]), (1, "Projects"))
+        self.assertEqual((self.ui.tab, roost.read_config().get("tab")), (1, "Projects"))
         self.ui.dispatch("tab", None)
         self.assertEqual(self.ui.tab, 0)
         self.assertEqual(roost.start_tab(["Sessions", "Projects"]), 0)
         self.ui.dispatch("shift+tab", None)
-        self.assertEqual(roost.start_tab(["Sessions", "Projects"]), 1)
-
-    def test_tab_key_switches_tabs(self):
-        self.ui.dispatch("tab", None)
         self.assertEqual(self.ui.tab, 1)
-        self.ui.dispatch("shift+tab", None)
-        self.assertEqual((self.ui.tab, self.got), (0, []))
+        self.assertEqual(roost.start_tab(["Sessions", "Projects"]), 1)
+        self.assertEqual(self.got, [], "tab goes to no tab's keys")
 
     def test_start_tab_falls_back_when_the_tab_is_gone(self):
         roost.save_config(tab="Tasks")
         self.assertEqual(roost.start_tab(["Sessions"]), 0)
 
-    def test_clicking_a_tab_name_switches(self):
-        self.ui.dispatch(("mouse", 25, 0, roost.curses.BUTTON1_CLICKED), None)
-        self.assertEqual(self.ui.tab, 1)
-        self.assertEqual(self.got, [])
-
     def test_other_keys_go_to_the_current_tab_only(self):
+        x = roost.SIDEBAR_W + 5  # in the pane
         self.ui.dispatch("j", None)
-        self.ui.switch_tab(1)
+        self.ui.tab = 1
         self.ui.dispatch("j", None)
-        self.ui.dispatch(("mouse", 5, 6, roost.curses.BUTTON1_CLICKED), None)
-        self.assertEqual(self.got, [("Sessions", "j"), ("Projects", "j"), ("Projects", ("mouse", 5, 6, roost.curses.BUTTON1_CLICKED))])
+        self.ui.dispatch(("mouse", x, 6, roost.curses.BUTTON1_CLICKED), None)
+        self.assertEqual(self.got, [("Sessions", "j"), ("Projects", "j"), ("Projects", ("mouse", x, 6, roost.curses.BUTTON1_CLICKED))])
 
     def test_a_confirm_is_answered_on_whatever_tab_is_open(self):
-        self.ui.switch_tab(1)
+        self.ui.tab = 1
         self.ui.confirm = ("note", {"name": "x", "path": "/nowhere"})  # as a background run puts one up
         self.ui.dispatch("n", None)
         self.assertEqual((self.ui.confirm, self.ui.msg, self.got), (None, "Cancelled", []))
@@ -455,7 +461,7 @@ class Tabs(unittest.TestCase):
         self.assertIsNot(self.ui.dispatch("q", None), roost.QUIT)  # a plain q is just a letter, for the tab
         self.assertEqual(self.got.pop(), ("Sessions", "q"))
         self.assertIs(self.ui.dispatch("ctrl+q", None), roost.QUIT)
-        self.ui.switch_tab(1)
+        self.ui.tab = 1
         self.ui.dispatch("?", None)
         self.assertTrue(self.ui.helping)
         names = [a for a, _ in self.ui.help_rows()]
@@ -481,7 +487,7 @@ class Tabs(unittest.TestCase):
             self.assertFalse([b for _, b in tab.help if re.search(r"(^|· )[a-zA-Z] ", b)], tab.name)
 
     def test_slash_searches_the_current_tab_and_esc_clears_it_without_quitting(self):
-        self.ui.switch_tab(1)
+        self.ui.tab = 1
         self.ui.dispatch("/", None)
         for k in names("ab\n"):
             self.ui.dispatch(k, None)
@@ -516,6 +522,65 @@ class KeyBar(unittest.TestCase):
         self.assertEqual([k for k, _ in rows], ["↑↓ move   enter open", "s start Session   n new project", "q quit"])
         self.assertEqual(self.bar(40, keys, "Saved")[-1], ["q quit", "Saved"])
         self.assertEqual(self.bar(40, keys, "A message far too long to share a row")[-1], ["", "A message far too long to share a row"])
+
+
+class MenuDividers(unittest.TestCase):
+    """A row's actions in groups: shell.DIVIDER, put between groups in an actions list, is a row of the
+    menu that can't be picked or rested on, and an empty group leaves no extra divider."""
+    def setUp(self):
+        self.ui = object.__new__(roost.UI)
+        self.ui.choosing, self.ui.msg, self.ran = None, "", []
+
+    def opened(self, *groups):
+        """A menu of the named actions, with a divider between each group (an empty group is still
+        separated by its dividers); each action records its name when it runs."""
+        actions = []
+        for i, group in enumerate(groups):
+            if i:
+                actions.append(roost.DIVIDER)
+            actions += [(name, lambda name=name: self.ran.append(name)) for name in group]
+        self.ui.menu("Things", actions)
+        return self.ui
+
+    def shown(self):
+        """The menu's rows as shown, a divider as |."""
+        return ["|" if tuple(o) == tuple(roost.DIVIDER) else o[0] for o in self.ui.choice_options()]
+
+    def selected(self):
+        return self.shown()[self.ui.choosing["sel"]]
+
+    def test_dividers_show_between_groups_but_never_first_last_or_two_in_a_row(self):
+        self.opened([], ["a", "b"], [], [], ["c"], ["d"], [])
+        self.assertEqual(self.shown(), ["a", "b", "|", "c", "|", "d"])
+        self.ui.choosing = None
+        self.ui.menu("Things", [roost.DIVIDER, ("a", lambda: None), roost.DIVIDER, roost.DIVIDER, ("b", lambda: None),
+                                roost.DIVIDER])
+        self.assertEqual(self.shown(), ["a", "|", "b"])
+
+    def test_the_selection_starts_on_the_first_option_and_arrows_skip_dividers_and_wrap(self):
+        self.opened([], ["a"], ["b", "c"], ["d"])
+        self.assertEqual(self.shown(), ["a", "|", "b", "c", "|", "d"])
+        self.assertEqual(self.selected(), "a")
+        seen = []
+        for _ in range(5):
+            self.ui.keys_choice("down")
+            seen.append(self.selected())
+        self.assertEqual(seen, ["b", "c", "d", "a", "b"])
+        seen = []
+        for _ in range(5):
+            self.ui.keys_choice("up")
+            seen.append(self.selected())
+        self.assertEqual(seen, ["a", "d", "c", "b", "a"])
+
+    def test_enter_never_picks_a_divider(self):
+        self.opened(["a"], ["b"], ["c"])
+        for k in ["down", "down", "up", "up", "up", "down"]:
+            self.ui.keys_choice(k)
+            self.assertNotEqual(self.selected(), "|", k)
+        self.ui.keys_choice("down")  # from a, over the divider
+        self.assertEqual(self.selected(), "b")
+        self.ui.keys_choice("enter")
+        self.assertEqual((self.ran, self.ui.choosing), (["b"], None))
 
 
 class ShortWhen(unittest.TestCase):

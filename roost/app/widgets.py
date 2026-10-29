@@ -4,7 +4,7 @@ import curses, re, textwrap
 
 from roost.core.formatting import clip
 from roost.core import wren
-from roost.app.shell import SAVE
+from roost.app.shell import DIVIDER, SAVE
 
 try:
     from rich.cells import cell_len
@@ -179,8 +179,8 @@ if Widget:
         def lines(self):
             ui, w = self.ui, self.size.width
             row = self.line()
-            row.put(1, self.NAME, curses.A_BOLD | ui.ACCENT)
-            x, ui.tab_x = len(self.NAME) + 3, []
+            x = row.put(2, self.NAME, curses.A_BOLD | ui.ACCENT) + 3
+            ui.tab_x = []
             for i, tab in enumerate(ui.TABS):
                 label = f" {tab.name} "
                 ui.tab_x.append((x, x + len(label), i))
@@ -189,7 +189,32 @@ if Widget:
             text, attr = getattr(ui, "corner", None) or ("", 0)
             if text:
                 row.put(w - len(text) - 2, text, attr)
+            rule = self.line()
+            rule.rule(0, w, ui.DIM)
+            return [row, self.line(), rule]
+
+    class StatusBar(Region):
+        """The row above the key bar, on every tab: Sessions waiting on you at the left, how many run at the right."""
+        DEFAULT_CSS = "StatusBar { height: 1; }"
+
+        def lines(self):
+            ui, w = self.ui, self.size.width
+            left, right = ui.status_line()
+            row = self.line()
+            if left:
+                row.put(2, clip(left, w - len(right) - 6), ui.YELLOW | curses.A_BOLD)
+            x = row.put(w - len(right) - 3, right, ui.DIM)
+            if right.endswith(" running"):
+                row.put(w - len(right) - 5, "●", ui.ACCENT)
             return [row]
+
+        def on_click(self, event):
+            """A click on the running count lists every running Session."""
+            event.stop()
+            right = self.ui.status_line()[1]
+            if event.x >= self.size.width - len(right) - 3:
+                self.ui.open_running()
+                self.app.redraw()
 
     class KeyBar(Region):
         """The bottom rows: each key in green, what it does in grey, and the message or warning at the
@@ -203,7 +228,7 @@ if Widget:
                 for item in (k for k in keys.split("   ") if k):
                     m = BAR_KEY.match(item)
                     key, what = (m.group(1), m.group(2) or "") if m and "·" not in item else ("", item)
-                    row.put(x, key, ui.GREEN)
+                    row.put(x, key, ui.GREEN | curses.A_BOLD)
                     row.put(x + len(key), what, ui.DIM)
                     x += len(item) + 3
                 if note:
@@ -328,6 +353,10 @@ if Widget:
             top, first = c["top"], c["off"] - 1  # the border takes the box's first row
             for i, (label, value) in enumerate(opts[top:top + c["fit"]]):
                 on = top + i == c["sel"]
+                if (label, value) == DIVIDER:
+                    if first + i < len(out):
+                        out[first + i].put(2, "─" * (inner - 4), ui.selected(ui.DIM))
+                    continue
                 if c.get("multi") is not None and not isinstance(value, tuple) and value is not SAVE:
                     label = ("☑ " if value in c["multi"] else "☐ ") + label
                 if first + i < len(out):

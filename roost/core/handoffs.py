@@ -174,7 +174,7 @@ def facts_lines(f, table):
 def owner(ids):
     """Where these Session ids leave Handoffs: the folder of the project that lists them, the file of
     the Session recap that does, or None. Raises ValueError when more than one lists them."""
-    hits = [p for p in (projectdata.read_projects() or []) + projectdata.read_recaps() if set(ids) & set(p["sessions"])]
+    hits = [p for p in projectdata.read_all() + projectdata.read_recaps() if set(ids) & set(p["sessions"])]
     if len(hits) > 1:
         raise ValueError(f"more than one project or recap lists this Session ({', '.join(p['id'] for p in hits)}): "
                          "take it off all but one")
@@ -209,10 +209,11 @@ def last_covered(folder, ids):
     return max(ends) if ends else None
 
 
-def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=None):
+def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=None, roll_up=False):
     """Write a Handoff for a Session into the project or Session recap that lists it: the facts since
     its last Handoff, then the summary, with secrets redacted. With recap, a Session nothing lists gets
     a new Session recap: a note in ~/.roost/notes/, named after it and tagged recap. `at` dates the Handoff's file name (default now).
+    With roll_up, a done sub-project's Session writes its roll-up into the parent project instead.
     Returns (path, redacted kinds). Raises ValueError with a reason, and never overwrites a Handoff."""
     summary = summary.strip()
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid or ""):
@@ -229,6 +230,8 @@ def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=No
         raise ValueError(f"no project lists Session {ids[0][:8]}, and no Session recap does, so it has nowhere to leave a "
                          "Handoff. /pickup <project> in the Session lists it (or roost project brief <project> --session <id>); "
                          "--recap writes a Session recap instead")
+    if roll_up:
+        return write_roll_up(folder, sid, summary, info, at or now)
     table = pricing.prices(now)
     f = facts(sid, last_covered(folder, ids) if folder else None, table)
     stem = f"{datetime.fromtimestamp(at or now or time.time()):%Y-%m-%d-%H%M}-{sid[:8]}"
@@ -238,9 +241,28 @@ def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=No
     text = "\n".join(["---", f"session: {sid}", f"name: {yaml_text(f['name'])}", f"from: {f['from'] or ''}",
                       f"to: {f['to'] or ''}", "---", ""] + body)
     text, kinds = redact(text)
+    return new_handoff(folder, f"{stem}.md", text), kinds
+
+
+def write_roll_up(folder, sid, summary, info, at=None):
+    """A finished sub-project's roll-up: one Handoff in its parent project, so the parent learns what
+    the sub-project did without carrying its history."""
+    if folder is None or folder.is_file() or folder.parent.name != "sub":
+        raise ValueError("--roll-up is for a sub-project's Session: this Session isn't listed in a sub-project")
+    sub = projectdata.project_id(folder)
+    if projectdata.read_project(folder)["status"] != "done":
+        raise ValueError(f"{sub} isn't done: set it with roost project status {sub} done first")
+    stem = f"{datetime.fromtimestamp(at or time.time()):%Y-%m-%d-%H%M}-{sid[:8]}-rollup-{folder.name}"
+    text, kinds = redact("\n".join(["---", f"session: {sid}", f"name: {yaml_text(info['name'])}", f"rollup: {sub}", "---", "",
+                                    f"# Roll-up of {sub}", "", "## Summary", "", summary, ""]))
+    return new_handoff(folder.parent.parent, f"{stem}.md", text), kinds
+
+
+def new_handoff(folder, name, text):
+    """Write a Handoff file into folder's handoffs/, never over an existing one."""
     handoffs = folder / "handoffs"
     handoffs.mkdir(exist_ok=True)
-    path = handoffs / f"{stem}.md"
+    path = handoffs / name
     tmp = handoffs / f".{path.name}.roost-tmp"
     tmp.write_text(text)
     try:
@@ -250,7 +272,7 @@ def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=No
                          "try again in a minute") from None
     finally:
         tmp.unlink()
-    return path, kinds
+    return path
 
 
 def write_recap_handoff(path, sid, f, stem, body, info, summary):
@@ -300,7 +322,8 @@ def handoff_command(args):
               file=sys.stderr)
         return 1
     try:
-        path, kinds = write_handoff(args.session, sys.stdin.read(), recap=args.recap, recap_summary=args.summary)
+        path, kinds = write_handoff(args.session, sys.stdin.read(), recap=args.recap, recap_summary=args.summary,
+                                    roll_up=args.roll_up)
     except (ValueError, OSError) as e:
         print(f"roost handoff: {e}", file=sys.stderr)
         return 1
@@ -318,6 +341,8 @@ def handoff_flags(parser):
     parser.add_argument("--recap", "--note", dest="recap", action="store_true",
                         help="if nothing lists the Session, start a Session recap for it: a note in ~/.roost/notes/, tagged recap")
     parser.add_argument("--summary", metavar="TEXT", help="a new recap's one-sentence summary (default: its first point)")
+    parser.add_argument("--roll-up", action="store_true",
+                        help="a done sub-project's Session: write its roll-up into the parent project's handoffs/")
 
 
 def ledger(folder):
@@ -327,8 +352,11 @@ def ledger(folder):
         return f"# Ledger of {folder.name}\n\nNo Handoffs yet.\n"
     out = [f"# Ledger of {folder.name}: {len(handoffs)} Handoff{'s' if len(handoffs) != 1 else ''}, oldest first"]
     for p in handoffs:
-        m = re.search(r"^## Facts\n(.*?)(?=^## |\Z)", p.read_text(errors="replace"), re.S | re.M)
-        out += ["", f"## handoffs/{p.name}", "", m.group(1).strip() if m else "(No Facts section: not written by roost handoff.)"]
+        text = p.read_text(errors="replace")
+        m = re.search(r"^## Facts\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+        roll_up = frontmatter(text).get("rollup")
+        line = f"Roll-up of {roll_up}" if roll_up else "(No Facts section: not written by roost handoff.)"
+        out += ["", f"## handoffs/{p.name}", "", m.group(1).strip() if m else line]
     return "\n".join(out) + "\n"
 
 

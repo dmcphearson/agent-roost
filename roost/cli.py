@@ -60,7 +60,7 @@ COMMANDS = {
                      lambda args: install.setup(args.step)),
     "update": Command("install the latest release (Homebrew: brew upgrade roost)",
                       lambda p: None, lambda args: install.self_update()),
-    "project": Command("projects: new <id> --summary \"…\" · brief <id> · list · status <id>",
+    "project": Command("projects: new <id> [--description \"…\"] · brief <id> · list · status <id> · description <id>",
                        project_flags, lambda args: project_command(args)),
     "handoff": Command("write this Session's Handoff in its project, from a summary on stdin (/wrap-up runs it)",
                        handoff_flags, handoff_command),

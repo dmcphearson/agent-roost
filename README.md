@@ -59,15 +59,15 @@ Clone this repo and run `./dev-link.sh`. It links `~/.local/bin/roost` and `~/.r
 | `roost --version` | Print the version |
 | `roost setup` | Check prerequisites, choose a terminal and the Projects folder, and install the plugin |
 | `roost update` | Install the latest release and bring the plugin along (Homebrew: `brew upgrade roost` first) |
-| `roost project new <id> --summary "…"` | Make a project folder and its README; `brief`, `list`, and `status` read and set the rest |
+| `roost project new <id> [--description "…"]` | Make a project folder and its README (`<project>/<slug> --type <type>` makes a sub-project); `brief`, `list`, `status`, and `description` read and set the rest |
 | `roost note "title" [text]` | Save a note to the Notes tab, or pipe its text in |
 | `roost ledger <id>` | Print a project's timeline: every Handoff's facts, oldest first |
-| `roost handoff` | Write a Session's Handoff from a summary on stdin; `/roost:wrap-up` runs it |
+| `roost handoff` | Write a Session's Handoff from a summary on stdin (`--roll-up`: a finished sub-project's roll-up, into its parent); `/roost:wrap-up` runs it |
 | `roost adopt [<folder>]` | Bring existing project folders into roost's project layout: shows the cost, plans each one, and applies a plan only after you approve it; replaced files go to the project's `_archive/<date>/` |
 
 ### Views and sections
 
-Tabs: **Running**, **Recently closed** (last 3 hours), **Closed**, **Stale**, and **All**. **Stale** lists sessions over 150k tokens that nobody has touched in 2 days or more. Their knowledge belongs in files, not in a session you pay to rebuild. Running sessions are grouped into:
+Sessions has two views: **Running** and **Closed** (newest first, a history to dig through). Running sessions are grouped into:
 
 - **Open**: a terminal window has the session
 - **Pinned**: running in the background and never closed for being idle
@@ -77,20 +77,20 @@ Closed sessions come after them, and **Dismissed** ones last: a closed session y
 
 ### Keys
 
-The keys are the same on every tab. Everything you can do to a row is in its actions.
+roost has four tabs: Projects, Sessions, Notes, and Stats. Projects lists your projects with the selected one's details beside the list; the other tabs take the whole window. The keys are the same everywhere. Everything you can do to a row is in its actions.
 
 | Key | Action |
 |---|---|
 | ↑ ↓ | Move |
 | Page Up, Page Down / Option+↑ ↓ | Move a screen |
 | Home / End | Top / bottom |
-| ← → | Sessions: switch views (Running, Recently closed, Closed, Stale, All) · Projects: open or close a section · Notes: read the note |
+| ← → | Sessions: switch views (Running, Closed, Unfiled) · Projects: → moves into the selected project's details, ← back; on More projects, opens or closes it · Notes: read the note |
 | Enter / right-click | Open the selected row's actions |
 | Double-click | Run the row's first action: open a Session, start one for a project, or edit a note |
-| / | Search the current tab |
-| ctrl+n | New, from any tab: a Project (P), a Session in a folder you name (S), or a Note (N). The letter or ↑↓ and Enter picks |
+| / | Search the current tab or view |
+| ctrl+n | New, from anywhere: a Project (P), a Session in a folder you name (S), or a Note (N). The letter or ↑↓ and Enter picks |
 | Esc | Close a list or prompt, or clear the search. It never quits |
-| Tab / Shift+Tab | Switch tabs |
+| Tab / Shift+Tab | Next / previous tab (or click a tab's name). roost opens on the tab you last used |
 | ? | Show the keys |
 | Ctrl+q | Quit (a plain q does nothing) |
 
@@ -98,15 +98,19 @@ The keys are the same on every tab. Everything you can do to a row is in its act
 
 **Ask what to do with it** has a model read the Session's transcript and your open projects (it shows the cost first) and comes back with a verdict and why: delete it, write its Session recap, write its Handoff, add it to one of your projects, or leave it as it is, with its open items and anything you'd lose by deleting it. The advised choice is selected in a menu of every choice; nothing happens until you pick one, and anything that spends or deletes asks again.
 
-**A project's actions:** Start a Session, Show its Sessions (the Sessions tab, on All, searching `project:<its id>`; esc clears it), Adopt it (a folder not yet in roost's layout: plans its README and files, you review the plan, then it writes its Handoffs), Set its category, Edit its tags, Rename (its folder; not while a Session runs in it), Show its folder in Finder, clear an old `_archive/` from roost adopt, and New project. **+ New project**, at the bottom of the list, makes one too.
+**A project's actions:** Start a Session, Start a Session in a sub-project, Show its Sessions (the Sessions tab, on All, searching `project:<its id>`; esc clears it); New sub-project; Set its category, Edit its tags, Edit its description (one optional sentence; `/wrap-up` writes it when it's empty), Rename (its label, the name roost shows, then its folder; not while a Session runs in it), Show its folder in Finder; then Adopt it (a folder not yet in roost's layout: plans its README and files, you review the plan, then it writes its Handoffs), clear an old `_archive/` from roost adopt, and Delete to the Trash (asks first, then you type its name; its sub-projects go with it). Each menu's groups are split by a line: working on it, organizing it, then removing it. **+ New project**, at the bottom of the list, makes one too.
 
-A project has one category (what kind of work it is), its README's `category:` line, and any number of tags (what it's about), its `tags: [a, b]` list. Set its category lists the categories in `CATEGORIES.md` in your Projects folder, one `- name: what it covers` line each, plus any other a project uses; a new one you type joins the list. Edit its tags ticks tags from every tag already in use, or adds a new one. Sessions are listed only on the Sessions tab. A project's SESSIONS column counts its running ones (◆ need input · ● working · ○ idle) and, on a line under them, its unwrapped ones: closed, with no Handoff covering their last message, and not dismissed. NAME gets the most room; in a wide window, spare room goes to NAME, then CATEGORY and TAGS until their values show whole, then evenly to every column; when the window is narrow, LAST WORKED gives way first, then SESSIONS, TAGS, CATEGORY, and STATUS. Dates in the lists and panels are a time today (2:17 PM) and a date otherwise, month or day first as your locale has it (10/14/26 or 14/10/26). A Session recap (what `/wrap-up` writes for a Session no project lists) shows in its Session's panel, and the Session's actions can read it or make it a project.
+A project has one category (what kind of work it is), its README's `category:` line, and any number of tags (what it's about), its `tags: [a, b]` list. Set its category lists the categories in `CATEGORIES.md` in your Projects folder, one `- name: what it covers` line each, plus any other a project uses; a new one you type joins the list. Edit its tags ticks tags from every tag already in use, or adds a new one. The Projects tab lists your 10 most recently worked open projects, then More projects (the rest, and the closed ones), which Enter or → opens in place, then + New project. The selected project's details show beside the list: its README's Next and Current state, its open sub-projects (running, or ready with the age of their Handoff), its Sessions running or active in the last 7 days, its newest Handoffs (the newest with its first lines), its notes, then Details (description, a README's `repo:` as Repo, category and tags, folder) and its spend this month and over the last 30 days. → moves into the details, where its sub-projects, Sessions, Handoffs, and notes each have their actions (enter); ← or Esc moves back. When the details don't fit, the wheel or Page Up/Down scrolls them. A row's marks at the right say what's going on in it: ● a Session is running in it or one of its sub-projects, ◆ it's ready to pick up (nothing running, and a Handoff covers its newest Session). The Sessions tab's Unfiled view lists the Sessions no project lists, and your loose notes, to add to a project or let go. A status bar above the keys says how many Sessions are running; a click on it lists them. Dates in the lists and panels are a time today (2:17 PM) and a date otherwise, month or day first as your locale has it (10/14/26 or 14/10/26). A Session recap (what `/wrap-up` writes for a Session no project lists) shows in its Session's panel, and the Session's actions can read it or make it a project.
+
+**Sub-projects** split a project's work into pieces a Session can start on, finish, and close: a feature, a bugfix, research, or a chore. Each is a folder in the project's `sub/` with its own README and `handoffs/`, and its id is `<project>/<slug>`. Make one with `roost project new <project>/<slug> --type feature --description "…"`. `/roost:pickup <project>/<slug>` reads the parent project's README first, so the Session keeps the project's goals in view, then the sub-project's README and newest Handoffs, then the project's other open sub-projects; it leaves out the parent's Handoffs. `/wrap-up` writes the Session's Handoff into the sub-project. When a Session finishes one (its status set to `done`, after it asks), it also writes a roll-up into the parent project's Handoffs, with `roost handoff --roll-up`: what the sub-project set out to do, what shipped, the decisions to keep, and what's left open; then it updates the parent README's Current state and Key decisions. The parent learns what its sub-projects did without carrying their history. `roost project list` shows open sub-projects under their project; status `done` hides one.
+
+On the Projects tab, a project with open sub-projects is marked ▸; → shows them under it and ← hides them; a sub-project's details show its type. A project's actions add New sub-project (its type, slug, and an optional one-sentence description) and Start a Session in a sub-project; a sub-project's row shows its label, and its own actions are Start a Session, Show its Sessions, Edit its tags, Edit its description, Rename, Show its folder in Finder, and Delete to the Trash (asks first, then you type `<project>/<slug>`). A search shows matching sub-projects under their project, and `type:bugfix` finds sub-projects by type. A Session listed in a sub-project belongs to it: its PROJECT is `<project>/<slug>`, `project:<project>` finds it too, and Add to a project or Move to another project can put a Session in a sub-project.
 
 ### Notes
 
-Notes is your scratchpad: ideas and things to come back to, saved from anywhere in roost or by an agent. Each note is a Markdown file in `~/.roost/notes/`. It may grow into a project, move into one, or get deleted when it's no longer needed. Ctrl+n then N from any tab, or **+ New note** at the bottom of the Notes list, asks for a title, creates the file with its frontmatter (`title`, `created`, `project`, `sessions`, and `tags`), and opens it in your editor with the cursor under the title.
+Notes is your scratchpad: ideas and things to come back to, saved from anywhere in roost or by an agent. Each note is a Markdown file in `~/.roost/notes/`. It may grow into a project, move into one, or get deleted when it's no longer needed. Ctrl+n then N from anywhere, or **+ New note** at the bottom of the Notes list, asks for a title, creates the file with its frontmatter (`title`, `created`, `project`, `sessions`, and `tags`), and opens it in your editor with the cursor under the title.
 
-The tab lists your notes, newest edit first. A note has tags but no category; its actions include Edit its tags, which picks from the same library and writes `tags: [a, b]`. The selected note shows in a reading card beside the list (under it, in a window narrower than 120 columns), with its Markdown laid out: headings, bold, code, bullets, checkboxes, and quotes. The footer, as on every tab, holds its facts: the file, when it was created and last edited, its tags, and any other frontmatter fields. → moves into the card to scroll it with ↑ ↓ and Page Up and Page Down; ← or Esc moves back to the list.
+The tab lists your notes, newest edit first. A note has tags but no category; its actions include Edit its tags, which picks from the same library and writes `tags: [a, b]`. The selected note shows in a reading card beside the list (under it, when the right pane is narrower than 86 columns), with its Markdown laid out: headings, bold, code, bullets, checkboxes, and quotes. The footer holds its facts: the file, when it was created and last edited, its tags, and any other frontmatter fields. In the list, the card shows a long note's first 80 lines; → moves into the card to read all of it, scrolling with ↑ ↓ and Page Up and Page Down; ← or Esc moves back to the list.
 
 From the shell, `roost note "Printer driver idea" Push it from the MDM` saves a note (or pipe its text in). In a Session, ask Claude to save an idea for later, or run `/roost:note`.
 

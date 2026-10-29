@@ -16,6 +16,8 @@ The project to pick up: `$ARGUMENTS`
    ```
 
    It prints the project's README, its newest Handoffs, and the names of its notes (or the Session recap, or the note: roost passes a note as its file's path), and lists this Session in the project's `sessions:` (or the note's). If it fails, show the person the error and stop.
+
+   A sub-project's id is `<project>/<slug>`. Its brief starts with the parent project's README as the wider context, then the sub-project's own README and Handoffs, then the parent's other open sub-projects. Keep the parent's goals in view, and keep the work inside this sub-project: when something belongs to the parent or to another sub-project, say so instead of doing it.
 3. **Read only what the brief points to.** The README and the Handoffs are the catch-up. Open a working doc only when the task needs it; don't read `data/`, `out/`, or `_archive/`, and don't read older Handoffs unless the person asks.
 4. **Report back in a few lines:** where things stand, what's next (from the README's Next and the newest Handoff), and any open questions the Handoffs left. Then ask what to work on, unless the person already said.
 

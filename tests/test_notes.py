@@ -1,6 +1,7 @@
 from support import *  # noqa: F401,F403 (the shared namespace, helpers, and fixtures)
 from support import _SCRATCH, own_tests  # noqa: F401
 from test_projects import Projects, ProjectRows  # for their helpers; their tests run in test_projects.py
+from test_screens import TextualScreens  # for its helpers; its tests run in test_screens.py
 
 load_tests = own_tests(__name__)
 
@@ -37,6 +38,7 @@ class Notes(unittest.TestCase):
         ui.term, ui.tab, ui.helping, ui.sel, ui.query, ui.warning = "ghostty", 2, False, 0, "", ""
         ui.nsel, ui.ntop, ui.nrow_y, ui.nquery, ui.quit_anyway, ui.nfolded = 0, 0, {}, "", False, {"Recaps"}
         ui.nreading, ui.nscroll, ui.npane, ui.nlist_w, ui.TABS = False, 0, (4, 40, 10, 40), 200, roost.UI.TABS
+        ui.focus = "pane"  # the Notes tab shown (tab 2), so the keys go to it
         ui.edited = []
         ui.edit = lambda path: ui.edited.append(path)  # no editor in tests
         return ui
@@ -259,8 +261,8 @@ class Notes(unittest.TestCase):
         ui.load_projects()
         ui.nsel = 1
         keys = lambda k, rows: ui.keys_notes(k, ui.note_rows())
-        self.assertEqual(labels(ui, keys, None)[1:], ["Start a Session from it", "Make it a project…", "Edit its tags…",
-                                                      "Show it in Finder", "Delete to the Trash…"])
+        self.assertEqual(labels(ui, keys, None)[1:], ["Start a Session from it", DIV, "Make it a project", "Edit its tags",
+                                                      "Show it in Finder", DIV, "Delete to the Trash"])
         self.project("p")
         ui.load_projects()
         act(ui, keys, None, "Move to a project")
@@ -273,6 +275,32 @@ class Notes(unittest.TestCase):
         act(ui, keys, None, "Delete to the Trash")
         ui.keys_confirm("y")
         self.assertEqual((len(self.trashed), ui.note_rows()[1:]), (1, []))
+
+    def test_a_notes_actions_in_groups(self):
+        """Work on it, then organize it, then delete it, split by dividers (| here)."""
+        ui = self.ui()
+        roost.create_note("Idea")
+        self.project("p")
+        ui.load_projects()
+        ui.nsel = 1
+        keys = lambda k, rows: ui.keys_notes(k, ui.note_rows())
+        self.assertEqual(labels(ui, keys, None),
+                         [f"Edit in {ui.editor_name().split()[0]}", "Start a Session from it", DIV,
+                          "Move to a project", "Make it a project", "Edit its tags", "Show it in Finder", DIV,
+                          "Delete to the Trash"])
+
+    def test_no_action_label_has_an_ellipsis(self):
+        """A menu label is just its action's name: none ends in, or holds, "…". Row: a note in no project,
+        with a project it could move to."""
+        ui = self.ui()
+        roost.create_note("Idea")
+        self.project("p")
+        ui.load_projects()
+        ui.nsel = 1
+        keys = lambda k, rows: ui.keys_notes(k, ui.note_rows())
+        real = [a for a in labels(ui, keys, None) if a != DIV]
+        self.assertTrue(real)
+        self.assertEqual([a for a in real if "…" in a], [])
 
     def test_roost_note_saves_from_the_command_line(self):
         out = io.StringIO()
@@ -354,3 +382,258 @@ class NotesCreated(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def body(n, word="Line"):
+    """n numbered lines, each its own: Line 001, Line 002, …"""
+    return [f"{word} {i:03d}" for i in range(1, n + 1)]
+
+
+class NotePreview(unittest.TestCase):
+    """While the list has the focus, the card shows only the first NOTE_PREVIEW_LINES (80) lines of a
+    note, then a line saying how many more there are and that → reads the whole note. note_markdown(r,
+    limit) gives that text; with no limit, the whole note."""
+
+    def test_the_preview_limit_is_80_lines(self):
+        self.assertEqual(roost.NOTE_PREVIEW_LINES, 80)
+
+    def test_a_long_note_is_cut_to_its_first_80_lines_then_says_how_many_more(self):
+        r = {"lines": body(200)}
+        cut = roost.note_markdown(r, limit=roost.NOTE_PREVIEW_LINES)
+        whole = roost.note_markdown(r)
+        self.assertEqual(cut.splitlines()[:80], whole.splitlines()[:80])
+        self.assertNotIn("Line 081", cut)
+        self.assertNotIn("Line 200", cut)
+        tail = [l for l in cut.splitlines()[80:] if l.strip()]
+        self.assertEqual(len(tail), 1, tail)  # one footer line, nothing more of the note
+        self.assertRegex(tail[0], r"\b120 more lines\b")
+        self.assertIn("→ reads the whole note", tail[0])
+
+    def test_the_cut_counts_the_lines_roost_shows(self):
+        """The limit applies to the Markdown the card would show (task boxes and all), not a second copy."""
+        r = {"lines": [f"- [ ] task {i:03d}" for i in range(1, 101)]}
+        cut = roost.note_markdown(r, limit=80)
+        self.assertEqual(cut.splitlines()[:80], roost.note_markdown(r).splitlines()[:80])
+        self.assertIn("- ☐ task 080", cut)
+        self.assertNotIn("task 081", cut)
+        self.assertRegex(cut, r"\b20 more lines\b")
+
+    def test_a_note_of_80_lines_or_fewer_shows_whole_with_no_footer(self):
+        for n in (1, 79, 80):
+            r = {"lines": body(n)}
+            with self.subTest(lines=n):
+                cut = roost.note_markdown(r, limit=80)
+                self.assertEqual(cut, roost.note_markdown(r))
+                self.assertNotIn("more lines", cut)
+                self.assertNotIn("reads the whole note", cut)
+
+    def test_no_limit_is_the_whole_note(self):
+        text = roost.note_markdown({"lines": body(200)})
+        self.assertEqual(text.splitlines(), body(200))
+        self.assertNotIn("more lines", text)
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class NoteCardRendering(unittest.TestCase):
+    """The Notes tab's card on a real Textual screen: the preview while in the list, the whole note once
+    reading, and one render per run of quick moves (the Reader waits NOTE_SETTLE after the last one).
+    What the card renders is read from the calls to its Markdown widget's update."""
+    setUp = TextualScreens.setUp
+    keys = staticmethod(TextualScreens.keys)
+    SETTLED = 0.5  # NOTE_SETTLE is patched to this so a slow machine's key presses still land inside it
+
+    def test_the_settle_is_0_15_seconds(self):
+        self.assertEqual(roost.NOTE_SETTLE, 0.15)
+
+    def run_notes(self, steps, settle=None):
+        """roost on the Notes tab, recording each text the card's Markdown is given, in self.rendered."""
+        import asyncio, unittest.mock
+        from textual.widgets import Markdown
+        self.rendered = []
+        real = Markdown.update
+
+        def spy(md, text):
+            if isinstance(md.parent, roost.Reader):
+                self.rendered.append(text)
+            return real(md, text)
+        patches = [unittest.mock.patch.object(Markdown, "update", spy),
+                   unittest.mock.patch.multiple(roost, read_config=lambda: {"tab": "Notes"})]
+        steps = [open_view("Notes")] + list(steps)  # roost starts on the Notes tab, as remembered
+        if settle is not None:
+            # in the module that defines it; create: before the fix there's none, and the test fails on what the card does
+            patches.append(unittest.mock.patch.object(importlib.import_module("roost.tabs.notes"), "NOTE_SETTLE", settle, create=True))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            app = roost.RoostApp(self.sessions, "")
+
+            async def go():
+                async with app.run_test(size=(160, 40)) as pilot:
+                    await pilot.pause()
+                    for step in steps:
+                        await step(pilot)
+                    app.lines = screen_text(app)
+            asyncio.run(go())
+        return app
+
+    def wait(self, seconds):
+        async def step(pilot):
+            await pilot.pause(seconds)
+        return step
+
+    def mark(self, label, seen):
+        """A step that notes how many renders there have been so far, and the last text rendered."""
+        async def step(pilot):
+            seen[label] = (len(self.rendered), self.rendered[-1] if self.rendered else None)
+        return step
+
+    def notes(self, count):
+        """count notes, newest first in the list: Note 1 (newest) … Note count, each body naming its note."""
+        now = time.time()
+        for i in range(1, count + 1):
+            path = roost.create_note(f"Note {i}", body=f"Body of note {i}")
+            os.utime(path, (now - i * 60, now - i * 60))
+
+    # 1. The preview limit
+
+    def test_in_the_list_the_card_gets_the_preview_and_after_right_the_whole_note(self):
+        roost.create_note("Long note", body="\n".join(body(200)))
+        seen = {}
+        app = self.run_notes([self.wait(1.0), self.mark("list", seen), self.keys("right"), self.wait(1.0),
+                              self.mark("reading", seen), self.keys("end"), self.wait(0.5)])
+        _, listed = seen["list"]
+        self.assertIsNotNone(listed, "the card never rendered the note")
+        self.assertIn("Line 080", listed)
+        self.assertNotIn("Line 081", listed)
+        self.assertNotIn("Line 200", listed)
+        self.assertRegex(listed, r"\b120 more lines\b")
+        self.assertIn("→ reads the whole note", listed)
+        self.assertTrue(app.ui.nreading)
+        _, reading = seen["reading"]
+        self.assertIn("Line 200", reading)
+        self.assertNotIn("more lines", reading)
+        self.assertTrue(any("Line 200" in l for l in app.lines), app.lines)  # scrolled to the end, the last line shows
+
+    def test_back_in_the_list_the_card_shows_the_preview_again(self):
+        roost.create_note("Long note", body="\n".join(body(200)))
+        seen = {}
+        self.run_notes([self.wait(1.0), self.keys("right"), self.wait(1.0), self.keys("left"), self.wait(1.0),
+                        self.mark("back", seen)])
+        _, back = seen["back"]
+        self.assertNotIn("Line 200", back)
+        self.assertRegex(back, r"\b120 more lines\b")
+
+    def test_a_short_note_shows_whole_in_the_list(self):
+        roost.create_note("Short note", body="\n".join(body(30)))
+        seen = {}
+        self.run_notes([self.wait(1.0), self.mark("list", seen)])
+        _, listed = seen["list"]
+        self.assertIn("Line 030", listed)
+        self.assertNotIn("more lines", listed)
+
+    # 2. Settle before rendering
+
+    def test_five_quick_downs_render_the_card_once_with_the_fifth_note_down(self):
+        self.notes(8)
+        seen = {}
+
+        async def start(pilot):
+            seen["start"] = (pilot.app.ui.nsel, len(self.rendered))
+        app = self.run_notes([self.wait(1.0), start, self.keys("down", "down", "down", "down", "down"),
+                              self.mark("pressed", seen), self.wait(self.SETTLED + 0.5), self.mark("settled", seen)],
+                             settle=self.SETTLED)
+        ui = app.ui
+        at, before = seen["start"]
+        self.assertEqual(ui.nsel, at + 5)
+        name = ui.nrows[ui.nsel]["name"]
+        self.assertEqual(name, "Note 6")  # five down from Note 1
+        count, last = seen["settled"]
+        self.assertEqual(count - before, 1, self.rendered[before:])  # one render for the run of presses
+        self.assertIn("Body of note 6", last)
+        self.assertTrue(any("Body of note 6" in l for l in app.lines), app.lines)
+
+    def test_one_move_waits_for_the_settle_before_rendering(self):
+        self.notes(3)
+        seen = {}
+        self.run_notes([self.wait(1.0), self.mark("start", seen), self.keys("down"), self.mark("moved", seen),
+                        self.wait(self.SETTLED + 0.5), self.mark("settled", seen)], settle=self.SETTLED)
+        self.assertEqual(seen["moved"][0], seen["start"][0], "the card rendered before the selection settled")
+        self.assertEqual(seen["settled"][0], seen["start"][0] + 1)
+        self.assertIn("Body of note 2", seen["settled"][1])
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class NoteListLook(unittest.TestCase):
+    """The Notes list on a real screen, with the keys in the list: the selected note's row has no background
+    fill; a green ▌ at the list's left edge marks it, and its name is bold green."""
+    setUp = TextualScreens.setUp
+    keys = staticmethod(TextualScreens.keys)
+
+    def run_notes(self, steps):
+        import unittest.mock
+        now = time.time()
+        for i, title in enumerate(("Printer idea", "Laptop idea", "Toner idea")):
+            path = roost.create_note(title, body="first line")
+            os.utime(path, (now - (i + 1) * 60, now - (i + 1) * 60))
+        with unittest.mock.patch.multiple(roost, read_config=lambda: {"tab": "Notes"}):
+            return TextualScreens.run_app(self, [open_view("Notes")] + list(steps), size=(120, 40))
+
+    @staticmethod
+    def rows(seen, label):
+        """A step that keeps, under label: the selected note's name, and for each note row on screen its line,
+        its name's styles, its ▌ marks, and its background colors across the list."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            app, ui = pilot.app, pilot.app.ui
+            box = app.query_one(roost.NoteList).region
+            lines, out = screen_text(app), {}
+            for y, idx in ui.nrow_y.items():
+                r = ui.nrows[idx]
+                if r.get("new") or r.get("head"):
+                    continue
+                x = lines[y].index(r["name"], box.x)
+                out[r["name"]] = {"line": lines[y][box.x:box.right], "name_x": x,
+                                  "name": [style_at(app, y, x + i) for i in range(len(r["name"]))],
+                                  "bars": [(i, color_of(style_at(app, y, i))) for i in range(box.x, box.right) if lines[y][i:i + 1] == "▌"],
+                                  "first": next((i for i in range(box.x, box.right) if lines[y][i:i + 1].strip()), None),
+                                  "fills": backgrounds(app, y, box.x, box.right)}
+            seen[label] = (ui.nrows[ui.nsel].get("name"), ui.nreading, out)
+        return step
+
+    def test_the_selected_note_has_no_fill_a_green_bar_at_the_lists_left_edge_and_a_bold_green_name(self):
+        seen = {}
+        self.run_notes([self.rows(seen, "first"), self.keys("down"), self.rows(seen, "second")])
+        green = roost.GREEN.lower()
+        self.assertNotEqual(seen["first"][0], seen["second"][0], "the fixture: ↓ moved to another note")
+        for when in ("first", "second"):
+            sel, reading, out = seen[when]
+            with self.subTest(selected=sel):
+                self.assertFalse(reading, "the fixture: the keys are in the list")
+                got = out[sel]
+                self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+                self.assertEqual(len(got["bars"]), 1, got["line"])
+                bx, color = got["bars"][0]
+                self.assertEqual(color, green, "the ▌ is green")
+                self.assertEqual(bx, got["first"], f"the ▌ is the first thing on the row, at the list's left: {got['line']!r}")
+                self.assertLess(bx, got["name_x"])
+                self.assertTrue(all(st and st.bold and color_of(st) == green for st in got["name"]), "the name is bold green")
+                for name, other in out.items():
+                    if name != sel:
+                        self.assertEqual(other["bars"], [], f"{name} has no ▌")
+                        self.assertFalse([st for st in other["name"] if color_of(st) == green], f"{name} isn't green")
+
+    def test_while_reading_the_selected_note_keeps_a_dim_bar_and_a_bold_name_that_isnt_green(self):
+        seen = {}
+        self.run_notes([self.keys("right"), self.rows(seen, "reading")])
+        sel, reading, out = seen["reading"]
+        muted, green = roost.MUTED.lower(), roost.GREEN.lower()
+        self.assertTrue(reading, "the fixture: → reads the note, the keys in the card")
+        got = out[sel]
+        self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+        self.assertEqual(len(got["bars"]), 1, got["line"])
+        bx, color = got["bars"][0]
+        self.assertEqual(color, muted, "the ▌ is dim while reading")
+        self.assertEqual(bx, got["first"], f"the ▌ is the first thing on the row: {got['line']!r}")
+        self.assertTrue(all(st and st.bold for st in got["name"]), "the name is bold")
+        self.assertFalse([st for st in got["name"] if color_of(st) == green], "the name isn't green while reading")

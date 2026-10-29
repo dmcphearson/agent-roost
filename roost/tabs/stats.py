@@ -379,12 +379,16 @@ if Static:
             super().watch_scroll_y(old, new)
             self.app.ui.sscroll = round(new)
     class StatsPage(Vertical):
-        """The Stats tab: the search row, then StatsView."""
+        """The Stats tab: the search row while a project search is typed or set, then StatsView."""
         def compose(self):
             yield SearchRow()
             yield StatsView()
 
         def settle(self):
+            ui = self.app.ui
+            shown = bool(ui.searching or ui.squery)
+            self.query_one(SearchRow).display = shown
+            self.query_one(StatsView).styles.margin = (0, 1, 1, 1) if shown else (1, 1, 1, 1)
             self.query_one(StatsView).settle()
 else:
     StatsView = StatsPage = None

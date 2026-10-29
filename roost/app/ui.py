@@ -5,9 +5,10 @@ from roost.tabs.sessions import SessionsTab, SessionsView
 from roost.tabs.projects import ProjectsTab, ProjectsView
 from roost.tabs.notes import NotesTab, NotesView
 from roost.tabs.stats import StatsTab, StatsPage
+from roost.tabs.unfiled import UnfiledTab
 
 
-class UI(ProjectsTab, SessionsTab, NotesTab, StatsTab, Shell):
+class UI(ProjectsTab, UnfiledTab, SessionsTab, NotesTab, StatsTab, Shell):
     """The screens: what each tab lists and draws, and what its keys do. Drawing goes through a curses
     window size (self.scr); each tab's widgets draw what it works out (see roost.app.screen)."""
 
