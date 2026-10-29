@@ -26,6 +26,7 @@ from pathlib import Path
 from roost.core.sessiondata import ago, group, matches
 from roost.core.projectdata import project_command, project_flags
 from roost.core.notedata import note_command, note_flags
+from roost.core.taskdata import task_command, task_flags
 from roost.core.handoffs import handoff_command, handoff_flags, ledger_command, ledger_flags
 from roost.core.adopt import adopt_command, adopt_flags
 from roost.core.formatting import ktok
@@ -62,6 +63,8 @@ COMMANDS = {
                       lambda p: None, lambda args: install.self_update()),
     "project": Command("projects: new <id> [--description \"…\"] · brief <id> · list · status <id> · description <id>",
                        project_flags, lambda args: project_command(args)),
+    "task": Command("tasks: new <project> \"title\" · list <project> · show <id> · claim <id> · note <id> · status <id>",
+                    task_flags, task_command),
     "handoff": Command("write this Session's Handoff in its project, from a summary on stdin (/wrap-up runs it)",
                        handoff_flags, handoff_command),
     "note": Command("save a note to your scratchpad (the Notes tab): note \"title\" [text], or the text on stdin",
