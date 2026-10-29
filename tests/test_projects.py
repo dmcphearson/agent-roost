@@ -2491,7 +2491,7 @@ class DetailPane(unittest.TestCase):
             c = ui.choosing
             seen[label] = {"focus": ui.focus, "dsel": getattr(ui, "dsel", None), "psel": ui.psel,
                            "items": ui.detail_items(r) if hasattr(ui, "detail_items") else [],
-                           "lines": screen_text(pilot.app), "raised": pane_raised(pilot.app),
+                           "lines": screen_text(pilot.app), "selected": pane_selected(pilot.app),
                            "menu": c and (c["title"], [o[0] for o in ui.choice_options() if not is_divider(o)]),
                            "view": ui.TABS[ui.tab].name, "alert": ui.alerting}
         return step
@@ -2583,11 +2583,34 @@ class DetailPane(unittest.TestCase):
                     size=self.SIZE)
         ys = self.item_ys(seen["side"])
         self.assertEqual(len(ys), 4, seen["side"]["items"])
-        self.assertFalse(seen["side"]["raised"] & set(ys), "no item line is selected while the list has the keys")
+        self.assertFalse(seen["side"]["selected"] & set(ys), "no item line is selected while the list has the keys")
         for i in range(4):
             self.assertEqual(self.item_ys(seen[i]), ys, "the lines stay put")
-            self.assertEqual(seen[i]["raised"] & set(ys), {ys[i]}, (i, seen[i]["lines"][ys[i]]))
-        self.assertFalse(seen["back"]["raised"] & set(ys), "esc: back to the list, nothing selected in the details")
+            self.assertEqual(seen[i]["selected"] & set(ys), {ys[i]}, (i, seen[i]["lines"][ys[i]]))
+        self.assertFalse(seen["back"]["selected"] & set(ys), "esc: back to the list, nothing selected in the details")
+
+    def test_the_selected_items_line_has_no_background_fill_and_its_name_is_bold_green(self):
+        before = self.fleet_items()
+        ys = self.item_ys(before)
+        green = importlib.import_module("roost.app.widgets").GREEN.lower()
+        seen = {}
+
+        async def look(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            app, y = pilot.app, ys[0]
+            line = screen_text(app)[y]
+            name = self.text_of(*before["items"][0])
+            x = line.index(name, roost.SIDEBAR_W)
+            seen.update(fills=backgrounds(app, y, roost.SIDEBAR_W), line=line,
+                        name=[style_at(app, y, x + i) for i in range(len(name))],
+                        bar=[(i, color_of(style_at(app, y, i))) for i, ch in enumerate(line) if ch == "▌" and i >= roost.SIDEBAR_W])
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("right"), look], size=self.SIZE)
+        self.assertEqual(seen["fills"], set(), f"no background fill on the selected item's line: {seen['line']!r}")
+        self.assertEqual(len(seen["bar"]), 1, seen["line"])
+        self.assertEqual(seen["bar"][0][1], green, "the ▌ is green")
+        self.assertLess(seen["bar"][0][0], seen["line"].index(self.text_of(*before["items"][0]), roost.SIDEBAR_W), "at the item's left")
+        self.assertTrue(all(st and st.bold and color_of(st) == green for st in seen["name"]), "its name is bold green")
 
     def test_changing_the_lists_selection_resets_dsel(self):
         seen = {}
@@ -2675,7 +2698,7 @@ class DetailPane(unittest.TestCase):
                                     self.state(seen, "clicked")], size=self.SIZE)
         got = seen["clicked"]
         self.assertEqual((got["focus"], got["dsel"], got["menu"]), ("pane", note, None))
-        self.assertEqual(got["raised"] & set(ys), {ys[note]})
+        self.assertEqual(got["selected"] & set(ys), {ys[note]})
 
     def test_a_double_click_on_an_items_line_runs_its_first_action(self):
         import unittest.mock
@@ -2933,9 +2956,9 @@ class MoreProjects(unittest.TestCase):
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class ListLook(unittest.TestCase):
-    """The Projects list's look (TwoPanes' folder): every label starts at the same column; the selected row is
-    a raised band with ▌ at column 0, green while the list has the keys and dim while the details have them;
-    a row's marks sit at its right, ● green and ◆ yellow."""
+    """The Projects list's look (TwoPanes' folder): every label starts at the same column; the selected row has
+    no background fill: ▌ at column 0, green while the list has the keys and dim while the details have them,
+    and its label bold, green while the list has the keys; a row's marks sit at its right, ● green and ◆ yellow."""
     run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
     select, keys, SIZE, setUp, DESCRIPTION = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), TwoPanes.SIZE, TwoPanes.setUp, TwoPanes.DESCRIPTION
     LOOK = importlib.import_module("roost.app.widgets")
@@ -2966,23 +2989,26 @@ class ListLook(unittest.TestCase):
             xs[label] = side[y].index(label)
         self.assertEqual(len(set(xs.values())), 1, xs)
 
-    def test_the_selected_row_is_a_raised_band_with_a_bar_green_in_the_list_and_dim_in_the_details(self):
+    def test_the_selected_row_has_no_fill_a_bar_and_a_bold_label_green_in_the_list_and_dim_in_the_details(self):
         seen = {}
 
         def styles(app, lines):
-            y, other = self.row_y(lines, "Printer fleet"), self.row_y(lines, "Quiet one")
-            mid = roost.SIDEBAR_W - 8  # inside the band, past the name
-            return {"bar": style_at(app, y, 0), "mid": style_at(app, y, mid), "other": style_at(app, other, mid), "y": y}
+            y = self.row_y(lines, "Printer fleet")
+            x = lines[y].index("Printer fleet")
+            return {"bar": style_at(app, y, 0), "label": [style_at(app, y, x + i) for i in range(len("Printer fleet"))],
+                    "fills": backgrounds(app, y, 0, roost.SIDEBAR_W - 1), "y": y}
         self.run_on(self.projects, [self.on_project("fleet"), self.lines(seen, "list", styles), self.keys("right"),
                                     self.lines(seen, "details", styles)], size=self.SIZE)
-        green, muted, raised = self.LOOK.GREEN.lower(), self.LOOK.MUTED.lower(), self.LOOK.RAISED.lower()
+        green, muted = self.LOOK.GREEN.lower(), self.LOOK.MUTED.lower()
         for when, bar in (("list", green), ("details", muted)):
             got, lines = seen[(when, "also")], seen[when]
             with self.subTest(keys_in=when):
                 self.assertEqual(lines[got["y"]][:1], "▌", lines[got["y"]])
                 self.assertEqual(color_of(got["bar"]), bar)
-                self.assertEqual(color_of(got["mid"], "bgcolor"), raised, "a raised band across the row")
-                self.assertNotEqual(color_of(got["other"], "bgcolor"), raised, "only the selected row")
+                self.assertEqual(got["fills"], set(), "no background fill on the selected row")
+                self.assertTrue(all(st and st.bold for st in got["label"]), "the label is bold")
+                label_green = {color_of(st) == green for st in got["label"]}
+                self.assertEqual(label_green, {when == "list"}, "the label is green only while the list has the keys")
 
     def test_a_rows_marks_are_a_green_dot_and_a_yellow_diamond_at_its_right(self):
         seen = {}
@@ -3271,8 +3297,8 @@ class DetailLayout(unittest.TestCase):
     """The details on a real screen (SectionsOnScreen's folder, with Current state and Next on Printer fleet, a
     Next alone on Restore drill, and bodies on Printer fleet's Handoffs: Toner swap, the newest, and Toner
     check). One column at any width, its sections at most 80 columns wide: the name line, then Next and
-    Current state, Sub-projects, Sessions, Handoffs, Notes, Details, and Stats. The top bar is the only row
-    above the content; the list's first row and the name line are on screen row 2."""
+    Current state, Sub-projects, Sessions, Handoffs, Notes, Details, and Stats. Above the content are only the
+    top bar, a blank row, a rule, and a blank row; the list's first row and the name line are on screen row 4."""
     run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
     select, keys, sidebar = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(ProjectRows.sidebar)
     at, SIZE, WIDE, DESCRIPTION = staticmethod(TwoPanes.at), (120, 48), (180, 48), TwoPanes.DESCRIPTION
@@ -3304,16 +3330,16 @@ class DetailLayout(unittest.TestCase):
             ui = pilot.app.ui
             r = ui.project_rows()[ui.psel]
             seen[label] = {"lines": screen_text(pilot.app), "bold": bold_text(pilot.app), "dim": dim_text(pilot.app),
-                           "raised": pane_raised(pilot.app), "items": ui.detail_items(r) if r.kind in ("project", "sub") else [],
+                           "selected": pane_selected(pilot.app), "items": ui.detail_items(r) if r.kind in ("project", "sub") else [],
                            "dsel": getattr(ui, "dsel", None), "focus": ui.focus, "menu": ui.choosing and ui.choosing["title"],
                            "folder": roost.short(str(roost.projects_dir())), "projects": ui.projects}
         return step
 
     @staticmethod
     def first_sidebar_row(lines):
-        """The first screen row under the top bar where the sidebar draws anything."""
+        """The first screen row under the top bar and its rule where the sidebar draws anything."""
         side = ProjectRows.sidebar(lines)
-        return next((i for i in range(1, len(side)) if side[i].strip(" │┃▏▕")), None)
+        return next((i for i in range(1, len(side)) if side[i].strip(" │┃▏▕─")), None)
 
     @staticmethod
     def name_at(got):
@@ -3331,7 +3357,7 @@ class DetailLayout(unittest.TestCase):
 
     # 1. The top area
 
-    def test_the_top_bar_is_the_only_row_above_the_content(self):
+    def test_only_the_top_bar_and_its_rule_are_above_the_content(self):
         seen = {}
         self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet")], size=self.SIZE)
         got = seen["fleet"]
@@ -3340,10 +3366,11 @@ class DetailLayout(unittest.TestCase):
         self.assertTrue(lines[0].rstrip().endswith(got["folder"]), f"the projects folder at the top bar's right: {lines[0]!r}")
         self.assertTrue([t for y, x, t in got["dim"] if y == 0 and got["folder"] in t], "the folder is dim")
         self.assertFalse([l for l in lines if re.search(r"\d+ projects · \d+ closed", l)], "no project counts")
-        self.assertEqual([l.strip(" │┃▏▕") for l in lines[1:3]], ["", ""], "two blank rows under the top bar")
-        self.assertEqual(self.first_sidebar_row(lines), 3, self.sidebar(lines)[:5])
+        self.assertEqual(lines[2], "─" * len(lines[0]), "a rule across the whole width under the top bar")
+        self.assertEqual([l.strip(" │┃▏▕") for l in (lines[1], lines[3])], ["", ""], "a blank row each side of the rule")
+        self.assertEqual(self.first_sidebar_row(lines), 4, self.sidebar(lines)[:6])
         y, x, name = self.name_at(got)
-        self.assertEqual((y, name), (3, "Printer fleet"), "the name line is level with the sidebar's first row")
+        self.assertEqual((y, name), (4, "Printer fleet"), "the name line is level with the sidebar's first row")
         self.assertGreaterEqual(x, W)
 
     def test_the_search_row_shows_only_while_searching_or_with_a_search_set(self):
@@ -3351,12 +3378,12 @@ class DetailLayout(unittest.TestCase):
         self.run_on(self.projects, [self.on_project("fleet"), self.keys("/"), self.grab(seen, "typing"), self.keys("f", "l", "e"),
                                     self.keys("enter"), self.grab(seen, "kept"), self.keys("/", "escape"), self.grab(seen, "cleared")],
                     size=self.SIZE)
-        W, top = roost.SIDEBAR_W, slice(1, 6)  # the rows under the top bar (the key bar has a / too)
+        W, top = roost.SIDEBAR_W, slice(1, 7)  # the rows under the top bar (the key bar has a / too)
         self.assertTrue([l for l in seen["typing"]["lines"][top] if "/ " in l[W:]], "the search row, while typing")
         self.assertTrue([l for l in seen["kept"]["lines"][top] if "/ fle" in l[W:]], "the search row, with a search set")
         got = seen["cleared"]
         self.assertFalse([l for l in got["lines"][top] if "/ " in l[W:]], "no search row once it's cleared")
-        self.assertEqual(self.name_at(got)[0], 3, got["lines"][:5])
+        self.assertEqual(self.name_at(got)[0], 4, got["lines"][:6])
 
     def test_the_lists_first_row_is_on_the_same_screen_row_after_the_other_tabs(self):
         seen, shown = {}, []
@@ -3369,33 +3396,35 @@ class DetailLayout(unittest.TestCase):
         self.run_on(self.projects, steps, size=self.SIZE)
         self.assertEqual(shown, list(TABS[1:]) + ["Projects"], "round the other tabs and back")
         got = {k: self.first_sidebar_row(seen[k]["lines"]) for k in seen}
-        self.assertEqual(got, {"first": 3, "back": 3})
+        self.assertEqual(got, {"first": 4, "back": 4})
 
     # 2. The name line
 
-    def test_the_name_line_is_the_label_bold_then_its_status_as_a_pill_then_when_it_was_worked_dim(self):
+    def test_the_name_line_is_the_label_bold_then_its_status_bold_in_its_color_then_when_it_was_worked_dim(self):
         seen = {}
+        widgets = importlib.import_module("roost.app.widgets")
 
-        def pill(label):
+        def name_line(label):
             async def step(pilot):
                 pilot.app.redraw()
                 await pilot.pause()
-                lines = screen_text(pilot.app)
                 y = min((y for y, x, t in bold_text(pilot.app) if x >= roost.SIDEBAR_W and y > 0), default=None)
-                seen[(label, "pill")] = [(x, text, color_of(st, "bgcolor")) for x, text, st in runs(pilot.app, y)] if y else []
+                seen[(label, "runs")] = runs(pilot.app, y) if y else []
+                seen[(label, "fills")] = backgrounds(pilot.app, y, roost.SIDEBAR_W) if y else None
             return step
-        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet"), pill("fleet"), self.on_project("quiet"),
-                                    self.grab(seen, "quiet"), pill("quiet")], size=self.SIZE)
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet"), name_line("fleet"), self.on_project("quiet"),
+                                    self.grab(seen, "quiet"), name_line("quiet")], size=self.SIZE)
         fleet = next(p for p in seen["fleet"]["projects"] if p["id"] == "fleet")
-        for label, status, when in (("fleet", "awaiting-vendor", f"worked {roost.short_when(fleet['last'])}"),
-                                    ("quiet", "active", "never worked")):
+        for label, status, color, when in (("fleet", "awaiting-vendor", widgets.BLUE, f"worked {roost.short_when(fleet['last'])}"),
+                                           ("quiet", "active", widgets.GREEN, "never worked")):
             got = seen[label]
             y, x, name = self.name_at(got)
             line = got["lines"][y]
             self.assertRegex(line[x:], rf"^{re.escape(name)}\s+{re.escape(status)}\s+{re.escape(when)}$", label)
-            # the pill: the status with a space each side, on a coloured background the rest of the line doesn't have
-            on = "".join(text for _, text, bg in seen[(label, "pill")] if bg)
-            self.assertEqual(on, f" {status} ", (label, seen[(label, "pill")]))
+            # the status: bold in its color, with no background and no padding spaces in its look
+            shown = "".join(text for _, text, st in seen[(label, "runs")] if color_of(st) == color.lower() and st.bold)
+            self.assertEqual(shown, status, (label, seen[(label, "runs")]))
+            self.assertEqual(seen[(label, "fills")], set(), f"{label}: no background on the name line")
             self.assertTrue([t for yy, xx, t in got["dim"] if yy == y and xx > x and when in t],
                             f"{label}: when it was worked is dim: {got['dim']}")
             W = roost.SIDEBAR_W
@@ -3581,7 +3610,7 @@ class DetailLayout(unittest.TestCase):
             last = y + 1
         self.assertEqual(len(ys), 4, got["items"])  # Printer fix, Toner swap, Toner check, Driver shortlist
         for i in range(4):
-            self.assertEqual(seen[i]["raised"] & set(ys), {ys[i]}, (size, i, seen[i]["lines"][ys[i]]))
+            self.assertEqual(seen[i]["selected"] & set(ys), {ys[i]}, (size, i, seen[i]["lines"][ys[i]]))
         note = next(i for i, (k, _) in enumerate(got["items"]) if k == "note")
         clicked = {}
         self.run_on(self.projects, [self.on_project("fleet"), self.loaded,
@@ -3623,8 +3652,8 @@ class DetailLayout(unittest.TestCase):
         cy = next(i for i, l in enumerate(lines) if "Toner check" in l[W:])
         self.assertEqual([x[1] for k, x in seen["side"]["items"] if k == "handoff"], ["Toner swap", "Toner check"])
         band = set(range(ty, cy + 1))
-        self.assertEqual(seen["swap"]["raised"] & band, {ty})
-        self.assertEqual(seen["down"]["raised"] & band, {cy}, "↓ goes from Toner swap straight to Toner check")
+        self.assertEqual(seen["swap"]["selected"] & band, {ty})
+        self.assertEqual(seen["down"]["selected"] & band, {cy}, "↓ goes from Toner swap straight to Toner check")
         check = next(i for i, (k, x) in enumerate(seen["side"]["items"]) if k == "handoff" and x[1] == "Toner check")
         for y, want in ((ty + 1, None), (cy, check)):
             clicked = {}
@@ -3633,7 +3662,7 @@ class DetailLayout(unittest.TestCase):
             got = clicked["x"]
             if want is None:  # a click on one of the lines: nothing is selected or opened
                 self.assertEqual((got["menu"], got["focus"]), (None, "side"), got["lines"][y])
-                self.assertFalse(got["raised"] & band)
+                self.assertFalse(got["selected"] & band)
             else:
                 self.assertEqual((got["focus"], got["dsel"]), ("pane", want))
 

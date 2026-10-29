@@ -604,6 +604,58 @@ class TextualScreens(unittest.TestCase):
         self.assertRegex(seen["row"], r"^\s*Running \(2\)\s+Closed \(3\)\s+Unfiled \(5\)\s*$")
         self.assertRegex(seen["searched"], r"^\s*Running \(1\)\s+Closed \(2\)\s+Unfiled \(\d+\)\s+/ printer\s*$")
 
+    def test_the_current_view_is_bold_green_with_no_background_and_the_others_dim(self):
+        self.views_fixture()
+        seen = {}
+
+        def styles(app):
+            y, line = app.ui.view_row_y, screen_text(app)[app.ui.view_row_y]
+            out = {}
+            for label in roost.VIEWS:
+                x = line.index(f"{label} (")
+                out[label] = [style_at(app, y, i) for i in range(x, x + len(label))]
+            return roost.VIEWS[app.ui.view], out, backgrounds(app, y), line
+        steps = [open_view("Sessions")]
+        for i in range(len(roost.VIEWS)):
+            steps += [self.look(seen, i, styles), self.keys("right")]
+        self.run_app(steps)
+        green, muted = roost.GREEN.lower(), roost.MUTED.lower()
+        self.assertEqual([seen[i][0] for i in range(len(roost.VIEWS))], list(roost.VIEWS), "the fixture: → went through each view")
+        for i in range(len(roost.VIEWS)):
+            current, out, fills, line = seen[i]
+            with self.subTest(view=current):
+                self.assertEqual(fills, set(), f"no background on the view row: {line!r}")
+                for label, sts in out.items():
+                    if label == current:
+                        self.assertTrue(all(color_of(st) == green and st.bold for st in sts), f"{label} is bold green")
+                    else:
+                        self.assertEqual({color_of(st) for st in sts}, {muted}, f"{label} is dim while {current} shows")
+
+    def test_the_selected_session_row_is_a_green_mark_and_a_bold_green_name_with_no_background(self):
+        seen = {}
+
+        def look(app):
+            lines = screen_text(app)
+            ys = {n: next(y for y, l in enumerate(lines) if n in l) for n in ("Laptop refresh", "Printer fix")}
+            sel = app.ui.srows[app.ui.sel]["name"]
+            out = {}
+            for n, y in ys.items():
+                x = lines[y].index(n)
+                out[n] = {"name": [style_at(app, y, x + i) for i in range(len(n))], "fills": backgrounds(app, y),
+                          "mark": (lines[y][1], color_of(style_at(app, y, 1))), "line": lines[y]}
+            return sel, out
+        self.run_app([open_view("Sessions"), self.look(seen, "x", look)])
+        sel, out = seen["x"]
+        green = roost.GREEN.lower()
+        self.assertEqual(sel, "Laptop refresh", "the fixture: the first row is selected")
+        got = out["Laptop refresh"]
+        self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+        self.assertEqual(got["mark"], ("›", green))
+        self.assertTrue(all(color_of(st) == green and st.bold for st in got["name"]), "the name is bold green")
+        other = out["Printer fix"]
+        self.assertNotEqual(other["mark"][0], "›")
+        self.assertFalse([st for st in other["name"] if color_of(st) == green], "an unselected name isn't green")
+
     def test_left_and_right_switch_between_running_closed_and_unfiled_wrapping(self):
         self.views_fixture()
         seen = {}
@@ -1084,6 +1136,34 @@ class TopTabs(unittest.TestCase):
                     self.assertTrue(seen["corner"] and seen["corner"][0], seen["corner"])
                     self.assertTrue(seen["bar"].rstrip().endswith(seen["corner"][0]), seen["bar"])
 
+    def test_the_current_tabs_name_is_bold_green_with_no_background_of_its_own_and_the_others_dim(self):
+        """No green tint: the current tab's name and the spaces each side of it are on the top bar's own
+        background (what the bar draws at its first column), as every other tab's name is."""
+        green_bg = importlib.import_module("roost.app.widgets").GREEN_BG.lower()
+        muted = roost.MUTED.lower()
+        for name in TABS:
+            seen = {}
+
+            async def bar(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                line = screen_text(pilot.app)[0]
+                seen["bar"], seen["own"] = line, color_of(style_at(pilot.app, 0, 0), "bgcolor")
+                seen["tabs"] = {n: [style_at(pilot.app, 0, x) for x in range(self.label_x(line, n) - 1, self.label_x(line, n) + len(n) + 1)]
+                                for n in TABS if self.label_x(line, n) is not None}
+            self.start([open_view(name), bar])
+            with self.subTest(tab=name):
+                self.assertEqual(set(seen["tabs"]), set(TABS), seen["bar"])
+                for n, styles in seen["tabs"].items():
+                    letters = styles[1:-1]
+                    fills = {color_of(st, "bgcolor") for st in styles}
+                    self.assertEqual(fills, {seen["own"]}, f"{n} on the {name} tab: on the bar's own background")
+                    self.assertNotIn(green_bg, fills)
+                    if n == name:
+                        self.assertTrue(all(color_of(st) == self.GREEN and st.bold for st in letters), f"{n} is bold green")
+                    else:
+                        self.assertEqual({color_of(st) for st in letters}, {muted}, f"{n} on the {name} tab is dim")
+
     # 2. Moving between the tabs
 
     def test_tab_and_shift_tab_move_to_the_next_and_previous_tab_wrapping(self):
@@ -1154,16 +1234,18 @@ class TopTabs(unittest.TestCase):
 
     # 4. No sidebar on Sessions, Notes, and Stats
 
-    def test_two_blank_rows_separate_the_top_bar_from_the_content_on_every_tab(self):
-        """Rows 1 and 2 are blank on every tab and the content starts on row 3: on Projects the list's first
-        row and the details' name line, on Sessions the views row, on Notes and Stats their first row."""
+    def test_a_blank_row_a_rule_and_a_blank_row_separate_the_top_bar_from_the_content_on_every_tab(self):
+        """On every tab row 1 is blank, row 2 is a rule (─) across the whole width in the faint line color, row 3
+        is blank, and the content starts on row 4: on Projects the list's first row and the details' name line,
+        on Sessions the views row, on Notes and Stats their first row."""
         seen, W = {}, roost.SIDEBAR_W
 
         def grab(name):
             async def step(pilot):
                 pilot.app.redraw()
                 await pilot.pause()
-                seen[name] = (self.shown(pilot.app), screen_text(pilot.app), bold_text(pilot.app))
+                seen[name] = (self.shown(pilot.app), screen_text(pilot.app), bold_text(pilot.app),
+                              [color_of(st) for x, text, st in runs(pilot.app, 2) for _ in text])
             return step
         steps = [grab("Projects")]
         for name in TABS[1:]:
@@ -1171,18 +1253,22 @@ class TopTabs(unittest.TestCase):
         self.start(steps, size=(120, 40))
         blank = lambda l: not l.strip(" │┃▏▕")
         for name in TABS:
-            shown, lines, bold = seen[name]
+            shown, lines, bold, rule = seen[name]
             with self.subTest(tab=name):
                 self.assertEqual(shown, name)
-                first = next((y for y in range(1, len(lines)) if not blank(lines[y])), None)
-                self.assertEqual(first, 3, "two blank rows under the top bar, then the content:\n" + "\n".join(lines[:6]))
+                top = "\n".join(lines[:7])
+                self.assertEqual(lines[2], "─" * 120, "a rule across the whole width:\n" + top)
+                self.assertEqual(set(rule), {roost.LINE.lower()}, "the rule is in the faint line color")
+                self.assertTrue(blank(lines[1]) and blank(lines[3]), "a blank row each side of the rule:\n" + top)
+                first = next((y for y in range(3, len(lines)) if not blank(lines[y])), None)
+                self.assertEqual(first, 4, "then the content:\n" + top)
                 if name == "Projects":
-                    side = next((y for y in range(1, len(lines)) if not blank(lines[y][:W])), None)
-                    self.assertEqual(side, 3, "the list's first row:\n" + "\n".join(lines[:6]))
+                    side = next((y for y in range(3, len(lines)) if not blank(lines[y][:W])), None)
+                    self.assertEqual(side, 4, "the list's first row:\n" + top)
                     nm = min(((y, t) for y, x, t in bold if x >= W and y > 0), default=None)
-                    self.assertEqual(nm and nm[0], 3, ("the details' name line", nm))
+                    self.assertEqual(nm and nm[0], 4, ("the details' name line", nm))
                 if name == "Sessions":
-                    self.assertRegex(lines[3], r"^\s*Running \(\d+\)\s+Closed \(\d+\)\s+Unfiled \(\d+\)", "the views row")
+                    self.assertRegex(lines[4], r"^\s*Running \(\d+\)\s+Closed \(\d+\)\s+Unfiled \(\d+\)", "the views row")
 
     def test_sessions_notes_and_stats_take_the_whole_window_with_no_project_list(self):
         widget = {"Sessions": [roost.SessionList], "Notes": [roost.NoteList, roost.NoteCard], "Stats": [roost.StatsView]}

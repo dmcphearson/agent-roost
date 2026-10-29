@@ -210,5 +210,37 @@ class Unfiled(unittest.TestCase):
         self.assertEqual(menu, ("Toner order", want))
 
 
+    # the look
+
+    def test_the_selected_row_is_a_green_mark_and_a_bold_green_name_with_no_background(self):
+        seen = {}
+
+        def rows(app):
+            ui = app.ui
+            kind, item = ui.urows[ui.usel]
+            lines = screen_text(app)
+            out = {}
+            for y in ui.urow_y:
+                name = ui.urows[ui.urow_y[y]][1]["name"]
+                x = lines[y].index(name)
+                out[name] = {"name": [style_at(app, y, x + i) for i in range(len(name))], "fills": backgrounds(app, y),
+                             "mark": (lines[y][1], color_of(style_at(app, y, 1))), "line": lines[y]}
+            return item["name"], out
+        self.start([self.on_unfiled(), self.look(seen, "first", rows), self.keys("down"), self.look(seen, "second", rows)])
+        green = roost.GREEN.lower()
+        for when in ("first", "second"):
+            sel, out = seen[when][1]
+            with self.subTest(selected=sel):
+                got = out[sel]
+                self.assertEqual(got["fills"], set(), f"no background fill on the selected row: {got['line']!r}")
+                self.assertEqual(got["mark"], ("›", green))
+                self.assertTrue(all(color_of(st) == green and st.bold for st in got["name"]), "the name is bold green")
+                for name, other in out.items():
+                    if name != sel:
+                        self.assertNotEqual(other["mark"][0], "›", name)
+                        self.assertFalse([st for st in other["name"] if color_of(st) == green], f"{name} isn't selected")
+        self.assertNotEqual(seen["first"][1][0], seen["second"][1][0], "the fixture: ↓ moved the selection")
+
+
 if __name__ == "__main__":
     unittest.main()

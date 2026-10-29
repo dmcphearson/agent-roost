@@ -149,18 +149,33 @@ def session(name, state="idle", kind="background", pinned=False, attached=False,
             "tokens": tokens, "cwd": cwd, "summary": "", "files": []}
 
 
-def pane_raised(app):
-    """The screen rows where the right pane (right of the sidebar) draws the selected style: a raised band."""
+def pane_selected(app):
+    """The screen rows where the right pane (right of the sidebar) draws a selected item's marks: a green ▌,
+    then text in bold green to its right."""
     from rich.cells import cell_len
-    raised = importlib.import_module("roost.app.widgets").RAISED.lower()
+    green = importlib.import_module("roost.app.widgets").GREEN.lower()
     out = set()
     for y, strip in enumerate(app.screen._compositor.render_strips()):
-        x = 0
+        x, bar = 0, None
         for seg in strip:
-            bg = seg.style and seg.style.bgcolor
-            if x >= roost.SIDEBAR_W and bg and bg.triplet and bg.triplet.hex.lower() == raised and seg.text.strip():
+            st = seg.style
+            if bar is None and x >= roost.SIDEBAR_W and "▌" in seg.text and color_of(st) == green:
+                bar = x + seg.text.index("▌")
+            elif bar is not None and len(seg.text.strip()) > 1 and color_of(st) == green and st.bold:
                 out.add(y)
+                break
             x += cell_len(seg.text)
+    return out
+
+
+def backgrounds(app, y, x0=0, x1=None):
+    """The background colors screen row y draws in columns x0 up to x1 (to the row's end unless asked), as
+    lowercase hex: empty where all of it is on the frame's own background."""
+    from rich.cells import cell_len
+    out = set()
+    for x, text, style in runs(app, y):
+        if x + cell_len(text) > x0 and (x1 is None or x < x1) and color_of(style, "bgcolor"):
+            out.add(color_of(style, "bgcolor"))
     return out
 
 
