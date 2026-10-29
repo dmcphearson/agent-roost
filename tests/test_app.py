@@ -417,8 +417,18 @@ class Tabs(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_projects_is_the_home_tab(self):
-        # Unfiled's view comes right after Projects since step 3b-1
-        self.assertEqual([t.name for t in roost.UI.TABS], ["Projects", "Unfiled", "Sessions", "Notes", "Stats"])
+        self.assertEqual([t.name for t in roost.UI.TABS], ["Projects", "Sessions", "Notes", "Stats"])
+
+    def test_tab_and_shift_tab_switch_tabs_wrapping_and_the_tab_is_remembered(self):
+        self.ui.dispatch("tab", None)
+        self.assertEqual((self.ui.tab, roost.read_config().get("tab")), (1, "Projects"))
+        self.ui.dispatch("tab", None)
+        self.assertEqual(self.ui.tab, 0)
+        self.assertEqual(roost.start_tab(["Sessions", "Projects"]), 0)
+        self.ui.dispatch("shift+tab", None)
+        self.assertEqual(self.ui.tab, 1)
+        self.assertEqual(roost.start_tab(["Sessions", "Projects"]), 1)
+        self.assertEqual(self.got, [], "tab goes to no tab's keys")
 
     def test_start_tab_falls_back_when_the_tab_is_gone(self):
         roost.save_config(tab="Tasks")

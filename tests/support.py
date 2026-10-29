@@ -100,26 +100,46 @@ def dim_text(app):
     return out
 
 
-# the sidebar's entries, under the projects, top to bottom; Unfiled (the Sessions no project lists, and the
-# notes in ~/.roost/notes) comes first
-ENTRIES = ("Unfiled", "Sessions", "Notes", "Stats")
+TABS = ("Projects", "Sessions", "Notes", "Stats")  # the top bar's tabs, left to right
 
 
 def open_view(name):
-    """A pilot step that shows the view name in the right pane, as the sidebar does. An entry (Unfiled,
-    Sessions, Notes, Stats): ui.open_entry(name) selects it and focuses the pane, so the keys that follow go to
-    that view. Projects: the focus goes back to the sidebar and home puts its selection on the top row."""
+    """A pilot step that shows the tab name as a person does: Tab until it's the current tab, at most once
+    round the tabs. The keys that follow go to its view (on Projects, to its list)."""
     async def step(pilot):
         ui = pilot.app.ui
-        if name == "Projects":
-            ui.focus = "side"
-            pilot.app.redraw()
-            await pilot.press("home")
-        else:
-            ui.open_entry(name)
-            pilot.app.redraw()
-        await pilot.pause()
+        for _ in range(len(ui.TABS)):
+            if ui.TABS[ui.tab].name == name:
+                return
+            await pilot.press("tab")
+            await pilot.pause()
+        assert ui.TABS[ui.tab].name == name, f"Tab never reached the {name} tab: still on {ui.TABS[ui.tab].name}"
     return step
+
+
+def runs(app, y):
+    """Screen row y as Textual draws it: (x, text, style) for each run."""
+    from rich.cells import cell_len
+    out, x = [], 0
+    for seg in app.screen._compositor.render_strips()[y]:
+        out.append((x, seg.text, seg.style))
+        x += cell_len(seg.text)
+    return out
+
+
+def style_at(app, y, x):
+    """The Rich style the screen draws column x of row y in, or None."""
+    from rich.cells import cell_len
+    for x0, text, style in runs(app, y):
+        if x0 <= x < x0 + cell_len(text):
+            return style
+    return None
+
+
+def color_of(style, part="color"):
+    """A style's foreground (or, with part "bgcolor", background) as a lowercase hex, or None for the default."""
+    c = style and getattr(style, part)
+    return c.triplet.hex.lower() if c and c.triplet else None
 
 
 def session(name, state="idle", kind="background", pinned=False, attached=False, mins=0, tokens=0, cwd="/tmp"):
