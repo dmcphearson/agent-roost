@@ -537,7 +537,7 @@ class ProjectRows(unittest.TestCase):
             for pid, want in (("today-one", clock(now)), ("older-one", shown)):
                 with unittest.mock.patch.object(FMT, "date_order", lambda o=order: o):
                     lines = self.run_on(projects, [self.on_project(pid)]).lines
-                self.assertTrue([l for l in lines if re.search(rf"Last worked +{re.escape(want)}(\s|$)", l)], (order, pid, lines))
+                self.assertTrue([l for l in lines if re.search(rf"· worked {re.escape(want)}(\s|$)", l)], (order, pid, lines))
 
     def test_the_projects_card_dates_are_short(self):
         import unittest.mock
@@ -553,8 +553,8 @@ class ProjectRows(unittest.TestCase):
                 seen[kind] = dict(ui.project_panel([roost.Row("Recent", kind, item, 0)], 30, 160)[1])["Status"]
         with unittest.mock.patch.object(FMT, "date_order", lambda: "DMY"):
             app = self.run_on([p], [self.on_project("older-one"), panels])
-        status = next(l for l in app.lines if "Last worked" in l)
-        self.assertRegex(status, r"Last worked +05/01/25(\s|$)")
+        status = next(l for l in app.lines if "· worked" in l)
+        self.assertRegex(status, r"· worked 05/01/25(\s|$)")
         self.assertRegex(seen["session"], r"Last active +05/01/25(\s|$)")
         self.assertRegex(seen["recap"], r"Last worked +05/01/25(\s|$)")
 
@@ -683,7 +683,7 @@ class TwoPanes(unittest.TestCase):
         seen = {}
         self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet")], size=self.SIZE)
         lines, bold = seen["fleet"]
-        search = self.at(lines, "folder ")  # the search row: the folder the tab lists from, at its right
+        search = self.at(lines, "Agent Roost")  # the top bar: with no search, the only row above the content
         self.assertIsNotNone(search, lines)
         side = self.sidebar(lines)
         ys = {}
@@ -1097,7 +1097,7 @@ class SubProjectRows(unittest.TestCase):
         self.assertEqual(name, "rollout/beta")
         got = {label: str(v) for label, v in fields}
         self.assertIn("bugfix", got.get("Type", ""), fields)
-        self.assertIn("blocked", got.get("Status", ""), fields)
+        self.assertNotIn("Status", got, fields)  # its status is on the name line
 
     def test_a_sub_rows_actions_start_a_session_in_it(self):
         calls = self.capture_start()
@@ -3127,7 +3127,7 @@ class AllProjects(unittest.TestCase):
         detail = seen["detail"]
         pane = "\n".join(self.pane(detail["lines"]))
         self.assertEqual(self.detail_name(detail["bold"])[0], "Printer fleet", "its name first, as the sidebar's detail draws it")
-        self.assertRegex(pane, r"Folder +/nowhere/fleet +Id +fleet")
+        self.assertRegex(pane, r"(?m)^ *Folder +/nowhere/fleet *$", "the selected project's folder, on a row of its own")
         for heading in ("Sessions", "Handoffs", "Notes"):
             self.assertIn(heading, self.detail_name(detail["bold"]), f"its {heading} section")
         self.assertNotIn("Active (", pane, "the detail in place of the list")
@@ -3163,3 +3163,490 @@ class AllProjects(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------- the detail layout: the top area, the name line, the fields, Current state and Next, the newest
+# Handoff's lines, and the Stats sparkline
+
+STATE_TEXT = ("Drivers are packaged for both offices and the north office already runs on the new toner supplier, "
+              "while the south office waits on a vendor quote before its printers move over.")
+NEXT_TEXT = "Chase the south office quote, then book the printer swap for a quiet afternoon."
+DRILL_NEXT = "Run the restore drill again once the backup window moves."
+DID = ["Swapped the toner in the north office.", "Updated the driver list.", "Filed the vendor ticket."]
+
+
+def words(text):
+    return " ".join(text.split())
+
+
+class StateAndNextData(unittest.TestCase):
+    """read_project's "state" and "next": the README's text under ## Current state and ## Next, up to the
+    next ## heading, stripped; "" when the heading is missing. Sub-projects get them too."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    FRONT = "---\nstatus: active\nsessions: []\n---\n\n# Printer fleet\n\nIntro text.\n\n"
+
+    def test_the_text_under_each_heading_up_to_the_next_level_two_heading(self):
+        folder = self.project("fleet", self.FRONT + "## Current state\n\nNorth office done.\n\n### Detail\nSouth waits on a quote.\n\n"
+                                                    "## Next\n\n- Chase the quote\n- Book the swap\n\n## Key decisions\n\nIgnored text.\n")
+        p = roost.read_project(folder)
+        self.assertEqual(p["state"], "North office done.\n\n### Detail\nSouth waits on a quote.")  # a ### heading stays in it
+        self.assertEqual(p["next"], "- Chase the quote\n- Book the swap")
+
+    def test_a_last_section_runs_to_the_end_and_a_missing_one_is_empty(self):
+        only_next = self.project("drill", self.FRONT + "## Next\n\nRun it again.\n")
+        neither = self.project("plain")  # the shared README: no such headings
+        self.assertEqual((roost.read_project(only_next)["state"], roost.read_project(only_next)["next"]), ("", "Run it again."))
+        self.assertEqual((roost.read_project(neither)["state"], roost.read_project(neither)["next"]), ("", ""))
+
+    def test_a_sub_projects_state_and_next(self):
+        self.project("rollout")
+        self.sub("rollout", "alpha", body="## Current state\n\nBadge printers ordered.\n\n## Next\n\nInstall them.\n")
+        self.sub("rollout", "beta")
+        subs = {s["slug"]: s for s in roost.read_subprojects(self.root / "rollout")}
+        self.assertEqual((subs["alpha"]["state"], subs["alpha"]["next"]), ("Badge printers ordered.", "Install them."))
+        self.assertEqual((subs["beta"]["state"], subs["beta"]["next"]), ("", ""))
+
+
+class LatestHandoffData(unittest.TestCase):
+    """read_project's "handoff_lines": up to 3 lines from the newest Handoff's body, for the detail pane to
+    show under its row: the first non-empty lines under ### What I did (a roll-up's ## or ### What shipped),
+    else under ## Summary, each stopping at the next heading; [] when there's no Handoff or none of those
+    headings. Only the newest Handoff counts."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+
+    def write(self, folder, ago, body, meta="name: Printer work\n", sid="aaaaaaaa"):
+        path = folder / "handoffs" / handoff_name(time.time() - ago, sid)
+        path.write_text(f"---\n{meta}---\n\n{body}")
+        return path
+
+    def lines(self, body, meta="name: Printer work\n"):
+        """handoff_lines of a new project whose one Handoff has this body."""
+        self.made = getattr(self, "made", 0) + 1
+        folder = self.project(f"fleet-{self.made}")
+        self.write(folder, 3600, body, meta)
+        return roost.read_project(folder)["handoff_lines"]
+
+    def test_the_first_three_non_empty_lines_under_what_i_did(self):
+        body = ("### What I did\n\n" + DID[0] + "\n\n" + DID[1] + "\n" + DID[2] + "\nA fourth line stays hidden.\n"
+                "### What worked\nRestarting them helped.\n")
+        self.assertEqual(self.lines(body), DID)
+
+    def test_the_lines_stop_at_the_next_heading(self):
+        self.assertEqual(self.lines("### What I did\nOnly this one.\n\n### What worked\nRestarting them helped.\n"), ["Only this one."])
+
+    def test_a_rollup_takes_what_shipped_at_either_level(self):
+        for level in ("##", "###"):
+            body = f"{level} What shipped\n\nBadge printers in every office.\nToner alerts.\n\n{level} Open questions\nNone.\n"
+            self.assertEqual(self.lines(body, meta="rollup: alpha\n"), ["Badge printers in every office.", "Toner alerts."], level)
+
+    def test_summary_is_the_fallback_and_what_i_did_wins_over_it(self):
+        self.assertEqual(self.lines("## Summary\nSummary line one.\nSummary line two.\n\n## Details\nNot this.\n"),
+                         ["Summary line one.", "Summary line two."])
+        self.assertEqual(self.lines("## Summary\nSummary line.\n\n### What I did\nThe work itself.\n"), ["The work itself."])
+
+    def test_none_without_a_handoff_or_any_of_the_headings_and_only_the_newest_counts(self):
+        folder = self.project("fleet")
+        self.assertEqual(list(roost.read_project(folder)["handoff_lines"]), [])
+        self.write(folder, 2 * 86400, "### What I did\nOlder work.\n", sid="bbbbbbbb")
+        self.write(folder, 3600, "Just some text.\n")
+        self.assertEqual(list(roost.read_project(folder)["handoff_lines"]), [], "the newest has none of the headings")
+
+    def test_a_sub_projects_are_its_own(self):
+        self.project("rollout")
+        alpha = self.sub("rollout", "alpha")
+        self.write(alpha, 3600, "### What I did\nBadge work done.\n")
+        [s] = [x for x in roost.read_subprojects(self.root / "rollout") if x["slug"] == "alpha"]
+        self.assertEqual(s["handoff_lines"], ["Badge work done."])
+
+
+class DetailFields(unittest.TestCase):
+    """project_panel's fields for a project, in order, each only when it has something: Description (always:
+    "no description yet" when empty), Sessions (the only Sessions count), Repo, Category and Tags on one row
+    (whichever is set; no row when neither), then Folder (the path alone). No Status field: the status and
+    when it was worked are on the name line. A sub-project gets the same rules, and keeps Type."""
+    setUp, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    ui = ProjectMarkers.ui
+
+    @staticmethod
+    def readme(description="Printers for both offices.", category="", tags=(), repo=""):
+        return (f"---\ndescription: {json.dumps(description)}\nstatus: active\n" + (f"category: {category}\n" if category else "")
+                + (f"tags: [{', '.join(tags)}]\n" if tags else "") + (f"repo: {repo}\n" if repo else "")
+                + "sessions: []\n---\n\n# Printer fleet\n")
+
+    @staticmethod
+    def rows(ui, kind, rid):
+        """Each field as one line of text, its label then its value."""
+        rows = ui.project_rows()
+        ui.psel = next(i for i, r in enumerate(rows) if r.kind == kind and r.item["id"] == rid)
+        return [f"{label}  {value}".strip() for label, value in ui.project_panel(rows, 40, 120)[1]]
+
+    def index(self, rows, pattern):
+        got = [i for i, r in enumerate(rows) if re.match(pattern, r)]
+        self.assertEqual(len(got), 1, (pattern, rows))
+        return got[0]
+
+    def assert_no_old_fields(self, rows):
+        self.assertFalse([r for r in rows if r.startswith("Status")], rows)
+        self.assertFalse([r for r in rows if "Last worked" in r or re.search(r"\bSessions\s+\d", r)], rows)
+        self.assertFalse([r for r in rows if re.search(r"\bId\b", r)], rows)
+
+    def test_a_projects_fields_in_order(self):
+        repo = str(Path.home() / "code" / "fleet-tools")
+        folder = self.project("fleet", self.readme(category="procurement", tags=("zq-tag", "toner"), repo=repo), handoffs=[TODAY()])
+        rows = self.rows(self.ui(), "project", "fleet")
+        at = [self.index(rows, p) for p in (r"Description\b", r"Sessions\b", r"Repo\b", r"Category\b", r"Folder\b")]
+        self.assertEqual(at, sorted(at), rows)
+        self.assertEqual(at[0], 0, "Description comes first")
+        self.assertRegex(rows[at[3]], r"^Category\s+procurement\s+Tags\s+zq-tag, toner$")
+        self.assertRegex(rows[at[4]], rf"^Folder\s+{re.escape(roost.short(str(folder)))}$")
+        self.assertFalse([r for r in rows if r.startswith("Tags")], "Tags is on Category's row")
+        self.assert_no_old_fields(rows)
+
+    def test_category_and_tags_share_a_row_that_goes_when_both_are_empty(self):
+        self.project("cat", self.readme(category="drills"), handoffs=[TODAY()])
+        self.project("tagged", self.readme(tags=("toner",)), handoffs=[TODAY()])
+        self.project("bare", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        rows = self.rows(ui, "project", "cat")
+        self.assertRegex(rows[self.index(rows, r"Category\b")], r"^Category\s+drills$")
+        self.assertFalse([r for r in rows if "Tags" in r], rows)
+        rows = self.rows(ui, "project", "tagged")
+        self.assertRegex(rows[self.index(rows, r"Tags\b")], r"^Tags\s+toner$")
+        self.assertFalse([r for r in rows if "Category" in r], rows)
+        rows = self.rows(ui, "project", "bare")
+        self.assertFalse([r for r in rows if "Category" in r or "Tags" in r], rows)
+
+    def test_description_always_shows_first(self):
+        self.project("fleet", self.readme(description=""), handoffs=[TODAY()])
+        rows = self.rows(self.ui(), "project", "fleet")
+        self.assertRegex(rows[0], r"^Description\s+no description yet$")
+
+    def test_a_sub_projects_fields_keep_type_and_follow_the_same_rules(self):
+        self.project("rollout", self.readme(), handoffs=[TODAY()])
+        beta = self.sub("rollout", "beta", type="bugfix", status="blocked", summary="Toner alerts.")
+        (beta / "README.md").write_text((beta / "README.md").read_text().replace("status: blocked\n", "status: blocked\ntags: [toner]\n"))
+        ui = self.ui()
+        ui.subs_open.add("rollout")
+        rows = self.rows(ui, "sub", "rollout/beta")
+        self.assertRegex(rows[self.index(rows, r"Type\b")], r"^Type\s+bugfix$")
+        at = [self.index(rows, p) for p in (r"Description\b", r"Sessions\b", r"Tags\b", r"Folder\b")]
+        self.assertEqual(at, sorted(at), rows)
+        self.assertRegex(rows[at[2]], r"^Tags\s+toner$")
+        self.assertRegex(rows[at[3]], rf"^Folder\s+{re.escape(roost.short(str(beta)))}$")
+        self.assert_no_old_fields(rows)
+
+
+class StatsSparkline(unittest.TestCase):
+    """The Stats line: This month  $X · N Sessions, then a 30-character sparkline of the project's own daily
+    spend over the last 30 days (oldest left, today right) in  ▁▂▃▄▅▆▇█ scaled to the biggest day, a day with
+    no spend a space. The same matching as the month's spend; worked out once per spend read, like it."""
+    setUp_base, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
+    setUp, ui, readme = DetailSections.setUp, ProjectMarkers.ui, staticmethod(ProjectMarkers.readme)
+    section, spend, row = DetailSections.section, staticmethod(DetailSections.spend), staticmethod(DetailSections.row)
+    sections = DetailSections.sections
+
+    @staticmethod
+    def day(ago):
+        return (date.today() - timedelta(days=ago)).isoformat()
+
+    def test_the_sparkline_follows_the_month_line(self):
+        listed = ["aa000000-0000"]
+        self.project("fleet", self.readme(listed).replace("# Title", "# Printer fleet"), handoffs=[TODAY()])
+        self.project("other", self.readme(), handoffs=[TODAY()])
+        ui = self.ui([dict(session("Live"), id=listed[0])])
+        self.spend(ui, [(self.day(0), "Live work", "zz000000-0000", "fleet", 2.00),           # today, the biggest day: █
+                        (self.day(29), "Live work", "yy000000-0000", "Printer fleet", 1.00),  # the oldest day, by its label: ▄
+                        (self.day(3), "Live work", listed[0], None, 0.50),                    # a day's rows add up:
+                        (self.day(3), "Wrap-ups", "xx000000-0000", "fleet", 0.50),            # 1.00 on it, ▄
+                        (self.day(10), "Live work", "ww000000-0000", "other", 5.00),          # another project's
+                        (self.day(30), "Live work", "vv000000-0000", "fleet", 9.00),          # before the 30 days
+                        (None, "Live work", "uu000000-0000", "fleet", 7.00)])                 # no day
+        [line] = self.section(ui, "project", "fleet", "Stats")
+        want = [" "] * 30
+        want[29], want[0], want[26] = "█", "▄", "▄"
+        self.assertEqual(line[-30:], "".join(want), line)
+        self.assertRegex(line[:-30].rstrip(), r"^This month  \$\d+\.\d\d · \d+ Sessions?$", "the month line reads as before")
+
+    def test_no_spend_in_30_days_is_a_blank_sparkline(self):
+        self.project("fleet", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        self.spend(ui, [(self.day(40), "Live work", "zz000000-0000", "fleet", 3.00)])
+        [line] = self.section(ui, "project", "fleet", "Stats")
+        self.assertEqual(line[-30:], " " * 30, line)
+        self.assertRegex(line[:-30].rstrip(), r"^This month  \$0\.00 · 0 Sessions$", line)
+        self.assertGreaterEqual(len(line), len("This month  $0.00 · 0 Sessions") + 30, line)
+
+    def test_it_is_worked_out_once_per_spend_read(self):
+        class Rows(list):
+            """Spend rows that count how often they're read through."""
+            reads = 0
+
+            def __iter__(self):
+                Rows.reads += 1
+                return super().__iter__()
+        self.project("fleet", self.readme(), handoffs=[TODAY()])
+        ui = self.ui()
+        self.spend(ui, Rows([(self.day(0), "Live work", "zz000000-0000", "fleet", 2.00)]))
+        first = self.section(ui, "project", "fleet", "Stats")[0]
+        self.assertTrue(first.endswith("█"), first)  # the sparkline is there
+        before = Rows.reads
+        for _ in range(3):  # drawn again, with the same spend read
+            self.assertEqual(self.section(ui, "project", "fleet", "Stats")[0], first)
+        self.assertEqual(Rows.reads, before, "the spend rows were read again for a draw")
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class DetailLayout(unittest.TestCase):
+    """The detail layout on a real screen (SectionsOnScreen's folder, with Current state and Next on Printer
+    fleet, a Next alone on Restore drill, and bodies on Printer fleet's Handoffs: Toner swap, the newest, and
+    Toner check). The top bar is the only row above the content; the sidebar's first row and the detail's
+    name line are on screen row 2 on every view."""
+    run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
+    select, keys, sidebar = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(ProjectRows.sidebar)
+    at, SIZE, WIDE, DESCRIPTION = staticmethod(TwoPanes.at), (120, 48), (180, 48), TwoPanes.DESCRIPTION
+    read_project = staticmethod(SectionsOnScreen.read_project)
+    index_of, text_of = DetailPane.index_of, staticmethod(DetailPane.text_of)
+
+    def setUp(self):
+        SectionsOnScreen.setUp(self)
+        fleet, drill = self.root / "fleet", self.root / "drill"
+        readme = fleet / "README.md"
+        readme.write_text(readme.read_text() + f"\n## Current state\n\n{STATE_TEXT}\n\n## Next\n\n{NEXT_TEXT}\n\n"
+                                               "## Key decisions\n\nNone yet.\n")
+        (drill / "README.md").write_text((drill / "README.md").read_text() + f"\n## Next\n\n{DRILL_NEXT}\n")
+        older = next((fleet / "handoffs").glob("*-cc000000.md"))
+        older.write_text("---\nname: Toner check\n---\n\n### What I did\nOlder work stays hidden.\n")
+        newest = next(h for h in (fleet / "handoffs").glob("*.md") if h != older)
+        newest.write_text("---\nname: Toner swap\n---\n\n### What I did\n\n" + DID[0] + "\n\n" + DID[1] + "\n" + DID[2]
+                          + "\nA fourth line stays hidden.\n### What worked\nRestarting them helped.\n")
+        for p in self.projects:
+            if p["id"] in ("fleet", "drill"):
+                p.update(self.read_project(self.root / p["id"], self.sessions))
+
+    def grab(self, seen, label):
+        """A step that keeps the screen's lines, its bold runs, its dim runs, the rows drawn selected in the
+        pane, and a few of the ui's facts under label."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            ui = pilot.app.ui
+            r = ui.project_rows()[ui.psel]
+            seen[label] = {"lines": screen_text(pilot.app), "bold": bold_text(pilot.app), "dim": dim_text(pilot.app),
+                           "raised": pane_raised(pilot.app), "items": ui.detail_items(r) if r.kind in ("project", "sub") else [],
+                           "dsel": getattr(ui, "dsel", None), "focus": ui.focus, "menu": ui.choosing and ui.choosing["title"],
+                           "folder": roost.short(str(roost.projects_dir())), "projects": ui.projects}
+        return step
+
+    @staticmethod
+    def first_sidebar_row(lines):
+        """The first screen row under the top bar where the sidebar draws anything."""
+        side = ProjectRows.sidebar(lines)
+        return next((i for i in range(1, len(side)) if side[i].strip(" │┃▏▕")), None)
+
+    @staticmethod
+    def name_at(got):
+        """(y, x, text) of the detail pane's first bold run: the selected row's name."""
+        return min(((y, x, t) for y, x, t in got["bold"] if x >= roost.SIDEBAR_W and y > 0), default=None)
+
+    def bold_at(self, got, text):
+        found = [(y, x) for y, x, t in got["bold"] if t == text and x >= roost.SIDEBAR_W]
+        self.assertEqual(len(found), 1, (text, got["bold"]))
+        return found[0]
+
+    def field_y(self, got, label):
+        W = roost.SIDEBAR_W
+        return next((i for i, l in enumerate(got["lines"]) if l[W:].strip().startswith(label)), None)
+
+    # 1. The top area
+
+    def test_the_top_bar_is_the_only_row_above_the_content(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet")], size=self.SIZE)
+        got = seen["fleet"]
+        lines, W = got["lines"], roost.SIDEBAR_W
+        self.assertTrue(lines[0].startswith(" Agent Roost"), lines[0])
+        self.assertTrue(lines[0].rstrip().endswith(got["folder"]), f"the projects folder at the top bar's right: {lines[0]!r}")
+        self.assertTrue([t for y, x, t in got["dim"] if y == 0 and got["folder"] in t], "the folder is dim")
+        self.assertFalse([l for l in lines if re.search(r"\d+ projects · \d+ closed", l)], "no project counts")
+        self.assertEqual(lines[1].strip(" │┃▏▕"), "", "one blank row under the top bar")
+        self.assertEqual(self.first_sidebar_row(lines), 2, self.sidebar(lines)[:5])
+        y, x, name = self.name_at(got)
+        self.assertEqual((y, name), (2, "Printer fleet"), "the name line is level with the sidebar's first row")
+        self.assertGreaterEqual(x, W)
+
+    def test_the_search_row_shows_only_while_searching_or_with_a_search_set(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.keys("/"), self.grab(seen, "typing"), self.keys("f", "l", "e"),
+                                    self.keys("enter"), self.grab(seen, "kept"), self.keys("/", "escape"), self.grab(seen, "cleared")],
+                    size=self.SIZE)
+        W, top = roost.SIDEBAR_W, slice(1, 6)  # the rows under the top bar (the key bar has a / too)
+        self.assertTrue([l for l in seen["typing"]["lines"][top] if "/ " in l[W:]], "the search row, while typing")
+        self.assertTrue([l for l in seen["kept"]["lines"][top] if "/ fle" in l[W:]], "the search row, with a search set")
+        got = seen["cleared"]
+        self.assertFalse([l for l in got["lines"][top] if "/ " in l[W:]], "no search row once it's cleared")
+        self.assertEqual(self.name_at(got)[0], 2, got["lines"][:5])
+
+    def test_the_sidebars_first_row_is_on_the_same_screen_row_on_every_view(self):
+        seen = {}
+        steps = [self.on_project("fleet")]
+        for name in ("Projects",) + ENTRIES + ("Projects",):
+            steps += [open_view(name), self.grab(seen, name)]
+        self.run_on(self.projects, steps, size=self.SIZE)
+        got = {name: self.first_sidebar_row(seen[name]["lines"]) for name in seen}
+        self.assertEqual(got, {name: 2 for name in seen})
+
+    # 2. The name line
+
+    def test_the_name_line_is_the_label_then_its_status_and_when_it_was_worked(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "fleet"), self.on_project("quiet"),
+                                    self.grab(seen, "quiet")], size=self.SIZE)
+        fleet = next(p for p in seen["fleet"]["projects"] if p["id"] == "fleet")
+        for label, status, when in (("fleet", "awaiting-vendor", f"worked {roost.short_when(fleet['last'])}"),
+                                    ("quiet", "active", "never worked")):
+            got = seen[label]
+            y, x, name = self.name_at(got)
+            line = got["lines"][y]
+            self.assertRegex(line[x:], rf"^{re.escape(name)}\s+{re.escape(status)} · {re.escape(when)}$", label)
+            self.assertTrue([t for yy, xx, t in got["dim"] if yy == y and xx > x and f"{status} · {when}" in t],
+                            f"{label}: the status and when are dim: {got['dim']}")
+            W = roost.SIDEBAR_W
+            self.assertFalse([l for l in got["lines"] if l[W:].strip().startswith("Status") or "Last worked" in l], label)
+
+    def test_a_sub_projects_name_line(self):
+        seen = {}
+
+        def on_alpha(ui):
+            ui.subs_open.add("rollout")
+            ui.psel = next(i for i, r in enumerate(ui.project_rows()) if r.kind == "sub" and r.item["slug"] == "alpha")
+        self.run_on(self.projects, [self.select(on_alpha), self.grab(seen, "alpha")], size=self.SIZE)
+        got = seen["alpha"]
+        alpha = next(s for p in got["projects"] if p["id"] == "rollout" for s in p["subs"] if s["slug"] == "alpha")
+        y, x, name = self.name_at(got)
+        self.assertEqual(y, 2)
+        self.assertRegex(got["lines"][y][x:], rf"^{re.escape(name)}\s+active · worked {re.escape(roost.short_when(alpha['last']))}$")
+        W = roost.SIDEBAR_W
+        self.assertFalse([l for l in got["lines"] if l[W:].strip().startswith("Status")])
+        self.assertTrue([l for l in got["lines"] if re.match(r"Type\s+feature$", l[W:].strip())], "Type stays")
+
+    # 3. Current state and Next
+
+    def test_narrower_than_110_they_come_after_the_fields_and_before_the_sections(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet"),
+                                    self.on_project("drill"), self.grab(seen, "drill"),
+                                    self.on_project("quiet"), self.grab(seen, "quiet")], size=self.SIZE)
+        W, got = roost.SIDEBAR_W, seen["fleet"]
+        lines = got["lines"]
+        sy, sx = self.bold_at(got, "Current state")
+        ny, nx = self.bold_at(got, "Next")
+        sessions_y, _ = self.bold_at(got, "Sessions")
+        self.assertGreater(sy, self.field_y(got, "Folder"), "after the fields")
+        self.assertLess(sy, ny)
+        self.assertLess(ny, sessions_y, "before the sections")
+        self.assertEqual(words(" ".join(l[W:] for l in lines[sy + 1:ny])), words(STATE_TEXT), "the whole text, wrapped")
+        self.assertGreater(sum(bool(l[W:].strip()) for l in lines[sy + 1:ny]), 1, "wrapped over lines")
+        self.assertEqual(words(" ".join(l[W:] for l in lines[ny + 1:sessions_y])), words(NEXT_TEXT))
+        drill = seen["drill"]
+        self.assertFalse([t for y, x, t in drill["bold"] if t == "Current state"], "an empty one is left out")
+        dy, _ = self.bold_at(drill, "Next")
+        self.assertIn(words(DRILL_NEXT), words(" ".join(l[W:] for l in drill["lines"][dy + 1:dy + 4])))
+        self.assertFalse([t for y, x, t in seen["quiet"]["bold"] if t in ("Current state", "Next") and x >= W])
+
+    def test_at_110_columns_and_wider_they_are_a_right_hand_column_beside_the_fields_and_sections(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet")], size=self.WIDE)
+        W, got = roost.SIDEBAR_W, seen["fleet"]
+        lines = got["lines"]
+        sy, sx = self.bold_at(got, "Current state")
+        ny, nx = self.bold_at(got, "Next")
+        sessions_y, sessions_x = self.bold_at(got, "Sessions")
+        self.assertGreaterEqual(sx, W + 50, "in a right-hand column")
+        self.assertEqual(nx, sx, "Next under Current state, in the same column")
+        self.assertLess(sy, ny)
+        self.assertLessEqual(sy, self.field_y(got, "Folder"), "beside the fields, not under them")
+        self.assertLess(sessions_x, sx, "the sections stay in the left column")
+        self.assertEqual(words(" ".join(l[sx:] for l in lines[sy + 1:ny])), words(STATE_TEXT), "wrapped to the column")
+        end = next(i for i in range(ny + 1, len(lines)) if not lines[i][sx:].strip())
+        self.assertEqual(words(" ".join(l[sx:] for l in lines[ny + 1:end])), words(NEXT_TEXT))
+        described = next((l for l in lines if TwoPanes.DESCRIPTION[:30] in l), None)
+        self.assertIsNotNone(described, "the description, in the left column")
+        self.assertLess(described.index(TwoPanes.DESCRIPTION[:30]), sx)
+
+    def assert_items_selectable(self, size):
+        """In this layout: tab then ↓ draw each item's line selected in turn, and a click on the note's line
+        selects it."""
+        seen, W = {}, roost.SIDEBAR_W
+        steps = [self.on_project("fleet"), self.loaded, self.grab(seen, "side"), self.keys("tab")]
+        for i in range(4):
+            steps += [self.grab(seen, i), self.keys("down")]
+        self.run_on(self.projects, steps, size=size)
+        got = seen["side"]
+        sy, sx = self.bold_at(got, "Current state")  # the layout this test is about is drawn
+        stop = sx if sx > W + 40 else None  # wide: the items are in the left column
+        ys, last = [], 0
+        for kind, item in got["items"]:
+            t = self.text_of(kind, item)
+            y = next((i for i in range(last, len(got["lines"])) if t in got["lines"][i][W:stop]), None)
+            self.assertIsNotNone(y, (t, got["lines"]))
+            ys.append(y)
+            last = y + 1
+        self.assertEqual(len(ys), 4, got["items"])  # Printer fix, Toner swap, Toner check, Driver shortlist
+        for i in range(4):
+            self.assertEqual(seen[i]["raised"] & set(ys), {ys[i]}, (size, i, seen[i]["lines"][ys[i]]))
+        note = next(i for i, (k, _) in enumerate(got["items"]) if k == "note")
+        clicked = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded,
+                                    lambda pilot: pilot.click(offset=(W + 8, ys[note])), self.grab(clicked, "x")], size=size)
+        self.assertEqual((clicked["x"]["focus"], clicked["x"]["dsel"], clicked["x"]["menu"]), ("pane", note, None), size)
+
+    def test_the_items_stay_selectable_with_state_and_next_below_the_fields(self):
+        self.assert_items_selectable(self.SIZE)
+
+    def test_the_items_stay_selectable_with_state_and_next_in_a_column(self):
+        self.assert_items_selectable(self.WIDE)
+
+    # 4. The newest Handoff's lines
+
+    def test_the_newest_handoffs_row_is_followed_by_its_first_lines_dim_and_indented(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "fleet")], size=self.SIZE)
+        W, got = roost.SIDEBAR_W, seen["fleet"]
+        lines = got["lines"]
+        hy, _ = self.bold_at(got, "Handoffs")
+        ty = next(i for i in range(hy + 1, len(lines)) if "Toner swap" in lines[i][W:])
+        start = W + len(lines[ty][W:]) - len(lines[ty][W:].lstrip())  # where the Handoff's row starts
+        for i, text in enumerate(DID, 1):
+            self.assertIn(text, lines[ty + i][W:], (i, lines[ty:ty + 5]))
+            self.assertGreater(lines[ty + i].index(text), start, "indented under the Handoff's row")
+            self.assertTrue([t for y, x, t in got["dim"] if y == ty + i and text in t], f"{text!r} is dim")
+        self.assertIn("Toner check", lines[ty + 4][W:], "then the next Handoff's row")
+        for hidden in ("A fourth line stays hidden.", "Restarting them helped.", "Older work stays hidden."):
+            self.assertFalse([l for l in lines if hidden in l], hidden)
+
+    def test_the_handoffs_lines_arent_items(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.grab(seen, "side"), self.keys("tab"),
+                                    self.index_of("handoff", "Toner swap"), self.grab(seen, "swap"), self.keys("down"),
+                                    self.grab(seen, "down")], size=self.SIZE)
+        W, lines = roost.SIDEBAR_W, seen["side"]["lines"]
+        ty = next(i for i, l in enumerate(lines) if "Toner swap" in l[W:])
+        self.assertIn(DID[0], lines[ty + 1][W:], "the fixture: Toner swap's lines are drawn")
+        cy = next(i for i, l in enumerate(lines) if "Toner check" in l[W:])
+        self.assertEqual([x[1] for k, x in seen["side"]["items"] if k == "handoff"], ["Toner swap", "Toner check"])
+        band = set(range(ty, cy + 1))
+        self.assertEqual(seen["swap"]["raised"] & band, {ty})
+        self.assertEqual(seen["down"]["raised"] & band, {cy}, "↓ goes from Toner swap straight to Toner check")
+        check = next(i for i, (k, x) in enumerate(seen["side"]["items"]) if k == "handoff" and x[1] == "Toner check")
+        for y, want in ((ty + 1, None), (cy, check)):
+            clicked = {}
+            self.run_on(self.projects, [self.on_project("fleet"), self.loaded, lambda pilot, y=y: pilot.click(offset=(W + 8, y)),
+                                        self.grab(clicked, "x")], size=self.SIZE)
+            got = clicked["x"]
+            if want is None:  # a click on one of the lines: nothing is selected or opened
+                self.assertEqual((got["menu"], got["focus"]), (None, "side"), got["lines"][y])
+                self.assertFalse(got["raised"] & band)
+            else:
+                self.assertEqual((got["focus"], got["dsel"]), ("pane", want))
+
+    loaded = staticmethod(SectionsOnScreen.loaded)
