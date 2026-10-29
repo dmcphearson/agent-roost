@@ -2223,8 +2223,9 @@ class DetailSections(unittest.TestCase):
                         (today, live, "xx000000-0000", "other", 4.00),          # another project
                         (today, live, "ww000000-0000", None, 3.00)])            # a Session it doesn't list
         lines = self.section(ui, "project", "fleet", "Stats")
-        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(len(lines), 2, lines)
         self.assertRegex(lines[0], r"This month\s+\$4\.50 · 2 Sessions")
+        self.assertRegex(lines[1], r"^Last 30 days  \$\d+\.\d\d$")
 
     def test_a_spend_row_with_no_day_is_skipped(self):
         """local_day gives None for a timestamp it can't read: that row counts toward no month."""
@@ -3071,7 +3072,7 @@ if __name__ == "__main__":
 
 
 # ---------- the details' layout: the top area, the name line, the sections and their items, Current state and
-# Next, the newest Handoff's lines, the fields under Details, and the Stats sparkline
+# Next, the newest Handoff's lines, the fields under Details, and the Stats lines
 
 STATE_TEXT = ("Drivers are packaged for both offices and the north office already runs on the new toner supplier, "
               "while the south office waits on a vendor quote before its printers move over.")
@@ -3233,45 +3234,42 @@ class DetailFields(unittest.TestCase):
         self.assertRegex(rows[0], r"^Description\s+no description yet$")
 
 
-class StatsSparkline(unittest.TestCase):
-    """The Stats line: This month  $X · N Sessions, then a 30-character sparkline of the project's own daily
-    spend over the last 30 days (oldest left, today right) in  ▁▂▃▄▅▆▇█ scaled to the biggest day, a day with
-    no spend a space. The same matching as the month's spend; worked out once per spend read, like it."""
+class StatsLines(unittest.TestCase):
+    """The Stats section: "This month  $X · N Sessions", then "Last 30 days  $Y", the project's own spend
+    over the last 30 days, today included, with no sparkline. The same matching as the month's spend; worked
+    out once per spend read, like it."""
     setUp_base, tearDown, project, sub = SubProjects.setUp, SubProjects.tearDown, Projects.project, SubProjects.sub
     setUp, ui, readme = DetailSections.setUp, ProjectMarkers.ui, staticmethod(ProjectMarkers.readme)
     section, spend, row = DetailSections.section, staticmethod(DetailSections.spend), staticmethod(DetailSections.row)
     sections = DetailSections.sections
+    SPARK = set("▁▂▃▄▅▆▇█")
 
     @staticmethod
     def day(ago):
         return (date.today() - timedelta(days=ago)).isoformat()
 
-    def test_the_sparkline_follows_the_month_line(self):
+    def test_the_month_line_then_the_last_30_days_spend(self):
         listed = ["aa000000-0000"]
         self.project("fleet", self.readme(listed).replace("# Title", "# Printer fleet"), handoffs=[TODAY()])
         self.project("other", self.readme(), handoffs=[TODAY()])
         ui = self.ui([dict(session("Live"), id=listed[0])])
-        self.spend(ui, [(self.day(0), "Live work", "zz000000-0000", "fleet", 2.00),           # today, the biggest day: █
-                        (self.day(29), "Live work", "yy000000-0000", "Printer fleet", 1.00),  # the oldest day, by its label: ▄
-                        (self.day(3), "Live work", listed[0], None, 0.50),                    # a day's rows add up:
-                        (self.day(3), "Wrap-ups", "xx000000-0000", "fleet", 0.50),            # 1.00 on it, ▄
+        self.spend(ui, [(self.day(0), "Live work", "zz000000-0000", "fleet", 2.00),           # today, by its id
+                        (self.day(10), "Live work", "yy000000-0000", "Printer fleet", 1.00),  # by its label
+                        (self.day(3), "Live work", listed[0], None, 0.50),                    # by a Session it lists
+                        (self.day(3), "Wrap-ups", "xx000000-0000", "fleet", 0.50),
                         (self.day(10), "Live work", "ww000000-0000", "other", 5.00),          # another project's
-                        (self.day(30), "Live work", "vv000000-0000", "fleet", 9.00),          # before the 30 days
-                        (None, "Live work", "uu000000-0000", "fleet", 7.00)])                 # no day
-        [line] = self.section(ui, "project", "fleet", "Stats")
-        want = [" "] * 30
-        want[29], want[0], want[26] = "█", "▄", "▄"
-        self.assertEqual(line[-30:], "".join(want), line)
-        self.assertRegex(line[:-30].rstrip(), r"^This month  \$\d+\.\d\d · \d+ Sessions?$", "the month line reads as before")
+                        (self.day(40), "Live work", "vv000000-0000", "fleet", 9.00)])         # well before the 30 days
+        lines = self.section(ui, "project", "fleet", "Stats")
+        self.assertEqual(len(lines), 2, lines)
+        self.assertRegex(lines[0], r"^This month  \$\d+\.\d\d · \d+ Sessions?$", "the month line reads as before, with nothing after it")
+        self.assertEqual(lines[1], "Last 30 days  $4.00")
+        self.assertFalse(self.SPARK & set("".join(lines)), "no sparkline")
 
-    def test_no_spend_in_30_days_is_a_blank_sparkline(self):
+    def test_no_spend_in_30_days_is_zero(self):
         self.project("fleet", self.readme(), handoffs=[TODAY()])
         ui = self.ui()
         self.spend(ui, [(self.day(40), "Live work", "zz000000-0000", "fleet", 3.00)])
-        [line] = self.section(ui, "project", "fleet", "Stats")
-        self.assertEqual(line[-30:], " " * 30, line)
-        self.assertRegex(line[:-30].rstrip(), r"^This month  \$0\.00 · 0 Sessions$", line)
-        self.assertGreaterEqual(len(line), len("This month  $0.00 · 0 Sessions") + 30, line)
+        self.assertEqual(self.section(ui, "project", "fleet", "Stats"), ["This month  $0.00 · 0 Sessions", "Last 30 days  $0.00"])
 
     def test_it_is_worked_out_once_per_spend_read(self):
         class Rows(list):
@@ -3284,11 +3282,11 @@ class StatsSparkline(unittest.TestCase):
         self.project("fleet", self.readme(), handoffs=[TODAY()])
         ui = self.ui()
         self.spend(ui, Rows([(self.day(0), "Live work", "zz000000-0000", "fleet", 2.00)]))
-        first = self.section(ui, "project", "fleet", "Stats")[0]
-        self.assertTrue(first.endswith("█"), first)  # the sparkline is there
+        first = self.section(ui, "project", "fleet", "Stats")
+        self.assertEqual(first[-1], "Last 30 days  $2.00", first)  # the 30 days' spend is there
         before = Rows.reads
         for _ in range(3):  # drawn again, with the same spend read
-            self.assertEqual(self.section(ui, "project", "fleet", "Stats")[0], first)
+            self.assertEqual(self.section(ui, "project", "fleet", "Stats"), first)
         self.assertEqual(Rows.reads, before, "the spend rows were read again for a draw")
 
 
@@ -3585,11 +3583,15 @@ class DetailLayout(unittest.TestCase):
                     self.assertEqual(len(cat), 1, under)
                     self.assertLess(cat[0], folder[0])
 
-    def test_stats_is_this_months_spend_and_sessions_then_a_30_day_sparkline(self):
+    def test_stats_is_this_months_spend_and_sessions_then_the_last_30_days_with_no_sparkline(self):
         got, rows = self.heading_rows(self.SIZE)
         W, y0 = roost.SIDEBAR_W, rows["Stats"][0]
-        line = next((l[W:].strip() for l in got["lines"][y0 + 1:] if "This month" in l), "")
-        self.assertRegex(line, r"^This month\s+\$1\.25 · 1 Sessions?\s+[ ▁▂▃▄▅▆▇█]*█$", "today's spend is the biggest day: █ at the right")
+        lines = [l[W:].strip() for l in got["lines"][y0 + 1:]]
+        at = next((i for i, l in enumerate(lines) if "This month" in l), None)
+        self.assertIsNotNone(at, lines)
+        self.assertRegex(lines[at], r"^This month\s+\$1\.25 · 1 Sessions?$")
+        self.assertRegex(lines[at + 1], r"^Last 30 days\s+\$1\.25$")
+        self.assertFalse([l for l in got["lines"] if set("▁▂▃▄▅▆▇█") & set(l[W:])], "no sparkline characters in the details")
 
     def assert_items_selectable(self, size):
         """At this size: → then ↓ draw each item's line selected in turn, and a click on the note's line
@@ -3667,3 +3669,219 @@ class DetailLayout(unittest.TestCase):
                 self.assertEqual((got["focus"], got["dsel"]), ("pane", want))
 
     loaded = staticmethod(SectionsOnScreen.loaded)
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class DetailScroll(unittest.TestCase):
+    """The details scroll (DetailLayout's folder: Printer fleet has Next, Current state, Sessions, Handoffs,
+    notes, Details, and Stats). In a short window they're drawn in full and shown from a scroll position: the
+    wheel over them scrolls them wherever the keys are, without changing the selected project or item; it
+    stops at the top, and at the bottom once the last line shows. With the keys in them, ↑↓ move the selected
+    item and the view follows it; page up/down scroll by their height less one row and leave the selection
+    where it is. While there's more below, their last row ends in a dim "↓ more". Another project's details
+    show from the top."""
+    run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
+    keys = staticmethod(TextualScreens.keys)
+    loaded = staticmethod(SectionsOnScreen.loaded)
+    select = staticmethod(TextualScreens.select)
+    name_at, DESCRIPTION = staticmethod(DetailLayout.name_at), DetailLayout.DESCRIPTION
+    read_project = staticmethod(SectionsOnScreen.read_project)
+    SHORT, TALL = (100, 28), (100, 80)  # SHORT: the smallest window roost draws in (MIN_SIZE)
+
+    def setUp(self):
+        """DetailLayout's folder, plus on Printer fleet four more notes and a third Handoff: details long enough
+        that a page down at SHORT doesn't reach their end."""
+        DetailLayout.setUp(self)
+        fleet = self.root / "fleet"
+        for i, title in enumerate(("Toner budget", "Driver test plan", "Office map", "Vendor contacts")):
+            (fleet / "notes" / f"extra-{i}.md").write_text(f"# {title}\n")
+        (fleet / "handoffs" / handoff_name(time.time() - 3 * 86400, "dd000000")).write_text("---\nname: Driver trial\n---\n\nDone.\n")
+        p = next(p for p in self.projects if p["id"] == "fleet")
+        p.update(self.read_project(fleet, self.sessions))
+
+    @staticmethod
+    def norm(line):
+        return line.replace("▌", " ").rstrip()
+
+    def view(self, seen, label):
+        """A step that keeps, under label: the details' rows as drawn (right of the sidebar), their first screen
+        row, the selection, the rows marked selected, the dim and bold runs, the key bar, and the help."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            app, ui, W = pilot.app, pilot.app.ui, roost.SIDEBAR_W
+            box, lines = app.query_one(roost.ProjectPanel).region, screen_text(app)
+            seen[label] = {"pane": [l[W:] for l in lines[box.y:box.bottom]], "y0": box.y, "lines": lines,
+                           "psel": ui.psel, "dsel": getattr(ui, "dsel", None), "focus": ui.focus,
+                           "selected": pane_selected(app) & set(range(box.y, box.bottom)),
+                           "dim": dim_text(app), "bold": bold_text(app), "bar": ui.bar, "help": ui.help_rows()}
+        return step
+
+    @staticmethod
+    def wheel(where, n=1, down=True):
+        """A step: n turns of the wheel over where (roost.ProjectPanel, the details, or roost.ProjectList)."""
+        async def step(pilot):
+            widget = pilot.app.query_one(where)
+            box = widget.region
+            ev = type("Wheel", (), {"x": 4, "y": 4, "screen_x": box.x + 4, "screen_y": box.y + 4, "stop": lambda self: None})()
+            for _ in range(n):
+                (widget.on_mouse_scroll_down if down else widget.on_mouse_scroll_up)(ev)
+                await pilot.pause()
+        return step
+
+    def full(self):
+        """Printer fleet's details whole, in a window tall enough for all of them: their rows, trailing blanks left out."""
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "x")], size=self.TALL)
+        rows = [self.norm(l) for l in seen["x"]["pane"]]
+        while rows and not rows[-1]:
+            rows.pop()
+        self.assertFalse([r for r in rows if "↓ more" in r], "the fixture: everything fits at 120x80")
+        return rows
+
+    def offset(self, got, full):
+        """The scroll position a view shows: where its rows (all but the last, which may carry ↓ more) start in full."""
+        shown = [self.norm(l) for l in got["pane"]][:-1]
+        padded = full + [""] * len(got["pane"])
+        at = [o for o in range(len(full)) if padded[o:o + len(shown)] == shown]
+        self.assertEqual(len(at), 1, ("the view isn't one place in the details", shown, full))
+        return at[0]
+
+    def test_a_short_window_reaches_every_section_down_to_stats_with_the_wheel(self):
+        full = self.full()
+        seen = {}
+        steps = [self.on_project("fleet"), self.loaded, self.view(seen, "start")]
+        for i in range(len(full)):
+            steps += [self.wheel(roost.ProjectPanel), self.view(seen, i)]
+        self.run_on(self.projects, steps, size=self.SHORT)
+        heads = {"Next", "Current state", "Sessions", "Handoffs", "Notes", "Details", "Stats"}
+        W = roost.SIDEBAR_W
+        self.assertNotIn("Stats", {t for y, x, t in seen["start"]["bold"] if x >= W}, "the fixture: Stats is cut off at first")
+        shown = {t for v in seen.values() for y, x, t in v["bold"] if x >= W and t in heads}
+        self.assertEqual(shown, heads, "every section shows at some scroll position")
+        last = seen[len(full) - 1]
+        self.assertIn(full[-1], [self.norm(l) for l in last["pane"]], "the details' last line shows at the end")
+
+    def test_the_wheel_over_the_details_scrolls_them_and_keeps_the_selected_project_and_item(self):
+        full = self.full()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "list"),
+                                    self.wheel(roost.ProjectPanel, 2), self.view(seen, "list wheeled"),
+                                    self.keys("right"), self.view(seen, "pane"), self.wheel(roost.ProjectPanel, 2),
+                                    self.view(seen, "pane wheeled")], size=self.SHORT)
+        for before, after in (("list", "list wheeled"), ("pane", "pane wheeled")):
+            b, a = seen[before], seen[after]
+            with self.subTest(keys_in=b["focus"]):
+                self.assertGreater(self.offset(a, full), self.offset(b, full), "the wheel scrolled the details down")
+                self.assertEqual((a["psel"], a["focus"]), (b["psel"], b["focus"]), "the same project, the keys where they were")
+                if b["focus"] == "pane":
+                    self.assertEqual(a["dsel"], b["dsel"], "the selected item stays")
+
+    def test_the_wheel_over_the_list_still_moves_the_lists_selection(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.view(seen, "start"), self.wheel(roost.ProjectList),
+                                    self.view(seen, "down"), self.wheel(roost.ProjectList, down=False), self.view(seen, "up")],
+                    size=self.SHORT)
+        self.assertEqual(seen["down"]["psel"], seen["start"]["psel"] + 1)
+        self.assertEqual(seen["up"]["psel"], seen["start"]["psel"])
+
+    def test_scrolling_stops_at_the_top_and_once_the_last_line_shows(self):
+        full = self.full()
+        seen = {}
+        steps = [self.on_project("fleet"), self.loaded, self.wheel(roost.ProjectPanel, down=False), self.view(seen, "top"),
+                 self.wheel(roost.ProjectPanel, len(full)), self.view(seen, "end"), self.wheel(roost.ProjectPanel, 3),
+                 self.view(seen, "past")]
+        self.run_on(self.projects, steps, size=self.SHORT)
+        room = len(seen["top"]["pane"])
+        self.assertGreater(len(full), room, "the fixture: the details don't fit at 120x24")
+        self.assertEqual(self.offset(seen["top"], full), 0, "the wheel up at the top stays at the top")
+        for when in ("end", "past"):
+            got = seen[when]
+            with self.subTest(when=when):
+                self.assertEqual(self.offset(got, full), len(full) - room, "the end: the last line on the last row, no further")
+                self.assertEqual(self.norm(got["pane"][-1]), full[-1])
+
+    def test_with_the_keys_in_the_details_down_keeps_the_selected_item_on_screen(self):
+        seen, n = {}, 9  # Printer fix; three Handoffs; five notes
+        steps = [self.on_project("fleet"), self.loaded, self.view(seen, "list"), self.keys("right"), self.view(seen, 0)]
+        for i in range(1, n):
+            steps += [self.keys("down"), self.view(seen, i)]
+        self.run_on(self.projects, steps, size=self.SHORT)
+        self.assertEqual(seen[0]["focus"], "pane", "the fixture: → moved the keys into the details")
+        for i in range(n):
+            got = seen[i]
+            with self.subTest(dsel=i):
+                self.assertEqual(got["dsel"], i)
+                self.assertEqual(len(got["selected"]), 1, f"the selected item is on screen: {got['pane']}")
+        last = self.norm(seen[n - 1]["lines"][min(seen[n - 1]["selected"])][roost.SIDEBAR_W:])
+        self.assertNotIn(last, [self.norm(l) for l in seen["list"]["pane"]], "the fixture: the last item is below the window at first")
+
+    def test_page_down_and_up_scroll_by_the_height_less_one_row_and_leave_the_selection(self):
+        full = self.full()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.keys("right"), self.view(seen, "top"),
+                                    self.keys("pagedown"), self.view(seen, "down"), self.keys("pageup"), self.view(seen, "up"),
+                                    self.keys("pagedown"), self.keys("down"), self.view(seen, "moved")], size=self.SHORT)
+        room = len(seen["top"]["pane"])
+        self.assertGreater(len(full), 2 * room - 1, "the fixture: a page down doesn't reach the end")
+        self.assertEqual(self.offset(seen["top"], full), 0)
+        self.assertEqual(self.offset(seen["down"], full), room - 1, "a page is the details' height less one row")
+        self.assertEqual(self.offset(seen["up"], full), 0)
+        self.assertEqual((seen["down"]["dsel"], seen["up"]["dsel"]), (0, 0), "paging leaves the selected item")
+        self.assertEqual(seen["down"]["selected"], set(), "the fixture: the page down scrolled the selected item off")
+        got = seen["moved"]
+        self.assertEqual(got["dsel"], 1, "↓ after paging moves the selection on by one")
+        self.assertEqual(len(got["selected"]), 1, "and the view comes back to show it")
+
+    def test_more_below_ends_the_last_row_in_a_dim_more_marker_and_none_when_it_all_shows(self):
+        full = self.full()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "top"),
+                                    self.wheel(roost.ProjectPanel, len(full)), self.view(seen, "end")], size=self.SHORT)
+        W, top = roost.SIDEBAR_W, seen["top"]
+        last_y = top["y0"] + len(top["pane"]) - 1
+        row = top["lines"][last_y]
+        self.assertTrue(row.rstrip().endswith("↓ more"), f"the last row: {row!r}")
+        self.assertLessEqual(len(row.rstrip()) - W, 84, "within the details' 80 columns")
+        self.assertTrue([t for y, x, t in top["dim"] if y == last_y and t.endswith("↓ more")], "it's dim")
+        self.assertEqual(sum("↓ more" in l for l in top["pane"]), 1, "only on the last row")
+        self.assertFalse([l for l in seen["end"]["pane"] if "↓ more" in l], "none once the end shows")
+        tall = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(tall, "x")], size=self.TALL)
+        self.assertFalse([l for l in tall["x"]["pane"] if "↓ more" in l], "none when it all fits")
+
+    def test_another_project_shows_its_details_from_the_top(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "fleet"),
+                                    self.wheel(roost.ProjectPanel, 5), self.view(seen, "scrolled"), self.keys("down"),
+                                    self.view(seen, "down"), self.wheel(roost.ProjectPanel, 5), self.keys("up"),
+                                    self.view(seen, "back")], size=self.SHORT)
+        top = self.name_at(seen["fleet"])[0]
+        scrolled = self.name_at(seen["scrolled"])
+        self.assertFalse(scrolled and scrolled[2] == "Printer fleet" and scrolled[0] == top, "the fixture: the wheel scrolled the details")
+        self.assertNotEqual(seen["down"]["psel"], seen["scrolled"]["psel"], "the fixture: ↓ picked another project")
+        for when, name in (("down", None), ("back", "Printer fleet")):
+            got = seen[when]
+            with self.subTest(when=when):
+                y, x, shown = self.name_at(got)
+                self.assertEqual(y, top, f"its name line on the details' first row: {got['pane'][:3]}")
+                if name:
+                    self.assertEqual(shown, name)
+        W, lines = roost.SIDEBAR_W, seen["fleet"]["lines"]
+        y = next(i for i, l in enumerate(lines) if "Restore drill" in l[:W])
+        clicked = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.wheel(roost.ProjectPanel, 5),
+                                    lambda pilot: pilot.click(offset=(8, y)), self.view(clicked, "x")], size=self.SHORT)
+        y, x, shown = self.name_at(clicked["x"])
+        self.assertEqual((y, shown), (top, "Restore drill"), "a click on another project: its details from the top")
+
+    def test_the_key_bar_names_the_paging_keys_in_the_details_and_the_help_mentions_scrolling(self):
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.keys("right"), self.view(seen, "pane")],
+                    size=self.SHORT)
+        got = seen["pane"]
+        self.assertEqual(got["focus"], "pane")
+        bar = " ".join(keys for keys, _ in got["bar"][0])
+        self.assertIn("page up/down", bar, "the key bar names the paging keys")
+        self.assertTrue([(a, b) for a, b in got["help"] if "scroll" in b.lower() and "details" in (a + b).lower()],
+                        f"the Projects help mentions scrolling the details: {got['help']}")
