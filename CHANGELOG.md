@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.10.29
 
 - **Tabs:** Projects, Sessions, Notes, and Stats, the current one in green; Tab and Shift+Tab move between them, a click on a name switches, and roost opens on the tab you last used. Sessions, Notes, and Stats take the whole window; a thin rule, with a blank row each side, sits under the tabs
 - **Projects tab:** your 10 most recently worked open projects, then More projects (the rest, and the closed ones), opened in place with Enter or →, then + New project, every name starting in one column. The selected project's details sit beside the list, one column at most 80 wide: its name with its status in its colour, Next and Current state from its README, Sub-projects, Sessions, Handoffs (the newest with its first 3 lines), Notes, Details (description, repo, category and tags, folder), and its spend this month and over the last 30 days. → moves into the details to pick an item, ← or Esc back. The details scroll with the wheel or Page Up/Down when they don't fit, with ↓ more while there's more below. Sub-projects are in their project's details, not the list, and the table's columns are gone. A search still lists every match
