@@ -149,11 +149,22 @@ class TextualScreens(unittest.TestCase):
         app = self.run_app([open_view("Sessions"), scroll])
         self.assertEqual((app.ui.TABS[app.ui.tab].name, app.ui.sel), ("Sessions", 1))
 
+    @staticmethod
+    def click_first_session(**how):
+        """A pilot step: a click (how: times, button) at column 10 of the Sessions list's first Session row,
+        the screen row the list last drew it on."""
+        async def step(pilot):
+            ys = getattr(pilot.app.ui, "row_y", {})
+            assert ys, "the Sessions list drew no Session rows"
+            await pilot.click(offset=(10, min(ys)), **how)
+            await pilot.pause()
+        return step
+
     def test_a_triple_click_acts_once(self):
         import unittest.mock
         ran = []
         with unittest.mock.patch.object(roost.UI, "session_actions", lambda ui, s: [("Open", lambda: ran.append(s["name"]))]):
-            self.run_app([open_view("Sessions"), lambda pilot: pilot.click(offset=(10, 6), times=3)])
+            self.run_app([open_view("Sessions"), self.click_first_session(times=3)])
         self.assertEqual(len(ran), 1)
 
     def test_a_double_or_triple_click_selects_no_text(self):
@@ -203,7 +214,7 @@ class TextualScreens(unittest.TestCase):
         self.assertEqual((copied, app.ui.msg), ([], ""))
 
     def test_a_right_click_opens_a_rows_actions(self):
-        app = self.run_app([open_view("Sessions"), lambda pilot: pilot.click(offset=(10, 6), button=3)])
+        app = self.run_app([open_view("Sessions"), self.click_first_session(button=3)])
         self.assertTrue(app.ui.choosing)
         self.assertIn(app.ui.choosing["title"], [s["name"] for s in self.sessions])
 
