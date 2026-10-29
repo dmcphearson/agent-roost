@@ -178,19 +178,20 @@ if Widget:
 
         def lines(self):
             ui, w = self.ui, self.size.width
-            band = ui.selected
-            row = self.line(band(0))
-            x = row.put(2, self.NAME, band(curses.A_BOLD | ui.ACCENT)) + 3
+            row = self.line()
+            x = row.put(2, self.NAME, curses.A_BOLD | ui.ACCENT) + 3
             ui.tab_x = []
             for i, tab in enumerate(ui.TABS):
                 label = f" {tab.name} "
                 ui.tab_x.append((x, x + len(label), i))
-                row.put(x, label, curses.A_REVERSE | curses.A_BOLD if i == ui.tab else band(ui.DIM))
+                row.put(x, label, curses.A_REVERSE | curses.A_BOLD if i == ui.tab else ui.DIM)
                 x += len(label) + 1
             text, attr = getattr(ui, "corner", None) or ("", 0)
             if text:
-                row.put(w - len(text) - 2, text, band(attr))
-            return [row]
+                row.put(w - len(text) - 2, text, attr)
+            rule = self.line()
+            rule.rule(0, w, ui.DIM)
+            return [row, self.line(), rule]
 
     class StatusBar(Region):
         """The row above the key bar, on every tab: Sessions waiting on you at the left, how many run at the right."""

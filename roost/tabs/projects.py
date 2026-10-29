@@ -39,12 +39,13 @@ RECENT_ROWS = 10  # the list shows this many open projects, the most recently wo
 
 
 def pill(status):
-    """A status's pill: green while it's being worked, yellow when it waits, grey when it's done, else blue."""
+    """A status's look, bold in its colour: green while it's being worked, yellow when it waits, grey when it's
+    done, else blue."""
     s = status.lower()
-    fg, bg = (("#6bd968", "#1d2b20") if s in ("active", "in progress", "doing") else
-              ("#e3b341", "#2e2a1a") if s in ("paused", "blocked", "waiting", "on hold") else
-              ("#8b929c", "#262a31") if s in ("done", "closed", "shipped", "archived") else ("#79b8ff", "#1c2633"))
-    return Style(color=fg, bgcolor=bg, bold=True) if Style else 0
+    fg = ("#6bd968" if s in ("active", "in progress", "doing") else
+          "#e3b341" if s in ("paused", "blocked", "waiting", "on hold") else
+          "#8b929c" if s in ("done", "closed", "shipped", "archived") else "#79b8ff")
+    return Style(color=fg, bold=True) if Style else 0
 
 
 def newest(ps):
@@ -948,26 +949,25 @@ if Region:
                 r = rows[idx]
                 ui.prow_y[y0 + i] = idx
                 hl = idx == ui.psel
-                look = ui.selected if hl else (lambda a: a)
                 if hl:
-                    self.band(row, look)
-                bold = curses.A_BOLD if hl else 0
+                    self.bar(row)
+                bold = (ui.picked(0) if ui.focus == "side" else curses.A_BOLD) if hl else 0
                 if r.kind == "head":
                     label = f"{'▸' if r.sec in ui.folded else '▾'} {r.sec} ({r.item['count']}) "
-                    row.put(1, clip(label, w - 2), look(curses.A_BOLD))
+                    row.put(1, clip(label, w - 2), curses.A_BOLD)
                     if not hl and w - 2 - len(label) > 0:
                         row.rule(1 + len(label), w - 2 - len(label), ui.DIM)
                     continue
                 if r.kind == "more":
-                    x = row.put(LABEL_X, "More projects", look(bold))
-                    row.put(x + 1, str(r.item["count"]), look(ui.DIM))
+                    x = row.put(LABEL_X, "More projects", bold)
+                    row.put(x + 1, str(r.item["count"]), ui.DIM)
                     continue
                 if r.kind == "new":
-                    row.put(LABEL_X, "+ New project", look(ui.ACCENT | bold))
+                    row.put(LABEL_X, "+ New project", ui.ACCENT | (curses.A_BOLD if hl else 0))
                     continue
                 marks = ui.markers(r)
-                row.put(LABEL_X, clip(label_of(r.item), w - LABEL_X - len(marks) - 2), look(bold | (ui.DIM if r.item["closed"] else 0)))
-                self.marks(row, w - 1 - len(marks), marks, look)
+                row.put(LABEL_X, clip(label_of(r.item), w - LABEL_X - len(marks) - 2), bold or (ui.DIM if r.item["closed"] else 0))
+                self.marks(row, w - 1 - len(marks), marks)
             if len(lines) > page:
                 while len(out) < page:
                     out.append(self.line())
@@ -978,17 +978,15 @@ if Region:
                 wren_below(self, out)
             return out
 
-        def band(self, row, look):
-            """The selected row: a raised band across the list with a bar at its left edge, green while
-            the list has the keys."""
+        def bar(self, row):
+            """The selected row's bar at the list's left edge, green while the list has the keys."""
             ui = self.ui
-            row.put(0, " " * (self.size.width - 1), look(0))
-            row.put(0, "▌", look(ui.ACCENT if ui.focus == "side" else ui.DIM))
+            row.put(0, "▌", ui.ACCENT if ui.focus == "side" else ui.DIM)
 
-        def marks(self, row, x, marks, look):
+        def marks(self, row, x, marks):
             """A row's marks: ● running in green, ◆ ready to pick up in yellow."""
             for m in marks.split():
-                x = row.put(x, m, look(self.ui.ACCENT if m == "●" else self.ui.YELLOW)) + 1
+                x = row.put(x, m, self.ui.ACCENT if m == "●" else self.ui.YELLOW) + 1
 
     class ProjectPanel(Region):
         """The detail pane, one column: the selected row's name line, then the README's Next and Current
@@ -1010,7 +1008,7 @@ if Region:
             note = getattr(ui, "pstatus", "")
             status = r.item.get("status") if r.kind in ("project", "sub") else ""
             if status and note.startswith(status):
-                x = name.put(x, f" {status} ", pill(status)) + 1
+                x = name.put(x, status, pill(status)) + 2
                 note = note[len(status):].lstrip(" ·")
             if note:
                 name.put(x, clip(note, w - 2 - x), ui.DIM)
@@ -1063,20 +1061,18 @@ if Region:
                     row = self.line()
                     idx = at + i if i < n else None
                     hl = idx is not None and idx == ui.dsel and ui.focus == "pane"
-                    look = ui.selected if hl else (lambda a: a)
                     if idx is not None:
                         ui.drow_y[y0 + len(out)] = idx
                     if hl:
-                        row.put(1, " " * (span - 2), look(0))
-                        row.put(1, "▌", look(ui.ACCENT))
+                        row.put(1, "▌", ui.ACCENT)
                     if idx is not None:
-                        self.item(row, picks[idx], span, look)
+                        self.item(row, picks[idx], span, hl)
                     elif head == "Stats" and item.startswith("This month"):
                         spark = item[-ui.SPARK_DAYS:]
-                        x = row.put(4, clip(item[:-ui.SPARK_DAYS].rstrip(), span - 6), look(0)) + 3
-                        row.put(x, spark[-max(w - 2 - x, 0):] if w - 2 - x > 0 else "", look(ui.ACCENT))  # the newest days that fit
+                        x = row.put(4, clip(item[:-ui.SPARK_DAYS].rstrip(), span - 6), 0) + 3
+                        row.put(x, spark[-max(w - 2 - x, 0):] if w - 2 - x > 0 else "", ui.ACCENT)  # the newest days that fit
                     else:
-                        row.put(4, clip(item, span - 6), look(ui.DIM))
+                        row.put(4, clip(item, span - 6), ui.DIM)
                     out.append(row)
                     if head == "Handoffs" and i == 0 and n:  # the newest Handoff: its first lines, not items
                         for line in r.item.get("handoff_lines") or []:
@@ -1095,8 +1091,8 @@ if Region:
                 x = row.put(x + 1, str(count), self.ui.DIM)
             row.rule(x + 1, width - x - 1, self.ui.DIM)
 
-        def item(self, row, pick, left, look):
-            """One of a section's items: what it is, and when, at the right."""
+        def item(self, row, pick, left, hl):
+            """One of a section's items: what it is (bold green when it's selected), and when, at the right."""
             ui, (kind, x) = self.ui, pick
             when, mark, attr = "", " ", 0
             if kind == "session":
@@ -1112,10 +1108,10 @@ if Region:
                 name, when, mark, attr = x[1], short_when(x[0]), "◆", ui.DIM
             else:
                 name, when, mark, attr = x[1], short_when(x[0]) if x[0] else "", "✎", ui.DIM
-            row.put(4, mark, look(attr))
-            row.put(6, clip(name, left - 10 - len(when)), look(0))
+            row.put(4, mark, attr)
+            row.put(6, clip(name, left - 10 - len(when)), ui.picked(0) if hl else 0)
             if when:
-                row.put(left - 2 - len(when), when, look(ui.DIM))
+                row.put(left - 2 - len(when), when, ui.DIM)
 
         @staticmethod
         def blocks(r, width):

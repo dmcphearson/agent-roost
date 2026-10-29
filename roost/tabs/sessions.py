@@ -613,19 +613,17 @@ if Region:
                 idx, s = val, rows[val]
                 ui.row_y[y] = idx
                 hl = idx == ui.sel
-                look = ui.selected if hl else (lambda a: a)
                 row = self.line()
                 if hl:
-                    row.put(1, " " * (w - 2), look(0))
-                    row.put(1, "›", look(curses.A_BOLD | ui.ACCENT))
+                    row.put(1, "›", curses.A_BOLD | ui.ACCENT)
                 text, attr = ui.status_cell(s)
                 done = s["state"] == "closed" and ui.wrapped(s)  # never re-read, so its size costs nothing
-                cells = {"NAME": (shown_name(s), look(curses.A_BOLD if hl or group(s) == 0 else 0)),
-                         "STATUS": (text, look(attr)),
-                         "LAST ACTIVE": (ago(s), look(0)),
+                cells = {"NAME": (shown_name(s), ui.picked(0) if hl else curses.A_BOLD if group(s) == 0 else 0),
+                         "STATUS": (text, attr),
+                         "LAST ACTIVE": (ago(s), 0),
                          # right-aligned under the word CONTEXT, so the sizes line up
-                         "CONTEXT": (("—" if done else ktok(s["tokens"])).rjust(len("CONTEXT")), look(ui.DIM if done else 0)),
-                         "PROJECT": (s.get("proj") or "", look(0))}  # its folder is in the panel
+                         "CONTEXT": (("—" if done else ktok(s["tokens"])).rjust(len("CONTEXT")), ui.DIM if done else 0),
+                         "PROJECT": (s.get("proj") or "", 0)}  # its folder is in the panel
                 cx = 5
                 for title, cw in cols.items():
                     if cw:

@@ -3,7 +3,7 @@ import curses, time, traceback
 
 from roost.app.shell import QUIT
 from roost.app.ui import UI
-from roost.app.widgets import (BG, BLUE, CARD, FAINT, GREEN, GREEN_BG, LINE, MIN_SIZE, MUTED, PAIRS, RAISED, RED,
+from roost.app.widgets import (BG, BLUE, CARD, FAINT, GREEN, LINE, MIN_SIZE, MUTED, PAIRS, RAISED, RED,
                                TEXT, YELLOW, Widget)
 from roost.core import config
 
@@ -71,8 +71,6 @@ class TextualUI(UI):
             if attr & curses.A_REVERSE:
                 fg = GREEN
             bg = RAISED if n >= 100 else CARD if card else "default"  # the terminal's background: roost sets it to BG
-            if attr & curses.A_REVERSE:  # the current tab or view: green on a green tint
-                bg = GREEN_BG
             self.styles[key] = Style(color=fg, bgcolor=bg, bold=bool(attr & (curses.A_BOLD | curses.A_REVERSE)) or None,
                                      underline=bool(attr & curses.A_UNDERLINE) or None,
                                      italic=bool(attr & getattr(curses, "A_ITALIC", 0)) or None)
@@ -185,8 +183,8 @@ if Widget:
         # the app's CSS, so it wins over the Textual widgets' own
         CSS = """
         Screen { background: ansi_default; layers: base over top; }
-        TopBar { height: 1; }
-        #body { height: 1fr; margin: 1 0 0 0; }  /* two blank rows under the tabs, with each view's own one */
+        TopBar { height: 3; }  /* the tabs, a blank row, a rule; each view's own blank row follows */
+        #body { height: 1fr; }
         #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 1 0 0 0; border-right: vkey #2c313a; }
         #pane { width: 1fr; height: 100%; }
         KeyBar { height: 1; }

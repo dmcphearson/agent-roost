@@ -126,8 +126,12 @@ class Shell:
     def label(cls, state):
         return cls.LABELS.get(state, state)
 
+    def picked(self, attr):
+        """attr as the selected row's name shows it in a list: bold green, with no band behind it."""
+        return (attr & ~curses.A_COLOR & ~curses.A_DIM) | curses.A_BOLD | self.ACCENT
+
     def selected(self, attr):
-        """attr as it should look on the selected row."""
+        """attr as it should look in a raised box (a menu, a card, the help)."""
         return (attr & ~curses.A_COLOR & ~curses.A_DIM) | self.pair(100 + self.pair_of(attr))
 
     @staticmethod

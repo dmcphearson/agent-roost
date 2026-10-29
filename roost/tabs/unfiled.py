@@ -81,17 +81,15 @@ if Widget:
                 idx, row = ui.utop + i, self.line()
                 ui.urow_y[y0 + i] = idx
                 hl = idx == ui.usel
-                look = ui.selected if hl else (lambda a: a)
                 if hl:
-                    row.put(1, " " * (w - 2), look(0))
-                    row.put(1, "›", look(curses.A_BOLD | ui.ACCENT))
+                    row.put(1, "›", curses.A_BOLD | ui.ACCENT)
                 if kind == "session":
                     mark, attr = ui.status_cell(item)
                 else:
                     mark, attr = NOTE_MARK, ui.DIM
                 when = short_when(item["last"])
-                row.put(3, clip(mark, 18), look(attr))
-                row.put(23, clip(item["name"], w - 23 - len(when) - 4), look(curses.A_BOLD if hl else 0))
-                row.put(w - len(when) - 2, when, look(ui.DIM))
+                row.put(3, clip(mark, 18), attr)
+                row.put(23, clip(item["name"], w - 23 - len(when) - 4), ui.picked(0) if hl else 0)
+                row.put(w - len(when) - 2, when, ui.DIM)
                 out.append(row)
             return out
