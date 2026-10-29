@@ -477,7 +477,7 @@ if Region:
 
         def settle(self):
             """Beside or above, by the window's width; then the note, scrolled to where ↑↓ left it."""
-            ui, w = self.app.ui, self.size.width  # the right pane's width
+            ui, w = self.app.ui, self.app.size.width  # the window's: the view's own is 0 on its first frame
             side = w >= 86
             body, lst = self.query_one("#notes-body"), self.query_one(NoteList)
             body.set_class(side, "side")

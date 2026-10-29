@@ -1340,6 +1340,34 @@ class TopTabs(unittest.TestCase):
         self.assertLess(card.y, lst.bottom, (lst, card))
         self.assertLessEqual(card.right, 120, card)
 
+    def notes_layout(self, seen, label):
+        """A step that keeps, under label, the Notes list's and card's regions as the frame just drawn has them,
+        with no redraw first: the first frame after the step before it."""
+        async def step(pilot):
+            app = pilot.app
+            seen[label] = (app.ui.TABS[app.ui.tab].name, app.query_one(roost.NoteList).region, app.query_one(roost.NoteCard).region)
+        return step
+
+    def assert_beside(self, got):
+        shown, lst, card = got
+        self.assertEqual(shown, "Notes")
+        self.assertGreater(lst.width, 0, lst)
+        self.assertGreaterEqual(card.x, lst.right, f"the card is beside the list, not below it: {lst} {card}")
+        self.assertLess(card.y, lst.bottom, (lst, card))
+
+    def test_the_notes_card_is_beside_its_list_from_the_first_frame_after_tab(self):
+        for keys in (["tab", "tab"], ["shift+tab", "shift+tab"]):  # from Sessions, and from Stats
+            seen = {}
+            self.start([self.keys(k) for k in keys] + [self.notes_layout(seen, "first")], size=(120, 40))
+            with self.subTest(keys=keys):
+                self.assert_beside(seen["first"])
+
+    def test_the_notes_card_is_beside_its_list_from_the_first_frame_when_roost_starts_on_notes(self):
+        seen = {}
+        self.start([self.notes_layout(seen, "first")], size=(120, 40), tab="Notes")
+        self.assert_beside(seen["first"])
+
+    # 5. The status bar's running count
     # 5. The status bar's running count
 
     def test_a_click_on_the_running_count_opens_the_sessions_tab_on_running(self):
