@@ -173,16 +173,23 @@ if Widget:
             return [row]
 
     class TopBar(Region):
-        """The top row: Agent Roost, and the view's own note at the right."""
+        """The top row: Agent Roost, the tabs (the current one in green), and the tab's own note at the right."""
         NAME = "Agent Roost"
 
         def lines(self):
             ui, w = self.ui, self.size.width
-            row = self.line()
-            row.put(1, self.NAME, curses.A_BOLD | ui.ACCENT)
+            band = ui.selected
+            row = self.line(band(0))
+            x = row.put(2, self.NAME, band(curses.A_BOLD | ui.ACCENT)) + 3
+            ui.tab_x = []
+            for i, tab in enumerate(ui.TABS):
+                label = f" {tab.name} "
+                ui.tab_x.append((x, x + len(label), i))
+                row.put(x, label, curses.A_REVERSE | curses.A_BOLD if i == ui.tab else band(ui.DIM))
+                x += len(label) + 1
             text, attr = getattr(ui, "corner", None) or ("", 0)
             if text:
-                row.put(w - len(text) - 2, text, attr)
+                row.put(w - len(text) - 2, text, band(attr))
             return [row]
 
     class StatusBar(Region):
@@ -195,7 +202,9 @@ if Widget:
             row = self.line()
             if left:
                 row.put(2, clip(left, w - len(right) - 6), ui.YELLOW | curses.A_BOLD)
-            row.put(w - len(right) - 3, right, ui.DIM)
+            x = row.put(w - len(right) - 3, right, ui.DIM)
+            if right.endswith(" running"):
+                row.put(w - len(right) - 5, "●", ui.ACCENT)
             return [row]
 
         def on_click(self, event):
@@ -218,7 +227,7 @@ if Widget:
                 for item in (k for k in keys.split("   ") if k):
                     m = BAR_KEY.match(item)
                     key, what = (m.group(1), m.group(2) or "") if m and "·" not in item else ("", item)
-                    row.put(x, key, ui.GREEN)
+                    row.put(x, key, ui.GREEN | curses.A_BOLD)
                     row.put(x + len(key), what, ui.DIM)
                     x += len(item) + 3
                 if note:

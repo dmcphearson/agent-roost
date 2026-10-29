@@ -45,7 +45,7 @@ class TextualUI(UI):
         self.app, self.scr = app, Size(app)
         self.setup(sessions, query)
         self.GREEN, self.YELLOW, self.CYAN, self.RED, self.ACCENT = (self.pair(i) for i in range(1, 6))
-        self.DIM = self.pair(6)
+        self.DIM, self.FAINT = self.pair(6), self.pair(7)
         self.status = {k: self.pair(i) for i, k in enumerate(
             ["working", "idle", "input", "expiring", "expired", "opening", "compacted"], 20)}
         self.styles = {}
@@ -71,6 +71,8 @@ class TextualUI(UI):
             if attr & curses.A_REVERSE:
                 fg = GREEN
             bg = RAISED if n >= 100 else CARD if card else "default"  # the terminal's background: roost sets it to BG
+            if attr & curses.A_REVERSE:  # the current tab or view: green on a green tint
+                bg = GREEN_BG
             self.styles[key] = Style(color=fg, bgcolor=bg, bold=bool(attr & (curses.A_BOLD | curses.A_REVERSE)) or None,
                                      underline=bool(attr & curses.A_UNDERLINE) or None,
                                      italic=bool(attr & getattr(curses, "A_ITALIC", 0)) or None)
@@ -184,7 +186,7 @@ if Widget:
         CSS = """
         Screen { background: ansi_default; layers: base over top; }
         TopBar { height: 1; }
-        #body { height: 1fr; }
+        #body { height: 1fr; margin: 1 0 0 0; }  /* two blank rows under the tabs, with each view's own one */
         #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 1 0 0 0; border-right: vkey #2c313a; }
         #pane { width: 1fr; height: 100%; }
         KeyBar { height: 1; }
@@ -213,7 +215,7 @@ if Widget:
         def compose(self):
             yield Keys()
             yield TopBar()
-            with Horizontal(id="body"):  # the sidebar on every view, and the selected view beside it
+            with Horizontal(id="body"):  # on Projects, the list and the details beside it; any other tab alone
                 yield ProjectList()
                 with Vertical(id="pane"):
                     for tab in self.ui.TABS:
@@ -250,6 +252,7 @@ if Widget:
                 small.refresh()
                 return
             self.drawn = ui.draw()
+            self.query_one(ProjectList).display = ui.TABS[ui.tab].name == "Projects"  # the other tabs take the whole width
             for i, tab in enumerate(ui.TABS):
                 view = self.query_one(tab.widget)
                 view.display = i == ui.tab
