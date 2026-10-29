@@ -3366,7 +3366,7 @@ class DetailLayout(unittest.TestCase):
         self.assertTrue(lines[0].rstrip().endswith(got["folder"]), f"the projects folder at the top bar's right: {lines[0]!r}")
         self.assertTrue([t for y, x, t in got["dim"] if y == 0 and got["folder"] in t], "the folder is dim")
         self.assertFalse([l for l in lines if re.search(r"\d+ projects · \d+ closed", l)], "no project counts")
-        self.assertEqual(lines[2], "─" * len(lines[0]), "a rule across the whole width under the top bar")
+        self.assertEqual(lines[2], "─" * self.SIZE[0], "a rule across the whole width under the top bar")
         self.assertEqual([l.strip(" │┃▏▕") for l in (lines[1], lines[3])], ["", ""], "a blank row each side of the rule")
         self.assertEqual(self.first_sidebar_row(lines), 4, self.sidebar(lines)[:6])
         y, x, name = self.name_at(got)
@@ -3526,7 +3526,7 @@ class DetailLayout(unittest.TestCase):
             got, _ = self.heading_rows(size)
             W, bottom = roost.SIDEBAR_W, size[1] - 3  # above the status bar and the key bar
             with self.subTest(size=size):
-                for y, l in enumerate(got["lines"][1:bottom], 1):
+                for y, l in enumerate(got["lines"][4:bottom], 4):  # under the top bar, its rule, and their blank rows
                     self.assertLessEqual(len(l.rstrip()) - W, 84, f"row {y} runs past 80 columns: {l[W:]!r}")
 
     def test_each_item_has_its_mark_its_name_and_its_time_at_the_sections_right_edge(self):
