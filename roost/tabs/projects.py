@@ -368,7 +368,7 @@ class ProjectsTab:
 
     def detail_sections(self, r):
         """The detail pane's sections, as (heading, lines): a project's open sub-projects,
-        then its Sessions, Handoffs, notes, and this month's spend."""
+        then its Sessions, Handoffs, notes, and what it cost."""
         if r.kind not in ("project", "sub"):
             return []
         p, out = r.item, []
@@ -387,7 +387,7 @@ class ProjectsTab:
         out.append(("Handoffs", [f"{short_when(t)}  {title}" for t, title, _ in (p.get("handoffs") or [])[:self.DETAIL_ROWS]]
                     or ["No Handoffs yet"]))
         out.append(("Notes", [title for _, title, _ in (p.get("notes") or [])[:self.DETAIL_ROWS]] or ["No notes"]))
-        out.append(("Stats", [self.month_line(p)]))
+        out.append(("Stats", self.spend_lines(p)))
         return out
 
     def recent_sessions(self, p):
@@ -439,6 +439,10 @@ class ProjectsTab:
                 fn = first_action(self.detail_actions(r, *items[idx])[1])
                 return fn() if fn else None
             return None
+        page = max(getattr(self, "droom", 2) - 1, 1)
+        if k in ("pageup", "pagedown"):  # a screen of the details
+            self.dtop = max(0, getattr(self, "dtop", 0) + (page if k == "pagedown" else -page))
+            return None
         to = self.move(k, self.dsel, len(items))
         if to is not None:
             self.dsel = to
@@ -448,34 +452,29 @@ class ProjectsTab:
             self.focus = "side"
         return None
 
-    SPARK, SPARK_DAYS = " ▁▂▃▄▅▆▇█", 30
-
-    def month_line(self, p):
+    def spend_lines(self, p):
         """This month's spend on p (its Sessions', or logged under its name) and how many of its Sessions
-        ran, then a sparkline of its daily spend over the last SPARK_DAYS days, today at the right."""
+        ran, then its spend over the last 30 days, today included."""
         job = getattr(self, "sjob", None)
         if not job or not job.get("data"):
-            return "loading…"
+            return ["loading…"]
         today = date.today()
         start = today.replace(day=1)
         key = (id(job["data"]), p["id"], today, tuple(p["sessions"]))
         cache = self.__dict__.setdefault("_month_spend", {})
         if key not in cache:
             names, sids = {p["id"], label_of(p)}, set(p["sessions"])
-            days = [(today - timedelta(days=i)).isoformat() for i in range(self.SPARK_DAYS - 1, -1, -1)]  # spend rows' days are YYYY-MM-DD
-            first, by_day, month = start.isoformat(), dict.fromkeys(days, 0.0), 0.0
+            first, since = start.isoformat(), (today - timedelta(days=29)).isoformat()  # spend rows' days are YYYY-MM-DD
+            month = last30 = 0.0
             for d, _, sid, proj, c in self.stats_rows(job["data"])["rows"]:
                 if d and (proj in names or sid in sids):
                     month += c if d >= first else 0
-                    if d in by_day:
-                        by_day[d] += c
-            top = max(by_day.values())
-            spark = "".join(" " if not c else self.SPARK[max(1, round(c / top * 8))] for c in by_day.values())
+                    last30 += c if d >= since else 0
             cache.clear()
-            cache[key] = (month, spark)
-        month, spark = cache[key]
+            cache[key] = (month, last30)
+        month, last30 = cache[key]
         n = sum(datetime.fromtimestamp(s["last"]).date() >= start for s in self.linked(p))
-        return f"This month  ${month:.2f} · {plural(n, 'Session')}   {spark}"
+        return [f"This month  ${month:.2f} · {plural(n, 'Session')}", f"Last 30 days  ${last30:.2f}"]
 
     def show_sessions(self, p):
         """The Sessions entry searching for project:<id>: exactly the Sessions p lists, on Running if one of
@@ -659,7 +658,7 @@ class ProjectsTab:
 
     PROJECTS_HELP = [
         ("Projects", f"the {RECENT_ROWS} most recently worked open projects, then More projects (the rest, and the closed ones), opened in place with enter or →"),
-        ("Details", "the selected project's: Next, Current state, sub-projects, Sessions, Handoffs, notes, and spend · → moves into them, ← back"),
+        ("Details", "the selected project's: Next, Current state, sub-projects, Sessions, Handoffs, notes, and spend · → moves into them, ← back · the wheel or page up/down scrolls them"),
         ("Sub-projects", "pieces of a project's work (feature, bugfix, research, chore), each with its own README and Handoffs; New sub-project is in a project's actions"),
         ("Marks", "● a Session runs in it or one of its sub-projects · ◆ ready to pick up: a Handoff newer than its last Session"),
         ("Sessions", "Show its Sessions, in a project's actions, opens the Sessions tab on just its Sessions, searching project:<its id>"),
@@ -1020,18 +1019,15 @@ if Region:
                     row.put(16, clip(value, w - 18), ui.DIM)
                     out.append(row)
                 return out
-            room = self.size.height
             picks = ui.detail_items(r)
             kinds = {"Sub-projects": "sub", "Sessions": "session", "Handoffs": "handoff", "Notes": "note"}
-            ui.drow_y, at, y0 = {}, 0, self.region.y
+            at, item_at = 0, {}  # item_at: each item's line
             # where it stands first, then the work in it, then what it is, then what it cost
             sections = sorted(self.blocks(r, span - 6), key=lambda b: b[0] != "Next")
             sections += [s for s in ui.detail_sections(r) if s[0] != "Stats"]
             sections.append(("Details", None))
             sections += [s for s in ui.detail_sections(r) if s[0] == "Stats"]
             for head, items in sections:
-                if len(out) + 2 > room:
-                    break
                 out.append(self.line())
                 n = sum(kind == kinds.get(head) for kind, _ in picks)  # its lines that are items, not "none yet"
                 row = self.line()
@@ -1039,8 +1035,6 @@ if Region:
                 out.append(row)
                 if items is None:  # Details: the fields
                     for label, value in ui.pfields:
-                        if len(out) >= room:
-                            break
                         row = self.line()
                         row.put(4, label, ui.DIM)
                         plain = label in ("Summary", "Description", "Last message") and value != "no description yet" or not label
@@ -1050,39 +1044,61 @@ if Region:
                 if head in ("Next", "Current state"):
                     if len(items) > self.BLOCK_LINES:
                         items = items[:self.BLOCK_LINES - 1] + [clip(items[self.BLOCK_LINES - 1], span - 8) + " …"]
-                    for line in items[:max(room - len(out), 0)]:
+                    for line in items:
                         row = self.line()
                         row.put(4, line, 0)
                         out.append(row)
                     continue
                 for i, item in enumerate(items):
-                    if len(out) >= room:
-                        break
                     row = self.line()
                     idx = at + i if i < n else None
                     hl = idx is not None and idx == ui.dsel and ui.focus == "pane"
                     if idx is not None:
-                        ui.drow_y[y0 + len(out)] = idx
+                        item_at[idx] = len(out)
                     if hl:
                         row.put(1, "▌", ui.ACCENT)
                     if idx is not None:
                         self.item(row, picks[idx], span, hl)
-                    elif head == "Stats" and item.startswith("This month"):
-                        spark = item[-ui.SPARK_DAYS:]
-                        x = row.put(4, clip(item[:-ui.SPARK_DAYS].rstrip(), span - 6), 0) + 3
-                        row.put(x, spark[-max(w - 2 - x, 0):] if w - 2 - x > 0 else "", ui.ACCENT)  # the newest days that fit
+                    elif head == "Stats" and item != "loading…":
+                        row.put(4, clip(item, span - 6), 0)
                     else:
                         row.put(4, clip(item, span - 6), ui.DIM)
                     out.append(row)
                     if head == "Handoffs" and i == 0 and n:  # the newest Handoff: its first lines, not items
                         for line in r.item.get("handoff_lines") or []:
-                            if len(out) >= room:
-                                break
                             row = self.line()
                             row.put(6, clip(line, span - 8), ui.DIM)
                             out.append(row)
                 at += n
-            return out
+            return self.window(out, item_at, span)
+
+        def window(self, out, item_at, span):
+            """The part of the details that fits, from the scroll position: back at the top for another
+            project, moved to show the selected item when it moves, and never past the end. "↓ more" on the
+            last row while there's more below."""
+            ui, room = self.ui, max(self.size.height, 1)
+            ui.droom = room
+            shows = (ui.psel, ui.drow.item.get("id"))
+            if getattr(ui, "dtop_for", None) != shows:
+                ui.dtop_for, ui.dtop, ui.dsel_seen = shows, 0, None
+            if ui.focus == "pane" and ui.dsel != ui.dsel_seen and ui.dsel in item_at:
+                y = item_at[ui.dsel]
+                ui.dtop = min(max(ui.dtop, y - room + 1), y)
+            ui.dsel_seen = ui.dsel if ui.focus == "pane" else None
+            ui.dtop = max(0, min(ui.dtop, len(out) - room))
+            shown = out[ui.dtop:ui.dtop + room]
+            ui.drow_y = {self.region.y + y - ui.dtop: idx for idx, y in item_at.items() if 0 <= y - ui.dtop < room}
+            if ui.dtop + room < len(out):
+                shown[-1].put(span - 2 - len("↓ more"), "↓ more", ui.DIM)
+            return shown
+
+        def wheel(self, event, step):
+            """The wheel over the details scrolls them, not the list."""
+            event.stop()
+            ui = self.ui
+            if not (ui.asking or ui.helping or ui.confirm or ui.alerting):
+                ui.dtop = max(0, getattr(ui, "dtop", 0) + 3 * step)  # draw keeps it within the details
+                self.refresh()
 
         def heading(self, row, x, head, count, width):
             """A section's heading: its name, how many it lists, and a faint rule to the edge."""
