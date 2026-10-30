@@ -4423,3 +4423,108 @@ class DetailPanels(unittest.TestCase):
 def pane_selected_rows(got):
     """The rows right of the sidebar with a ▌ (an item's selection mark)."""
     return [y for y, l in enumerate(got["lines"]) if "▌" in l[roost.SIDEBAR_W:]]
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class ScrolledPanels(unittest.TestCase):
+    """The details scrolled in a short window (100x28): while there's more below, "↓ more" takes their last row
+    on its own and covers nothing; with the end showing, no marker and the last row is content. A click inside
+    Next's or Current state's outline selects that panel wherever the scroll has put it, and a double-click
+    expands it."""
+    run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
+    select, keys = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys)
+    loaded, wheel = staticmethod(SectionsOnScreen.loaded), staticmethod(DetailScroll.wheel)
+    SHORT = (100, 28)
+
+    def setUp(self):
+        DetailPanels.setUp(self)
+
+    DESCRIPTION, read_project = DetailPanels.DESCRIPTION, staticmethod(SectionsOnScreen.read_project)
+
+    def view(self, seen, label):
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            app, ui = pilot.app, pilot.app.ui
+            box, lines = app.query_one(roost.ProjectPanel).region, screen_text(app)
+            seen[label] = {"lines": lines, "pane": [l[roost.SIDEBAR_W:] for l in lines[box.y:box.bottom]], "y0": box.y,
+                           "focus": ui.focus, "dsel": getattr(ui, "dsel", None), "menu": ui.choosing}
+        return step
+
+    def full(self):
+        """The details whole, at 100x80: their rows, trailing blanks left out."""
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(seen, "x")], size=(100, 80))
+        rows = [DetailScroll.norm(l) for l in seen["x"]["pane"]]
+        while rows and not rows[-1]:
+            rows.pop()
+        return rows
+
+    @staticmethod
+    def bare(row):
+        return row.strip(" │▕▏")
+
+    def test_more_below_takes_the_last_row_alone_and_the_rows_above_are_the_details_unchanged(self):
+        full = self.full()
+        seen = {}
+        steps = [self.on_project("fleet"), self.loaded, self.view(seen, 0)]
+        for i in range(1, 12):
+            steps += [self.wheel(roost.ProjectPanel), self.view(seen, i)]
+        self.run_on(self.projects, steps, size=self.SHORT)
+        room = len(seen[0]["pane"])
+        self.assertGreater(len(full), room, "the fixture: the details don't fit at 100x28")
+        ends = 0
+        for i in range(12):
+            got = seen[i]
+            rows = [DetailScroll.norm(l) for l in got["pane"]]
+            with self.subTest(turn=i):
+                if any("↓ more" in r for r in rows):
+                    self.assertEqual(self.bare(rows[-1]), "↓ more", f"the marker's row has nothing else: {rows[-1]!r}")
+                    self.assertFalse([r for r in rows[:-1] if "↓ more" in r], "only on the last row")
+                    above = rows[:-1]
+                    at = [o for o in range(len(full)) if full[o:o + len(above)] == above]
+                    self.assertEqual(len(at), 1, ("the rows above are the details as drawn whole, nothing cut", above))
+                else:
+                    ends += 1
+                    self.assertEqual(rows[-1], full[-1], "the end: the last row is the details' last line")
+        self.assertTrue(ends, "the fixture: the wheel reached the end")
+        self.assertIn("↓ more", " ".join(seen[0]["pane"]), "the fixture: more below at first")
+
+    def click_on(self, seen, label, text, times=1, right_half=False):
+        """A step: click (times) on the screen row and column where text is drawn in the details (in the right
+        half of the details when right_half), and remember that row under label."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            lines, W = screen_text(pilot.app), roost.SIDEBAR_W
+            mid = W + (len(lines[0]) - W) // 2  # the details' right half: Current state's side
+            hits = [(y, l.index(text, mid if right_half else W)) for y, l in enumerate(lines)
+                    if text in l[(mid if right_half else W):]]
+            assert hits, f"{text!r} isn't on screen: {lines}"
+            y, x = hits[0]
+            seen[label] = y
+            await pilot.click(offset=(x + 1, y), times=times)
+            await pilot.pause()
+        return step
+
+    def test_a_click_in_a_scrolled_outline_selects_that_panel_and_a_double_click_expands_it(self):
+        first = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.view(first, "x")], size=self.SHORT)
+        top = min(b["top"] for b in boxes(first["x"]["lines"], roost.SIDEBAR_W) if b["title"] in ("Next", "Current state"))
+        # each scroll leaves the panels partly on screen, the clicked row above where their outlines were unscrolled
+        cases = {"wheel": ([self.wheel(roost.ProjectPanel)], PANEL_NEXT[0], "Drivers are packaged"),
+                 "page down": ([self.keys("right", "pagedown"), self.wheel(roost.ProjectPanel, 4, down=False)],
+                               PANEL_NEXT[2], "… enter to expand")}
+        for case, (scroll, next_text, state_text) in cases.items():
+            for panel, text, right, dsel in (("Next", next_text, False, 0), ("Current state", state_text, True, 1)):
+                seen, rows = {}, {}
+                self.run_on(self.projects, [self.on_project("fleet"), self.loaded] + scroll
+                            + [self.click_on(rows, "click", text, right_half=right), self.view(seen, "clicked")], size=self.SHORT)
+                self.run_on(self.projects, [self.on_project("fleet"), self.loaded] + scroll
+                            + [self.click_on(rows, "double", text, times=2, right_half=right), self.view(seen, "double")],
+                            size=self.SHORT)
+                with self.subTest(scroll=case, panel=panel):
+                    self.assertLess(rows["click"], top, "the fixture: the click is where no outline was before the scroll")
+                    got = seen["clicked"]
+                    self.assertEqual((got["focus"], got["dsel"], got["menu"]), ("pane", dsel, None), "the click selects that panel")
+                    self.assertTrue([l for l in seen["double"]["lines"] if "enter to collapse" in l], "the double-click expands it")
