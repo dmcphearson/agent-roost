@@ -126,6 +126,11 @@ class Shell:
     def label(cls, state):
         return cls.LABELS.get(state, state)
 
+    def strip(self):
+        """The current tab's summary strip, as (mark, attr, number, word) parts, or [] when it has none."""
+        fn = getattr(self, f"{self.TABS[self.tab].name.lower()}_strip", None)
+        return fn() if fn else []
+
     def picked(self, attr):
         """attr as the selected row's name shows it in a list: bold green, with no band behind it."""
         return (attr & ~curses.A_COLOR & ~curses.A_DIM) | curses.A_BOLD | self.ACCENT

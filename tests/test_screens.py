@@ -604,6 +604,47 @@ class TextualScreens(unittest.TestCase):
         self.assertRegex(seen["row"], r"^\s*Running \(2\)\s+Closed \(3\)\s+Unfiled \(5\)\s*$")
         self.assertRegex(seen["searched"], r"^\s*Running \(1\)\s+Closed \(2\)\s+Unfiled \(\d+\)\s+/ printer\s*$")
 
+    def test_the_sessions_strip_reads_running_closed_today_and_unfiled_with_numbers_bold_and_words_dim(self):
+        """On row 4, with a blank row under it: ● N running (the status bar's count), N closed today (closed
+        Sessions whose last activity was today), N unfiled (the Unfiled view's count); a count of 0 still shows."""
+        W = importlib.import_module("roost.app.widgets")
+        green, muted = W.GREEN.lower(), W.MUTED.lower()
+        parts = re.compile(r"●\s*(\d+)\s+running\b.*?(\d+)\s+closed today\b.*?(\d+)\s+unfiled\b")
+
+        def strip(app):
+            lines = screen_text(app)
+            unfiled = re.search(r"Unfiled \((\d+)\)", next((l for l in lines if "Unfiled (" in l), ""))
+            return {"text": lines[4], "runs": runs(app, 4), "fills": backgrounds(app, 4), "lines": lines,
+                    "running": app.ui.status_line()[1], "unfiled": unfiled and unfiled.group(1)}
+        from datetime import date
+        today = date.today()
+        cases = {"none closed": list(self.sessions)}
+        self.views_fixture()
+        cases["views"] = list(self.sessions)
+        for case, sessions in cases.items():
+            self.sessions, seen = sessions, {}
+            self.run_app([open_view("Sessions"), self.look(seen, "x", strip)])
+            got = seen["x"]
+            want_closed = sum(s["state"] == "closed" and datetime.fromtimestamp(s["last"]).date() == today for s in sessions)
+            with self.subTest(case=case):
+                m = parts.search(got["text"])
+                self.assertIsNotNone(m, "\n".join(got["lines"][:8]))
+                running = re.match(r"(\d+) running", got["running"])
+                self.assertEqual(m.group(1), running.group(1) if running else "0")
+                self.assertEqual(int(m.group(2)), want_closed)
+                self.assertEqual(m.group(3), got["unfiled"], "the Unfiled view's count")
+                self.assertEqual(got["fills"], set(), "no background on the strip")
+                styles = [st for x0, text, st in got["runs"] for _ in text]
+                text = got["text"]
+                self.assertEqual(color_of(styles[text.index("●")]), green)
+                for word in ("running", "closed today", "unfiled"):
+                    x = text.index(word)
+                    self.assertEqual({color_of(st) for st in styles[x:x + len(word)]}, {muted}, f"{word} is dim")
+                for g in (1, 2, 3):
+                    self.assertTrue(all(st and st.bold for st in styles[m.start(g):m.end(g)]), f"{m.group(g)} is bold")
+                self.assertRegex(got["lines"][5].strip(), r"^$", "a blank row under the strip")
+        self.assertEqual(sum(s["state"] == "closed" for s in cases["none closed"]), 0, "the fixture: a case with 0 closed today")
+
     def test_the_current_view_is_bold_green_with_no_background_and_the_others_dim(self):
         self.views_fixture()
         seen = {}
@@ -1250,8 +1291,9 @@ class TopTabs(unittest.TestCase):
 
     def test_a_blank_row_a_rule_and_a_blank_row_separate_the_top_bar_from_the_content_on_every_tab(self):
         """On every tab row 1 is blank, row 2 is a rule (─) across the whole width in the faint line color, row 3
-        is blank, and the content starts on row 4: on Projects the list's first row and the details' name line,
-        on Sessions the views row, on Notes and Stats their first row."""
+        is blank. On Projects and Sessions row 4 is the summary strip, row 5 blank, and the content starts on
+        row 6: on Projects the list's first row and the details' name line, on Sessions the views row. On Notes
+        and Stats there's no strip and the content starts on row 4."""
         seen, W = {}, roost.SIDEBAR_W
 
         def grab(name):
@@ -1274,15 +1316,22 @@ class TopTabs(unittest.TestCase):
                 self.assertEqual(lines[2], "─" * 120, "a rule across the whole width:\n" + top)
                 self.assertEqual(set(rule), {roost.LINE.lower()}, "the rule is in the faint line color")
                 self.assertTrue(blank(lines[1]) and blank(lines[3]), "a blank row each side of the rule:\n" + top)
-                first = next((y for y in range(3, len(lines)) if not blank(lines[y])), None)
-                self.assertEqual(first, 4, "then the content:\n" + top)
+                strip = name in ("Projects", "Sessions")
+                if strip:
+                    self.assertRegex(lines[4], r"●\s*\d+\s+running\b", "the summary strip on row 4:\n" + top)
+                    self.assertTrue(blank(lines[5]), "a blank row under the strip:\n" + top)
+                else:
+                    self.assertFalse([l for l in lines[1:6] if re.search(r"\d+\s+running\b", l)], "no strip:\n" + top)
+                start = 6 if strip else 4
+                first = next((y for y in range(5 if strip else 3, len(lines)) if not blank(lines[y])), None)
+                self.assertEqual(first, start, "then the content:\n" + top)
                 if name == "Projects":
-                    side = next((y for y in range(3, len(lines)) if not blank(lines[y][:W])), None)
-                    self.assertEqual(side, 4, "the list's first row:\n" + top)
-                    nm = min(((y, t) for y, x, t in bold if x >= W and y > 0), default=None)
-                    self.assertEqual(nm and nm[0], 4, ("the details' name line", nm))
+                    side = next((y for y in range(5, len(lines)) if not blank(lines[y][:W])), None)
+                    self.assertEqual(side, 6, "the list's first row:\n" + top)
+                    nm = min(((y, t) for y, x, t in bold if x >= W and y > 5), default=None)
+                    self.assertEqual(nm and nm[0], 6, ("the details' name line", nm))
                 if name == "Sessions":
-                    self.assertRegex(lines[4], r"^\s*Running \(\d+\)\s+Closed \(\d+\)\s+Unfiled \(\d+\)", "the views row")
+                    self.assertRegex(lines[6], r"^\s*Running \(\d+\)\s+Closed \(\d+\)\s+Unfiled \(\d+\)", "the views row")
 
     def test_sessions_notes_and_stats_take_the_whole_window_with_no_project_list(self):
         widget = {"Sessions": [roost.SessionList], "Notes": [roost.NoteList, roost.NoteCard], "Stats": [roost.StatsView]}

@@ -352,6 +352,14 @@ class ProjectsTab:
         linked = self.linked(p)
         return not linked or self.wrapped_up(p, linked[0])
 
+    def subline(self, p):
+        """A project's second line in the list: its status, how many Sessions run in it and its open
+        sub-projects, and when it was last worked."""
+        items = [p] + [s for s in p.get("subs") or [] if not s["closed"]]
+        n = sum(s["state"] != "closed" for x in items for s in self.linked(x))
+        parts = [p.get("status") or "", f"{n} running" if n else "", short_when(p["last"]) if p.get("last") else ""]
+        return " · ".join(x for x in parts if x)
+
     def markers(self, r):
         """A list row's marks: ● a Session is running in it, ◆ it's ready to pick up. A project carries its
         open sub-projects' marks too, since they're only in its details."""
@@ -451,6 +459,25 @@ class ProjectsTab:
         elif k == "left":
             self.focus = "side"
         return None
+
+    def projects_strip(self):
+        """The summary strip: how many Sessions run, how many projects are ready to pick up, and what was
+        spent today and this month (once the spend has been read)."""
+        running = sum(s["state"] != "closed" for s in self.sessions)
+        ready = sum(self.ready(p) for p in self.projects or [] if not p["closed"])
+        parts = [("●", self.ACCENT, str(running), "running"), ("◆", self.YELLOW, str(ready), "ready to pick up")]
+        job = getattr(self, "sjob", None)
+        if job and job.get("data"):
+            today = date.today()
+            key = (id(job["data"]), today)
+            if getattr(self, "_spend_key", None) != key:
+                first, day = today.replace(day=1).isoformat(), today.isoformat()
+                rows = job["data"]["rows"]
+                self._spend_key = key
+                self._spend = (sum(c for d, *_, c in rows if d == day), sum(c for d, *_, c in rows if d and d >= first))
+            day_spend, month_spend = self._spend
+            parts += [("", 0, f"${day_spend:.2f}", "today"), ("", 0, f"${month_spend:.2f}", "this month")]
+        return parts
 
     def spend_lines(self, p):
         """This month's spend on p (its Sessions', or logged under its name) and how many of its Sessions
@@ -637,17 +664,22 @@ class ProjectsTab:
         return name, fields + about
 
     def project_lines(self, rows, page):
-        """The list's lines: a row's index, or None for the blank line before every header but the
-        first. Scrolls self.ptop so the selected row is in the page."""
+        """The list's lines: a row's index, (index, 1) for a project's second line, or None for a blank
+        line: after each project, and before every header but the first. Scrolls self.ptop so the
+        selected row is in the page."""
         lines, sel_line, sel_end = [], None, None
         for idx, r in enumerate(rows):
-            if r.kind in ("head", "more") and idx:
+            if r.kind in ("head", "more") and idx and lines and lines[-1] is not None:
                 lines.append(None)
             if idx == self.psel:
                 sel_line = len(lines)
             lines.append(idx)
+            if r.kind in ("project", "sub"):
+                lines.append((idx, 1))
             if idx == self.psel:
                 sel_end = len(lines) - 1
+            if r.kind in ("project", "sub") and idx + 1 < len(rows):
+                lines.append(None)
         if sel_line is not None:
             if sel_line < self.ptop:
                 self.ptop = sel_line
@@ -945,11 +977,16 @@ if Region:
                 out.append(row)
                 if idx is None:
                     continue
+                second = isinstance(idx, tuple)
+                idx = idx[0] if second else idx
                 r = rows[idx]
                 ui.prow_y[y0 + i] = idx
                 hl = idx == ui.psel
                 if hl:
                     self.bar(row)
+                if second:
+                    row.put(LABEL_X, clip(ui.subline(r.item), w - LABEL_X - 2), ui.DIM)
+                    continue
                 bold = (ui.picked(0) if ui.focus == "side" else curses.A_BOLD) if hl else 0
                 if r.kind == "head":
                     label = f"{'▸' if r.sec in ui.folded else '▾'} {r.sec} ({r.item['count']}) "

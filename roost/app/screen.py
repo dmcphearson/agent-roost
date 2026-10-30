@@ -183,7 +183,7 @@ if Widget:
         # the app's CSS, so it wins over the Textual widgets' own
         CSS = """
         Screen { background: ansi_default; layers: base over top; }
-        TopBar { height: 3; }  /* the tabs, a blank row, a rule; each view's own blank row follows */
+        TopBar { height: 3; }  /* the tabs, a blank row, a rule; redraw makes it 5 for a summary strip */
         #body { height: 1fr; }
         #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 1 0 0 0; border-right: vkey #2c313a; }
         #pane { width: 1fr; height: 100%; }
@@ -259,7 +259,9 @@ if Widget:
                         view.settle()
                     for part in view.query(Region):
                         part.refresh()
-            self.query_one(TopBar).refresh()
+            top = self.query_one(TopBar)
+            top.styles.height = 5 if ui.strip() else 3
+            top.refresh()
             self.query_one(ProjectList).refresh()
             self.query_one(StatusBar).refresh()
             bar = self.query_one(KeyBar)
