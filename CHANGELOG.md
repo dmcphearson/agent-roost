@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Summary strip:** under the tabs on Projects, how many Sessions run, how many projects are ready to pick up, and what was spent today and this month; on Sessions, how many run, closed today, and are unfiled
+- **Project rows:** each project in the list takes two lines, its name and then its status, how many Sessions run in it, and when it was last worked
 - **Tasks:** a project's or sub-project's tasks are Markdown files in its `tasks/` folder, each with a status (todo, in-progress, in-review, done, blocked), the Session that claimed it, and dated notes. `roost task new`, `list`, `show`, `claim`, `note`, and `status` make and move them
 
 ## 2026.10.29

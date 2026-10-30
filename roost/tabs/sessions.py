@@ -1,5 +1,6 @@
 """The Sessions tab."""
 import curses, os, textwrap, threading, time
+from datetime import date, datetime
 from pathlib import Path
 
 from roost.core.statsdata import log_spend
@@ -84,6 +85,14 @@ class SessionsTab:
         if stale(s):
             return text + f" · idle {span(time.time() - active(s))}: save what matters to files and close it", self.RED
         return text, self.DIM
+
+    def sessions_strip(self):
+        """The summary strip: how many Sessions run, how many closed today, and how many are unfiled."""
+        midnight = datetime.combine(date.today(), datetime.min.time()).timestamp()
+        running = sum(s["state"] != "closed" for s in self.sessions)
+        closed = sum(s["state"] == "closed" and (s.get("last") or 0) >= midnight for s in self.sessions)
+        return [("●", self.ACCENT, str(running), "running"), ("", 0, str(closed), "closed today"),
+                ("", 0, str(len(self.unfiled())), "unfiled")]
 
     def draw_sessions(self):
         """What the Sessions tab shows: its rows (in the view, matching the search, sorted), its corner

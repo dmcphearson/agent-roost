@@ -173,7 +173,8 @@ if Widget:
             return [row]
 
     class TopBar(Region):
-        """The top row: Agent Roost, the tabs (the current one in green), and the tab's own note at the right."""
+        """The top row: Agent Roost, the tabs (the current one in green), and the tab's own note at the right;
+        a rule under it, and on a tab with a summary strip, the strip under that."""
         NAME = "Agent Roost"
 
         def lines(self):
@@ -191,7 +192,21 @@ if Widget:
                 row.put(w - len(text) - 2, text, attr)
             rule = self.line()
             rule.rule(0, w, ui.DIM)
-            return [row, self.line(), rule]
+            out = [row, self.line(), rule]
+            parts = ui.strip()
+            if parts:
+                out += [self.line(), self.strip(parts)]
+            return out
+
+        def strip(self, parts):
+            """The summary strip: for each part, its mark in its colour, its number bold, and its word dim."""
+            ui, row, x = self.ui, self.line(), 2
+            for mark, attr, number, word in parts:
+                if mark:
+                    x = row.put(x, mark, attr) + 1
+                x = row.put(x, number, curses.A_BOLD) + 1
+                x = row.put(x, word, ui.DIM) + 5
+            return row
 
     class StatusBar(Region):
         """The row above the key bar, on every tab: Sessions waiting on you at the left, how many run at the right."""
