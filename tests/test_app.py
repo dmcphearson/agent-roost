@@ -98,7 +98,11 @@ class Compat(unittest.TestCase):
                 unittest.mock.patch.object(roost, "log"):
             self.assertEqual(roost.check_compat(), changed)
 
-    AGENT = {k: None for k in roost.AGENT_KEYS}
+    # an interactive entry with exactly the keys Claude Code 2.1.314's claude agents --json gives one
+    AGENT = {"pid": 4242, "cwd": "/tmp", "kind": "interactive", "startedAt": 1761800000000,
+             "sessionId": "11111111-2222-3333-4444-555555555555", "name": "Printer fix", "status": "idle"}
+    BACKGROUND = {"pid": 4343, "cwd": "/tmp", "kind": "background", "startedAt": 1761800000000, "id": "a1b2c3d4",
+                  "sessionId": "66666666-7777-8888-9999-000000000000", "name": "Toner order", "status": "busy"}
 
     def fresh(self):
         """No log and no record of a logged version, before and after the test."""
@@ -153,9 +157,45 @@ class Compat(unittest.TestCase):
         self.assertIn("newer", roost.compat_warning("9.0.0 (Claude Code)", [self.AGENT]))
 
     def test_missing_fields_warn_even_on_tested_version(self):
-        agent = dict(self.AGENT); del agent["status"]
+        agent = dict(self.AGENT); del agent["status"]  # and no state, its older name
         msg = roost.compat_warning(f"{roost.TESTED_CLAUDE} (Claude Code)", [agent])
         self.assertIn("status", msg)
+
+    def warning(self, agents):
+        return roost.compat_warning(f"{roost.TESTED_CLAUDE} (Claude Code)", agents)
+
+    def test_interactive_entries_with_the_real_key_set_are_quiet(self):
+        other = dict(self.AGENT, sessionId="22222222-2222-3333-4444-555555555555", name="Laptop refresh")
+        self.assertEqual(set(self.AGENT), {"pid", "cwd", "kind", "startedAt", "sessionId", "name", "status"})
+        self.assertEqual(self.warning([self.AGENT]), "")
+        self.assertEqual(self.warning([self.AGENT, other]), "", "no background entries: none needs an id")
+
+    def test_state_the_older_name_for_status_is_enough(self):
+        older = dict(self.AGENT); older["state"] = older.pop("status")
+        self.assertEqual(self.warning([older]), "")
+        self.assertEqual(self.warning([older, self.AGENT]), "")
+
+    def test_an_entry_missing_sessionid_pid_or_kind_warns_naming_it(self):
+        for key in ("sessionId", "pid", "kind"):
+            short = dict(self.AGENT); del short[key]
+            with self.subTest(missing=key):
+                msg = self.warning([self.AGENT, short])  # one entry lacks it, another has it
+                self.assertIn("changed its session list", msg)
+                self.assertRegex(msg, rf"\b{key}\b")
+
+    def test_an_entry_with_neither_status_nor_state_warns_naming_status(self):
+        older = dict(self.AGENT); older["state"] = older.pop("status")
+        bare = dict(self.AGENT); del bare["status"]
+        msg = self.warning([older, bare])
+        self.assertIn("changed its session list", msg)
+        self.assertIn("status", msg)
+
+    def test_a_background_entry_needs_an_id_and_an_interactive_one_never_does(self):
+        self.assertEqual(self.warning([self.AGENT, self.BACKGROUND]), "")
+        no_id = dict(self.BACKGROUND); del no_id["id"]
+        msg = self.warning([self.AGENT, self.BACKGROUND, no_id])
+        self.assertIn("changed its session list", msg)
+        self.assertRegex(msg, r"\bid\b")
 
     def test_no_sessions_is_not_a_field_problem(self):
         self.assertEqual(roost.compat_warning(f"{roost.TESTED_CLAUDE} (Claude Code)", []), "")

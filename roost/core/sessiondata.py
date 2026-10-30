@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from roost.core.config import (
-    AGENT_KEYS,
+    AGENT_NEEDS,
     HOME,
     STATE_ORDER,
     TESTED_CLAUDE,
@@ -52,12 +52,25 @@ def desktop_pids(pids):
             if DESKTOP_CLAUDE in cmd}
 
 
+def missing_fields(agents):
+    """The fields roost needs that some `claude agents` entry lacks: every entry's kind, pid, sessionId,
+    and status (or the older state), and a background entry's job id."""
+    missing = set()
+    for a in agents or []:
+        missing |= AGENT_NEEDS - set(a)
+        if "status" not in a and "state" not in a:
+            missing.add("status")
+        if a.get("kind") == "background" and "id" not in a:
+            missing.add("id")
+    return sorted(missing)
+
+
 def compat_warning(version_out, agents):
     """A short warning when Claude Code looks different from what roost was built against, else ''."""
     m = re.search(r"\d+\.\d+\.\d+", version_out or "")
     if not m:
         return "Couldn't read the Claude Code version"
-    missing = sorted(AGENT_KEYS - set().union(*(set(a) for a in agents))) if agents else []
+    missing = missing_fields(agents)
     if missing:
         return f"Claude Code {m.group()} changed its session list (missing {', '.join(missing)}); states may be wrong"
     if version_tuple(m.group()) > version_tuple(TESTED_CLAUDE):
