@@ -716,12 +716,19 @@ class TwoPanes(unittest.TestCase):
         side = self.sidebar(lines)
         for title in ("NAME", "STATUS", "SESSIONS", "CATEGORY", "TAGS", "LAST WORKED"):
             self.assertFalse([l for l in lines if re.search(rf"\b{title}\b", l)], title)
-        for cell in ("awaiting-vendor", "procurement", "zq-tag"):  # Printer fleet's status, category, and tag
+        for cell in ("procurement", "zq-tag"):  # Printer fleet's category and tag
             self.assertFalse([l for l in lines if cell in l], cell)
-        for l in side:
+        names = {i for i, l in enumerate(side) for label in ("Printer fleet", "Restore drill", "Quiet one", "Badge rollout")
+                 if label in l}
+        seconds = {i + 1 for i in names}  # each project's second line: its status, running count, and when
+        fleet = next(i for i in names if "Printer fleet" in side[i])
+        self.assertEqual([i for i, l in enumerate(side) if "awaiting-vendor" in l], [fleet + 1],
+                         "Printer fleet's status only on its own second line")
+        for i, l in enumerate(side):
             self.assertNotRegex(l, r"[○◆●]\d", "no running counts in the sidebar")
-            self.assertNotRegex(l, SHORT_DATE)
-            self.assertNotRegex(l, r"\d:\d\d (AM|PM)")
+            if i not in seconds:
+                self.assertNotRegex(l, SHORT_DATE)
+                self.assertNotRegex(l, r"\d:\d\d (AM|PM)")
         ui, last = app.ui, -1
         rows = ui.project_rows()
         self.assertEqual([r.kind for r in rows if r.kind in ("head", "all", "sub")], [], "no headers, sub-project rows, or All projects")
@@ -3420,7 +3427,8 @@ class DetailLayout(unittest.TestCase):
             async def step(pilot):
                 pilot.app.redraw()
                 await pilot.pause()
-                y = min((y for y, x, t in bold_text(pilot.app) if x >= roost.SIDEBAR_W and y > 0), default=None)
+                y = min((y for y, x, t in bold_text(pilot.app)  # the strip's bold numbers and amounts left out
+                         if x >= roost.SIDEBAR_W and y > 0 and not re.fullmatch(r"\$?[\d.,]+", t)), default=None)
                 seen[(label, "runs")] = runs(pilot.app, y) if y else []
                 seen[(label, "fills")] = backgrounds(pilot.app, y, roost.SIDEBAR_W) if y else None
             return step
