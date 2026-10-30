@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Tasks:** a project's or sub-project's tasks are Markdown files in its `tasks/` folder, each with a status (todo, in-progress, in-review, done, blocked), the Session that claimed it, and dated notes. `roost task new`, `list`, `show`, `claim`, `note`, and `status` make and move them
+
 ## 2026.10.29
 
 - **Tabs:** Projects, Sessions, Notes, and Stats, the current one in green; Tab and Shift+Tab move between them, a click on a name switches, and roost opens on the tab you last used. Sessions, Notes, and Stats take the whole window; a thin rule, with a blank row each side, sits under the tabs

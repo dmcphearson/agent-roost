@@ -60,6 +60,7 @@ Clone this repo and run `./dev-link.sh`. It links `~/.local/bin/roost` and `~/.r
 | `roost setup` | Check prerequisites, choose a terminal and the Projects folder, and install the plugin |
 | `roost update` | Install the latest release and bring the plugin along (Homebrew: `brew upgrade roost` first) |
 | `roost project new <id> [--description "…"]` | Make a project folder and its README (`<project>/<slug> --type <type>` makes a sub-project); `brief`, `list`, `status`, and `description` read and set the rest |
+| `roost task new <project> "title" [text]` | Add a task to a project or sub-project, in `todo`, as a file in its `tasks/` folder; `list`, `show`, `claim <id> --session <id>`, `note <id> --session <id>`, and `status <id> [value]` read and move it (todo, in-progress, in-review, done, blocked) |
 | `roost note "title" [text]` | Save a note to the Notes tab, or pipe its text in |
 | `roost ledger <id>` | Print a project's timeline: every Handoff's facts, oldest first |
 | `roost handoff` | Write a Session's Handoff from a summary on stdin (`--roll-up`: a finished sub-project's roll-up, into its parent); `/roost:wrap-up` runs it |
