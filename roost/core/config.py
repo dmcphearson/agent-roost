@@ -7,6 +7,7 @@ from pathlib import Path
 VERSION = "2026.10.29"
 TESTED_CLAUDE = "2.1.291"  # newest Claude Code release roost has been checked against
 AGENT_KEYS = {"id", "kind", "name", "pid", "sessionId", "state", "status"}  # fields roost reads
+AGENT_NEEDS = {"kind", "pid", "sessionId"}  # what every entry must have, besides status (or the older state)
 LOG = Path.home() / ".cache" / "roost.log"
 REPO = "dmcphearson/agent-roost"
 UPDATE_CHECK = Path.home() / ".cache" / "roost-update-check.json"
