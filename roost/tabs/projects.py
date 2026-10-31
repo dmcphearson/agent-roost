@@ -399,10 +399,12 @@ class ProjectsTab:
         return out
 
     def recent_sessions(self, p):
-        """The detail pane's Sessions: running ones, then ones closed in the last RECENT_SESSION_DAYS days."""
+        """The detail pane's Sessions: running ones, then ones closed in the last RECENT_SESSION_DAYS days that
+        no Handoff covers. A wrapped-up Session's work is in its Handoff, so it doesn't show here."""
         linked, since = self.linked(p), time.time() - self.RECENT_SESSION_DAYS * 86400
         return ([s for s in linked if s["state"] != "closed"]
-                + [s for s in linked if s["state"] == "closed" and s["last"] >= since])[:self.DETAIL_ROWS]
+                + [s for s in linked if s["state"] == "closed" and s["last"] >= since
+                   and not self.wrapped_up(p, s)])[:self.DETAIL_ROWS]
 
     def detail_items(self, r):
         """What can be selected in the detail pane, in the order it's drawn: ("block", "Next") and ("block",
@@ -1233,10 +1235,12 @@ if Region:
         def item(self, row, pick, left, hl):
             """One of a section's items: what it is (bold green when it's selected), and when, at the right."""
             ui, (kind, x) = self.ui, pick
-            when, mark, attr = "", " ", 0
+            when, mark, attr, plain = "", " ", 0, 0
             if kind == "session":
                 name, when = x["name"], short_when(x["last"])
                 mark, attr = ("●", ui.ACCENT) if x["state"] != "closed" else ("○", ui.DIM)
+                if x["state"] == "closed":
+                    when, plain = "closed, no Handoff", ui.DIM
             elif kind == "sub":
                 name = f"{x.get('title') or x['slug']}  {x.get('type') or ''}".rstrip()
                 when = ("running" if ui.running(x) else f"ready · Handoff {short_when(x['handed'])}" if ui.ready(x)
@@ -1248,7 +1252,7 @@ if Region:
             else:
                 name, when, mark, attr = x[1], short_when(x[0]) if x[0] else "", "✎", ui.DIM
             row.put(4, mark, attr)
-            row.put(6, clip(name, left - 10 - len(when)), ui.picked(0) if hl else 0)
+            row.put(6, clip(name, left - 10 - len(when)), ui.picked(0) if hl else plain)
             if when:
                 row.put(left - 2 - len(when), when, ui.DIM)
 

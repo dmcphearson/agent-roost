@@ -382,7 +382,11 @@ class SessionsTab:
         work, organize, remove = [], [], []
         recap = None if proj else self.recap_of(s)
         done = closed and not proj and self.wrapped(s)  # its recap has everything: never reopen it
-        if closed and proj:  # roost never resumes project work: a fresh Session picks it up
+        if closed and proj:  # roost doesn't reopen project work by default: a fresh Session picks it up
+            if not self.wrapped(s):  # nothing saved its work yet: write its Handoff, or resume it at a cost
+                if not in_window:
+                    work.append(("Write its Handoff from the transcript", lambda: self.ask_summary(s)))
+                work.append((self.resume_label(s), lambda: self.resume(s)))
             if not proj["closed"]:
                 work.append((f"Start a fresh Session for {projectdata.label_of(proj)}", lambda: self.start_for(proj)))
         elif done:
@@ -398,7 +402,7 @@ class SessionsTab:
         others = [p for p in self.all_projects() if not p["closed"] and p is not proj]
         if others:
             organize.append(("Move to another project" if proj else "Add to a project", lambda: self.add_to_project(s)))
-        if not in_window:
+        if not in_window and not (closed and proj and not self.wrapped(s)):
             work.append((f"Write its {'Handoff' if proj else 'Session recap'} from the transcript", lambda: self.ask_summary(s)))
             if s["state"] not in ("busy", "opening"):
                 work.append(("Ask what to do with it", lambda: self.ask_advice(s)))
@@ -435,6 +439,22 @@ class SessionsTab:
 
     def ask_confirm(self, action, s):
         self.confirm = (action, s)
+
+    def resume_label(self, s):
+        """Resume, with what re-reading its context costs: its tokens, and the cache's multiplier on them."""
+        mult = next_cost(s)
+        if mult is None:
+            return "Resume this Session"
+        return (f"Resume this Session · {ktok(s['tokens'])} tokens, about {mult:g}× to re-read "
+                f"({ktok(s['tokens'] * mult)} tokens' worth)")
+
+    def resume(self, s):
+        """Reopen a closed project Session, which a plain open refuses."""
+        if not self.term:
+            return s
+        self.msg = terminals.open_in_window(s, self.term)
+        self.refresh()
+        return None
 
     def open_one(self, s):
         """Open a Session: in a new window (or jump to its window), or here when there's no terminal."""
