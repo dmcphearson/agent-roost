@@ -34,7 +34,6 @@ from roost.core import adopt as adopting
 
 
 LABEL_X = 3  # the list's labels all start here
-DETAIL_SPAN = 80  # the detail pane's sections are at most this wide, so a time at the right stays near its name
 RECENT_ROWS = 10  # the list shows this many open projects, the most recently worked; More projects has the rest
 
 
@@ -609,7 +608,7 @@ class ProjectsTab:
         self.corner = (root + (" · missing: run roost setup" if self.projects is None else ""),
                        self.YELLOW | curses.A_BOLD if self.projects is None else self.DIM)
         self.subhead = None
-        self.pname, self.pfields = self.panel_of(r, h, min(w - SIDEBAR_W, DETAIL_SPAN) - 2)  # Details' values sit 2 further in
+        self.pname, self.pfields = self.panel_of(r, h, w - SIDEBAR_W - 2)  # Details' values sit 2 further in
         self.pstatus = self.name_note(r)
         keys = DETAIL_KEYS if self.focus == "pane" else LIST_KEYS
         items = self.detail_items(r) if r and self.focus == "pane" else []
@@ -1057,7 +1056,7 @@ if Region:
             if not ui.drow:
                 return out
             r = ui.drow
-            span = min(w, DETAIL_SPAN)
+            span = w
             name = self.line()
             label = clip(ui.pname, span - 4)
             x = name.put(2, label, curses.A_BOLD) + 2
