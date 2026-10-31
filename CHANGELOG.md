@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Full-width details:** a project's details fill the window beside the list instead of stopping at 80 columns; Next and Current state split the width
 - **Outlined details:** each section of a project's details is a rounded outline with its title and count in the top edge. Next and Current state sit side by side, each showing its first lines and `… enter to expand`; with the keys in the details they're the first items, and enter expands one to the full width with all its text, its outline green, and folds it back again. Stats is now This month
 - **Lighter lines:** rules, outlines, and the list's divider are drawn a step lighter, so they show on a dark background
 - **Fixes:** roost no longer warns that Claude Code "changed its session list (missing id, state)" when no background Session is running; it checks each entry for what it needs, and a background entry for its job id
