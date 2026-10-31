@@ -5,7 +5,7 @@
 - **Outlined details:** each section of a project's details is a rounded outline with its title and count in the top edge. Next and Current state sit side by side, each showing its first lines and `… enter to expand`; with the keys in the details they're the first items, and enter expands one to the full width with all its text, its outline green, and folds it back again. Stats is now This month
 - **Lighter lines:** rules, outlines, and the list's divider are drawn a step lighter, so they show on a dark background
 - **Fixes:** roost no longer warns that Claude Code "changed its session list (missing id, state)" when no background Session is running; it checks each entry for what it needs, and a background entry for its job id
-- **Summary strip:** under the tabs on Projects, how many Sessions run, how many projects are ready to pick up, and what was spent today and this month; on Sessions, how many run, closed today, and are unfiled
+- **Summary strip:** centered under the tabs: on Projects, how many Sessions run, how many projects are ready to pick up, and what was spent today and this month; on Sessions, how many run, closed today, and are unfiled
 - **Project rows:** each project in the list takes two lines, its name and then its status, how many Sessions run in it, and when it was last worked
 - **Tasks:** a project's or sub-project's tasks are Markdown files in its `tasks/` folder, each with a status (todo, in-progress, in-review, done, blocked), the Session that claimed it, and dated notes. `roost task new`, `list`, `show`, `claim`, `note`, and `status` make and move them
 

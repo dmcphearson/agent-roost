@@ -205,8 +205,10 @@ if Widget:
             return out
 
         def strip(self, parts):
-            """The summary strip: for each part, its mark in its colour, its number bold, and its word dim."""
-            ui, row, x = self.ui, self.line(), 2
+            """The summary strip, centered: for each part, its mark in its colour, its number bold, and its word dim."""
+            width = sum(len(f"{mark} " if mark else "") + len(number) + 1 + len(word) for mark, _, number, word in parts)
+            width += 5 * (len(parts) - 1)
+            ui, row, x = self.ui, self.line(), max(2, (self.size.width - width) // 2)
             for mark, attr, number, word in parts:
                 if mark:
                     x = row.put(x, mark, attr) + 1
