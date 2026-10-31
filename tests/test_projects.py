@@ -2171,6 +2171,67 @@ class DetailSections(unittest.TestCase):
         self.assertEqual(self.section(ui, "project", "b", "Sessions"), ["none in the last 7 days"])
         self.assertEqual(self.section(ui, "project", "c", "Sessions"), ["none in the last 7 days"])
 
+    @staticmethod
+    def covering(s):
+        """A Handoff's frontmatter that covers Session s to its last message."""
+        to = datetime.fromtimestamp(s.get("active") or s["last"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        return f"session: {s['id']}\nname: Covered\nto: {to}\n"
+
+    def test_a_closed_session_a_handoff_covers_never_shows_however_recent(self):
+        ids = ["aa000000-0000", "bb000000-0000", "cc000000-0000"]
+        folder = self.project("b", self.readme(ids))
+        closed = lambda name, mins, sid: dict(session(name, state="closed", kind=None, mins=mins), id=sid, attach=None)
+        wrapped, bare = closed("Wrapped just now", 1, ids[0]), closed("Not handed off", 120, ids[1])
+        self.handoffs(folder, [(time.time() - 30, self.covering(wrapped))])
+        ui = self.ui([wrapped, bare, dict(session("Still going", mins=5), id=ids[2])])
+        p = self.row(ui, "project", "b").item
+        self.assertEqual([ui.wrapped_up(p, s) for s in (wrapped, bare)], [True, False])  # the fixture
+        lines = self.section(ui, "project", "b", "Sessions")
+        self.assertFalse([l for l in lines if "Wrapped just now" in l], lines)
+        self.assertEqual(len(lines), 2, lines)
+        self.assertIn("Still going", lines[0])
+        self.assertIn("Not handed off", lines[1])
+
+    def test_wrapped_closed_sessions_take_none_of_the_5_rows(self):
+        """Five newer wrapped-up Sessions leave room for an older closed one no Handoff covers."""
+        ids = [f"{i:02d}000000-0000" for i in range(6)]
+        folder = self.project("b", self.readme(ids))
+        closed = lambda name, mins, sid: dict(session(name, state="closed", kind=None, mins=mins), id=sid, attach=None)
+        wrapped = [closed(f"Wrapped {i}", 10 + i, ids[i]) for i in range(5)]
+        bare = closed("Not handed off", 3 * 1440, ids[5])
+        self.handoffs(folder, [(time.time() - 60, self.covering(s)) for s in wrapped])
+        ui = self.ui(wrapped + [bare])
+        lines = self.section(ui, "project", "b", "Sessions")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("Not handed off", lines[0])
+
+    def test_a_project_with_only_wrapped_closed_sessions_shows_the_empty_state(self):
+        ids = ["aa000000-0000", "bb000000-0000"]
+        folder = self.project("b", self.readme(ids))
+        self.project("c", self.readme(), handoffs=[TODAY()])  # no Sessions at all
+        closed = lambda name, mins, sid: dict(session(name, state="closed", kind=None, mins=mins), id=sid, attach=None)
+        listed = [closed("Wrapped one", 5, ids[0]), closed("Wrapped two", 90, ids[1])]
+        self.handoffs(folder, [(time.time() - 60, self.covering(s)) for s in listed])
+        ui = self.ui(listed)
+        self.assertEqual(self.section(ui, "project", "b", "Sessions"), self.section(ui, "project", "c", "Sessions"))
+        self.assertEqual(self.section(ui, "project", "b", "Sessions"), ["none in the last 7 days"])
+        self.assertFalse([k for k, _ in ui.detail_items(self.row(ui, "project", "b")) if k == "session"])
+
+    def test_a_sub_projects_wrapped_closed_session_never_shows(self):
+        self.project("rollout", self.readme(), handoffs=[TODAY()])
+        closed = lambda name, mins, sid: dict(session(name, state="closed", kind=None, mins=mins), id=sid, attach=None)
+        wrapped, bare = closed("Wrapped sub one", 5, "aa000000-0000"), closed("Bare sub one", 60, "bb000000-0000")
+        self.sub("rollout", "alpha", sessions=[("x", wrapped["id"]), ("y", bare["id"])],
+                 handoffs=[(handoff_name(time.time() - 30), f"---\n{self.covering(wrapped)}---\n\nDone.\n")])
+        ui = self.ui([wrapped, bare])
+        alpha = next(s for s in self.row(ui, "project", "rollout").item["subs"] if s["slug"] == "alpha")
+        sub = roost.Row("Recent", "sub", alpha, 0)  # its details, as the sub-project's own row shows them
+        self.assertTrue(ui.wrapped_up(sub.item, wrapped))  # the fixture
+        lines = [list(l) for h, l in ui.detail_sections(sub) if h == "Sessions"][0]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("Bare sub one", lines[0])
+        self.assertEqual([x["name"] for k, x in ui.detail_items(sub) if k == "session"], ["Bare sub one"])
+
     # 3. Handoffs
 
     def test_handoffs_lists_the_newest_5_each_its_time_then_its_title(self):
@@ -3570,7 +3631,7 @@ class DetailLayout(unittest.TestCase):
         fleet = next(p for p in got["projects"] if p["id"] == "fleet")
         swap = next(h for h in fleet["handoffs"] if h[1] == "Toner swap")
         want = [("Sessions", "Printer fix", rf"● Printer fix\s+{re.escape(roost.short_when(fix['last']))}"),
-                ("Sessions", "Toner order", rf"○ Toner order\s+{re.escape(roost.short_when(toner['last']))}"),
+                ("Sessions", "Toner order", r"○ Toner order\s+closed, no Handoff"),  # closed, and no Handoff covers it
                 ("Handoffs", "Toner swap", rf"◆ Toner swap\s+{re.escape(roost.short_when(swap[0]))}"),
                 ("Notes", "Driver shortlist", r"✎ Driver shortlist(\s+\S.*)?")]
         for head, name, pattern in want:
@@ -3582,6 +3643,79 @@ class DetailLayout(unittest.TestCase):
                 self.assertRegex(line[W:].strip(" │"), rf"^{pattern}$")
                 if head != "Notes":  # the time ends just inside the outline's right edge, its ╮ at edge - 1
                     self.assertLessEqual(edge[head] - 1 - len(line.rstrip(" │")), 3, f"its time at the section's right edge: {line!r}")
+
+    def with_closed(self):
+        """Printer fleet also lists Toner order (closed half an hour ago, no Handoff covers it) and Old printer
+        audit (closed ten minutes ago, newer, and wrapped up: a Handoff covers it to its last message)."""
+        toner, old = TextualScreens.closed("Toner order", 30), TextualScreens.closed("Old printer audit", 10)
+        self.sessions += [toner, old]
+        fleet = next(p for p in self.projects if p["id"] == "fleet")
+        fleet["sessions"] = list(fleet["sessions"]) + [toner["id"], old["id"]]
+        fleet["covered"] = dict(fleet.get("covered") or {}, **{old["id"]: old["last"]})
+        return toner, old
+
+    def session_row(self, got, name):
+        """(y, the line) of the Sessions item that names name, or None."""
+        W, lines = roost.SIDEBAR_W, got["lines"]
+        y0 = self.heads(got)["Sessions"][0]
+        return next(((y, l) for y, l in enumerate(lines[y0 + 1:], y0 + 1) if name in l[W:]), None)
+
+    def wrapped_seen(self, seen, s):
+        """A step that keeps, as seen["wrapped"], whether Printer fleet's Handoffs cover Session s."""
+        def look(ui):
+            seen["wrapped"] = ui.wrapped_up(next(p for p in ui.projects if p["id"] == "fleet"), s)
+        return self.select(look)
+
+    def dim_in_row(self, got, y, text):
+        return [t for yy, xx, t in got["dim"] if yy == y and xx >= roost.SIDEBAR_W and text in t]
+
+    def test_a_closed_session_no_handoff_covers_is_dim_and_says_so_where_the_time_goes(self):
+        toner, old = self.with_closed()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.wrapped_seen(seen, toner), self.grab(seen, "fleet")],
+                    size=self.SIZE)
+        got = seen["fleet"]
+        self.assertFalse(seen["wrapped"])  # the fixture
+        found = self.session_row(got, "Toner order")
+        self.assertIsNotNone(found, got["lines"])
+        y, line = found
+        W = roost.SIDEBAR_W
+        self.assertRegex(line[W:].strip(" │"), r"^○ Toner order\s+closed, no Handoff$")
+        self.assertNotIn(roost.short_when(toner["last"]), line[W:], "no time on it")
+        self.assertTrue(self.dim_in_row(got, y, "○"), f"○ is dim: {got['dim']}")
+        self.assertTrue(self.dim_in_row(got, y, "Toner order"), f"its name is dim: {got['dim']}")
+        self.assertTrue(self.dim_in_row(got, y, "closed, no Handoff"), f"closed, no Handoff is dim: {got['dim']}")
+        fix = self.session_row(got, "Printer fix")
+        self.assertIsNotNone(fix, got["lines"])
+        self.assertLess(fix[0], y, "running ones first")
+        self.assertFalse(self.dim_in_row(got, fix[0], "Printer fix"), "a running one's name isn't dim")
+        last = next(s for s in self.sessions if s["name"] == "Printer fix")["last"]
+        self.assertRegex(fix[1][W:].strip(" │"), rf"^● Printer fix\s+{re.escape(roost.short_when(last))}$")
+
+    def test_a_wrapped_closed_session_gets_no_row_and_isnt_counted(self):
+        toner, old = self.with_closed()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.wrapped_seen(seen, old), self.grab(seen, "fleet")],
+                    size=self.WIDE)
+        got = seen["fleet"]
+        self.assertTrue(seen["wrapped"])  # the fixture
+        self.assertIsNone(self.session_row(got, "Old printer audit"), got["lines"])
+        self.assertEqual([x["name"] for k, x in got["items"] if k == "session"], ["Printer fix", "Toner order"])
+        y, x = self.heads(got)["Sessions"]
+        self.assertRegex(got["lines"][y][x:], r"^Sessions 2 ─+╮", "Printer fix and Toner order: 2")
+
+    def test_a_selected_closed_session_keeps_the_bold_green_name(self):
+        self.with_closed()
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.keys("right"),
+                                    self.index_of("session", "Toner order"), self.grab(seen, "picked")], size=self.SIZE)
+        got = seen["picked"]
+        found = self.session_row(got, "Toner order")
+        self.assertIsNotNone(found, got["lines"])
+        y, _ = found
+        self.assertIn(y, got["selected"], "drawn selected: ▌ and its name bold green")
+        self.assertTrue([t for yy, xx, t in got["bold"] if yy == y and "Toner order" in t], got["bold"])
+        self.assertFalse(self.dim_in_row(got, y, "Toner order"), "not dim while selected")
 
     def test_a_sub_projects_line_has_its_mark_name_type_and_state_at_the_right(self):
         seen = {}

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Live Sessions only:** a project's details list its running Sessions; a closed one a Handoff covers no longer shows (the Sessions tab's Closed view still has it). One closed in the last 7 days with no Handoff shows as closed, no Handoff, and its actions lead with writing its Handoff, then Resume this Session with its context's size and what re-reading it costs (2× on the 1-hour cache, 1.25× on the 5-minute one)
 - **Outlined details:** each section of a project's details is a rounded outline with its title and count in the top edge. Next and Current state sit side by side, each showing its first lines and `… enter to expand`; with the keys in the details they're the first items, and enter expands one to the full width with all its text, its outline green, and folds it back again. Stats is now This month
 - **Lighter lines:** rules, outlines, and the list's divider are drawn a step lighter, so they show on a dark background
 - **Fixes:** roost no longer warns that Claude Code "changed its session list (missing id, state)" when no background Session is running; it checks each entry for what it needs, and a background entry for its job id
