@@ -127,6 +127,12 @@ def runs(app, y):
     return out
 
 
+def row_gaps(app, y):
+    """Screen row y's blank columns before its first character and after its last, across the screen's width."""
+    line = screen_text(app)[y]
+    return len(line) - len(line.lstrip(" ")), app.size.width - len(line)
+
+
 def style_at(app, y, x):
     """The Rich style the screen draws column x of row y in, or None."""
     from rich.cells import cell_len

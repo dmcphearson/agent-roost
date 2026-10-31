@@ -4036,6 +4036,67 @@ class ProjectsStrip(unittest.TestCase):
         self.assertIsNotNone(m, seen["x"]["lines"][:7])
         self.assertEqual((m.group(1), m.group(2)), ("0", "0"))
 
+    # Centered: the blank columns before the strip and after it differ by at most 1, across the whole width.
+
+    WIDE = (151, 40)  # wider than SIZE, and odd
+    ORDER = re.compile(r"^● \d+ running {5}◆ \d+ ready to pick up {5}\$\d+\.\d\d today {5}\$\d+\.\d\d this month$")
+
+    def placed(self, seen, label):
+        """The strip step, plus the strip's blank columns before and after it and the screen's width."""
+        async def step(pilot):
+            await self.strip(seen, label)(pilot)
+            seen[label]["gaps"], seen[label]["width"] = row_gaps(pilot.app, STRIP_Y), pilot.app.size.width
+        return step
+
+    def assertCentered(self, got):
+        before, after = got["gaps"]
+        self.assertLessEqual(abs(before - after), 1, f"{before} blank columns before the strip and {after} after it, "
+                                                     f"{got['width']} wide: {got['text']!r}")
+
+    def test_the_strip_is_centered_across_the_whole_width(self):
+        for size in (self.SIZE, self.WIDE):
+            seen = {}
+            self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.placed(seen, "x")], size=size)
+            got = seen["x"]
+            with self.subTest(width=size[0]):
+                self.assertIsNotNone(self.PARTS.search(got["text"]), f"the strip on row {STRIP_Y}: {got['lines'][:7]}")
+                self.assertCentered(got)
+                self.assertRegex(got["text"].strip(), self.ORDER, "the parts in order, five blank columns between them")
+
+    def test_the_strip_stays_centered_before_the_spend_is_read(self):
+        seen = {}
+        self.release.clear()  # the read waits until the test lets it finish
+
+        async def finish(pilot):
+            self.release.set()
+        self.run_on(self.projects, [self.on_project("fleet"), self.placed(seen, "loading"), finish, self.loaded,
+                                    self.placed(seen, "loaded")], size=self.SIZE)
+        self.assertNotIn("$", seen["loading"]["text"], "the fixture: the spend not read yet")
+        self.assertIn("this month", seen["loaded"]["text"], "the fixture: the spend read")
+        for when in ("loading", "loaded"):
+            with self.subTest(when=when):
+                self.assertCentered(seen[when])
+        self.assertRegex(seen["loading"]["text"].strip(), r"^● \d+ running {5}◆ \d+ ready to pick up$")
+
+    def test_on_a_screen_too_narrow_to_center_it_the_strip_starts_at_column_2(self):
+        """The screens need MIN_SIZE, wider than today's strip, so the strip gets one more, long part here: wider
+        than the screen, it can't fit centered."""
+        import unittest.mock
+        tab = importlib.import_module("roost.tabs.projects").ProjectsTab
+        real, long = tab.projects_strip, "x" * 40
+
+        def longer(ui):
+            return list(real(ui)) + [("", 0, "9", long)]
+        seen = {}
+        with unittest.mock.patch.object(tab, "projects_strip", longer):
+            self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.placed(seen, "x")],
+                        size=self.W.MIN_SIZE)
+        got = seen["x"]
+        self.assertIn("this month", got["text"], "the fixture: the spend read")
+        self.assertEqual(got["gaps"][0], 2, f"two blank columns before the strip: {got['text']!r}")
+        self.assertRegex(got["text"], r"^  ● \d+ running {5}◆", "the strip from its first part, unclipped at the left")
+        self.assertGreater(len(got["text"]) + 4, got["width"], f"the fixture: the strip doesn't fit centered: {got['text']!r}")
+
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class ListTwoLines(unittest.TestCase):
