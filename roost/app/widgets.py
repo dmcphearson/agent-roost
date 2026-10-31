@@ -16,7 +16,7 @@ except ImportError:  # the CLI commands need none of it
 
 # The look, after the Textual prototype: a dark slate frame, a near-black card, soft green for "you are
 # here", and greys for everything secondary.
-BG, CARD, RAISED, LINE = "#1b1e24", "#191c22", "#22262d", "#2d323a"
+BG, CARD, RAISED, LINE = "#1b1e24", "#191c22", "#22262d", "#3a4049"
 TEXT, MUTED, FAINT = "#d6dae0", "#8b929c", "#5c636d"
 GREEN, GREEN_BG, YELLOW, RED, BLUE = "#6bd968", "#1d2b20", "#e3b341", "#f0776c", "#79b8ff"
 # The colors the screens ask for by pair number: the five basic ones, soft grey for secondary text, a
@@ -48,6 +48,12 @@ class Line:
                 self.cells[x + 1] = ("", attr)
             x += n
         return x
+
+    def edge(self, x, text, attr):
+        """An outline's characters, in the faint line color when attr is the dim one (as rule draws)."""
+        for i, ch in enumerate(text):
+            if 0 <= x + i < self.width:
+                self.cells[x + i] = (ch, ("rule", attr))
 
     def rule(self, x, n, attr):
         """A line across n columns, in the faint line color when attr is the dim one."""

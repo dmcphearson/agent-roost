@@ -405,15 +405,21 @@ class ProjectsTab:
                 + [s for s in linked if s["state"] == "closed" and s["last"] >= since])[:self.DETAIL_ROWS]
 
     def detail_items(self, r):
-        """What can be selected in the detail pane, in the order it's drawn: (kind, item) for each open
-        sub-project, Session, Handoff, and note its sections list."""
+        """What can be selected in the detail pane, in the order it's drawn: ("block", "Next") and ("block",
+        "Current state") when they have text, then (kind, item) for each open sub-project, Session, Handoff,
+        and note its sections list."""
         if r.kind not in ("project", "sub"):
             return []
         p = r.item
         subs = [s for s in p.get("subs") or [] if not s["closed"]] if r.kind == "project" else []
-        return ([("sub", s) for s in subs] + [("session", s) for s in self.recent_sessions(p)]
+        blocks = [name for name, key in (("Next", "next"), ("Current state", "state")) if (p.get(key) or "").strip()]
+        return ([("block", name) for name in blocks] + [("sub", s) for s in subs] + [("session", s) for s in self.recent_sessions(p)]
                 + [("handoff", h) for h in (p.get("handoffs") or [])[:self.DETAIL_ROWS]]
                 + [("note", n) for n in (p.get("notes") or [])[:self.DETAIL_ROWS]])
+
+    def toggle_block(self, name):
+        """Expand Next or Current state to the full width with all its text, or fold it back."""
+        self.dopen = None if self.dopen == name else name
 
     def detail_actions(self, r, kind, x):
         """An item of the detail pane: its name, and its actions."""
@@ -434,13 +440,19 @@ class ProjectsTab:
         items = self.detail_items(r) if r else []
         if isinstance(k, tuple):
             _, mx, my, bstate = k
-            if my not in getattr(self, "drow_y", {}) or not items:
+            idx = next((i for y, n, x, w, i in getattr(self, "dbox", []) if y <= my < y + n and x <= mx < x + w), None)
+            if idx is None and my in getattr(self, "drow_y", {}):
+                idx = self.drow_y[my]
+            if idx is None or not items:
                 return None
-            idx = self.drow_y[my]
             self.focus = "pane"
             how = self.click(k, idx)
             if how:
                 self.dsel = idx
+            if items[idx][0] == "block":
+                if how == "double":
+                    self.toggle_block(items[idx][1])
+                return None
             if how == "menu":
                 return self.menu(*self.detail_actions(r, *items[idx]))
             if how == "double":
@@ -455,7 +467,11 @@ class ProjectsTab:
         if to is not None:
             self.dsel = to
         elif k == "enter" and items:
-            return self.menu(*self.detail_actions(r, *items[min(self.dsel, len(items) - 1)]))
+            kind, x = items[min(self.dsel, len(items) - 1)]
+            if kind == "block":
+                self.toggle_block(x)
+                return None
+            return self.menu(*self.detail_actions(r, kind, x))
         elif k == "left":
             self.focus = "side"
         return None
@@ -585,7 +601,7 @@ class ProjectsTab:
         rows = self.prows = self.project_rows()
         self.psel = max(0, min(self.psel, len(rows) - 1))
         if getattr(self, "dfor", None) != self.psel:  # another row: its items start at the top
-            self.dfor, self.dsel = self.psel, 0
+            self.dfor, self.dsel, self.dopen = self.psel, 0, None
         r = self.drow = rows[self.psel] if rows else None
         if not (r and self.detail_items(r)):
             self.focus = "side"  # nothing to pick in the details: the keys stay in the list
@@ -596,6 +612,10 @@ class ProjectsTab:
         self.pname, self.pfields = self.panel_of(r, h, min(w - SIDEBAR_W, DETAIL_SPAN) - 2)  # Details' values sit 2 further in
         self.pstatus = self.name_note(r)
         keys = DETAIL_KEYS if self.focus == "pane" else LIST_KEYS
+        items = self.detail_items(r) if r and self.focus == "pane" else []
+        if items and items[min(self.dsel, len(items) - 1)][0] == "block":
+            name = items[min(self.dsel, len(items) - 1)][1]
+            keys = keys.replace("enter actions", "enter collapse" if self.dopen == name else "enter expand")
         self.key_bar(keys, self.msg or self.warning, self.ACCENT | curses.A_BOLD)
         return rows
 
@@ -1027,7 +1047,7 @@ if Region:
     class ProjectPanel(Region):
         """The detail pane, one column: the selected row's name line, then the README's Next and Current
         state, its sub-projects, Sessions, Handoffs, and notes, then its fields under Details, and its spend."""
-        BLOCK_LINES = 6  # each of Next and Current state shows at most this many lines
+        BLOCK_LINES = 3  # Next and Current state show all their text up to this many lines, else one less and "… enter to expand"
 
         def lines(self):
             ui, w = self.ui, self.size.width
@@ -1058,75 +1078,69 @@ if Region:
                 return out
             picks = ui.detail_items(r)
             kinds = {"Sub-projects": "sub", "Sessions": "session", "Handoffs": "handoff", "Notes": "note"}
-            at, item_at = 0, {}  # item_at: each item's line
-            # where it stands first, then the work in it, then what it is, then what it cost
-            sections = sorted(self.blocks(r, span - 6), key=lambda b: b[0] != "Next")
-            sections += [s for s in ui.detail_sections(r) if s[0] != "Stats"]
+            x0, bw = 2, span - 3  # every outline's left edge and width
+            item_at, ui.dbox = {}, []  # item_at: each item's line; dbox: each Next or Current state's outline
+            at = self.panels(out, r, picks, x0, bw, item_at)
+            sections = [s for s in ui.detail_sections(r) if s[0] != "Stats"]
             sections.append(("Details", None))
-            sections += [s for s in ui.detail_sections(r) if s[0] == "Stats"]
+            sections += [("This month", s[1]) for s in ui.detail_sections(r) if s[0] == "Stats"]
             for head, items in sections:
-                out.append(self.line())
                 n = sum(kind == kinds.get(head) for kind, _ in picks)  # its lines that are items, not "none yet"
-                row = self.line()
-                self.heading(row, 2, head, n, span - 2)
-                out.append(row)
+                body = []
                 if items is None:  # Details: the fields
                     for label, value in ui.pfields:
                         row = self.line()
-                        row.put(4, label, ui.DIM)
+                        row.put(x0 + 2, label, ui.DIM)
                         plain = label in ("Summary", "Description", "Last message") and value != "no description yet" or not label
-                        row.put(18, clip(value, span - 18), 0 if plain else ui.DIM)
-                        out.append(row)
-                    continue
-                if head in ("Next", "Current state"):
-                    if len(items) > self.BLOCK_LINES:
-                        items = items[:self.BLOCK_LINES - 1] + [clip(items[self.BLOCK_LINES - 1], span - 8) + " …"]
-                    for line in items:
-                        row = self.line()
-                        row.put(4, line, 0)
-                        out.append(row)
-                    continue
-                for i, item in enumerate(items):
+                        row.put(18, clip(value, x0 + bw - 20), 0 if plain else ui.DIM)
+                        body.append(row)
+                for i, item in enumerate(items or []):
                     row = self.line()
                     idx = at + i if i < n else None
                     hl = idx is not None and idx == ui.dsel and ui.focus == "pane"
                     if idx is not None:
-                        item_at[idx] = len(out)
+                        item_at[idx] = len(out) + 2 + len(body)
                     if hl:
                         row.put(1, "▌", ui.ACCENT)
                     if idx is not None:
-                        self.item(row, picks[idx], span, hl)
-                    elif head == "Stats" and item != "loading…":
-                        row.put(4, clip(item, span - 6), 0)
+                        self.item(row, picks[idx], x0 + bw - 1, hl)
                     else:
-                        row.put(4, clip(item, span - 6), ui.DIM)
-                    out.append(row)
+                        row.put(x0 + 2, clip(item, bw - 4), 0 if head == "This month" and item != "loading…" else ui.DIM)
+                    body.append(row)
                     if head == "Handoffs" and i == 0 and n:  # the newest Handoff: its first lines, not items
                         for line in r.item.get("handoff_lines") or []:
                             row = self.line()
-                            row.put(6, clip(line, span - 8), ui.DIM)
-                            out.append(row)
+                            row.put(6, clip(line, x0 + bw - 8), ui.DIM)
+                            body.append(row)
+                out.append(self.line())
+                out.extend(self.outline([self.line()] + body + [self.line()], x0, bw, head, n, ui.DIM))
                 at += n
             return self.window(out, item_at, span)
 
         def window(self, out, item_at, span):
             """The part of the details that fits, from the scroll position: back at the top for another
-            project, moved to show the selected item when it moves, and never past the end. "↓ more" on the
-            last row while there's more below."""
+            project, moved to show the selected item when it moves, and never past the end. While there's
+            more below, the last row is "↓ more" alone, so it covers nothing."""
             ui, room = self.ui, max(self.size.height, 1)
             ui.droom = room
             shows = (ui.psel, ui.drow.item.get("id"))
             if getattr(ui, "dtop_for", None) != shows:
                 ui.dtop_for, ui.dtop, ui.dsel_seen = shows, 0, None
+            view = room - 1 if len(out) > room else room  # the rows for the details while "↓ more" takes the last
             if ui.focus == "pane" and ui.dsel != ui.dsel_seen and ui.dsel in item_at:
                 y = item_at[ui.dsel]
-                ui.dtop = min(max(ui.dtop, y - room + 1), y)
+                ui.dtop = min(max(ui.dtop, y - view + 1), y)
             ui.dsel_seen = ui.dsel if ui.focus == "pane" else None
             ui.dtop = max(0, min(ui.dtop, len(out) - room))
-            shown = out[ui.dtop:ui.dtop + room]
-            ui.drow_y = {self.region.y + y - ui.dtop: idx for idx, y in item_at.items() if 0 <= y - ui.dtop < room}
-            if ui.dtop + room < len(out):
-                shown[-1].put(span - 2 - len("↓ more"), "↓ more", ui.DIM)
+            more = ui.dtop + room < len(out)
+            n = room - 1 if more else room
+            shown = out[ui.dtop:ui.dtop + n]
+            ui.drow_y = {self.region.y + y - ui.dtop: idx for idx, y in item_at.items() if 0 <= y - ui.dtop < n}
+            ui.dbox = [(y - ui.dtop, h, x, w, idx) for y, h, x, w, idx in ui.dbox]  # where the scroll put each panel
+            if more:
+                row = self.line()
+                row.put(span - 2 - len("↓ more"), "↓ more", ui.DIM)
+                shown.append(row)
             return shown
 
         def wheel(self, event, step):
@@ -1137,12 +1151,84 @@ if Region:
                 ui.dtop = max(0, getattr(ui, "dtop", 0) + 3 * step)  # draw keeps it within the details
                 self.refresh()
 
-        def heading(self, row, x, head, count, width):
-            """A section's heading: its name, how many it lists, and a faint rule to the edge."""
-            x = row.put(x, head, curses.A_BOLD)
+        def outline(self, rows, x, w, head, count, edge, title=curses.A_BOLD):
+            """Draw a rounded outline on rows, from column x, w wide: the title (and its count, dim) set
+            into the top edge. edge is the outline's look: the dim one draws it in the faint line color."""
+            top, bottom = rows[0], rows[-1]
+            top.edge(x, "╭─ ", edge)
+            end = top.put(x + 3, head, title)
             if count:
-                x = row.put(x + 1, str(count), self.ui.DIM)
-            row.rule(x + 1, width - x - 1, self.ui.DIM)
+                end = top.put(end + 1, str(count), self.ui.DIM)
+            top.edge(end + 1, "─" * max(x + w - 2 - end, 0), edge)
+            top.edge(end, " ", edge)
+            top.edge(x + w - 1, "╮", edge)
+            for row in rows[1:-1]:
+                row.edge(x, "│", edge)
+                row.edge(x + w - 1, "│", edge)
+            bottom.edge(x, "╰" + "─" * (w - 2) + "╯", edge)
+            return rows
+
+        def panels(self, out, r, picks, x0, bw, item_at):
+            """Next and Current state, as outlines: side by side, each clipped to its first lines and
+            "… enter to expand", or one expanded to the full width with all its text. Returns how many of
+            the details' items they are."""
+            ui = self.ui
+            names = [x for k, x in picks if k == "block"]
+            if not names:
+                return 0
+            def edge(name):
+                on = ui.focus == "pane" and names.index(name) == ui.dsel
+                return (ui.ACCENT, ui.ACCENT | curses.A_BOLD) if on else (ui.DIM, curses.A_BOLD)
+            def box(name, x, w, full):
+                text = self.block_text(r, name, w - 4)
+                body = []
+                if full:
+                    for line in text:
+                        row = self.line(); row.put(x + 2, line, 0); body.append(row)
+                    hint = "enter to collapse"
+                    if len(text[-1]) + 2 + len(hint) > w - 4:
+                        body.append(self.line())
+                    body[-1].put(x + w - 2 - len(hint), hint, ui.DIM)
+                else:
+                    shown = text if len(text) <= self.BLOCK_LINES else text[:self.BLOCK_LINES - 1]
+                    for line in shown:
+                        row = self.line(); row.put(x + 2, line, 0); body.append(row)
+                    if len(text) > self.BLOCK_LINES:
+                        row = self.line(); row.put(x + 2, "… enter to expand", ui.DIM); body.append(row)
+                return body
+            def place(group):  # [(name, x, w, full)] side by side, one outline each, as tall as the tallest
+                bodies = [box(*g) for g in group]
+                tall = max(map(len, bodies))
+                rows = [self.line() for _ in range(tall + 2)]
+                y = len(out) + 1
+                for (name, x, w, full), body in zip(group, bodies):
+                    for i, b in enumerate(body):
+                        for cx, cell in enumerate(b.cells):
+                            if cell[0] != " " or cell[1]:
+                                rows[1 + i].cells[cx] = cell
+                    e, title = edge(name)
+                    self.outline(rows, x, w, name, 0, e, title)
+                    item_at[names.index(name)] = y
+                    ui.dbox.append((self.region.y + y, len(rows), self.region.x + x, w, names.index(name)))
+                out.append(self.line())
+                out.extend(rows)
+            if ui.dopen in names:
+                place([(ui.dopen, x0, bw, True)])
+                rest = [n for n in names if n != ui.dopen]
+                if rest:
+                    place([(rest[0], x0, bw, False)])
+            elif len(names) == 2:
+                half = (bw - 1) // 2
+                place([(names[0], x0, half, False), (names[1], x0 + half + 1, bw - half - 1, False)])
+            else:
+                place([(names[0], x0, bw, False)])
+            return len(names)
+
+        def block_text(self, r, name, width):
+            """Next's or Current state's text, wrapped to width."""
+            key = {"Next": "next", "Current state": "state"}[name]
+            return [w for line in (r.item.get(key) or "").splitlines() if line.strip()
+                    for w in textwrap.wrap(plain_text(line.strip()), max(width, 10))]
 
         def item(self, row, pick, left, hl):
             """One of a section's items: what it is (bold green when it's selected), and when, at the right."""
@@ -1165,19 +1251,6 @@ if Region:
             row.put(6, clip(name, left - 10 - len(when)), ui.picked(0) if hl else 0)
             if when:
                 row.put(left - 2 - len(when), when, ui.DIM)
-
-        @staticmethod
-        def blocks(r, width):
-            """(heading, wrapped lines) for the README's Current state and Next that have any text."""
-            if r.kind not in ("project", "sub"):
-                return []
-            out = []
-            for head, key in (("Current state", "state"), ("Next", "next")):
-                text = [w for line in (r.item.get(key) or "").splitlines() if line.strip()
-                        for w in textwrap.wrap(plain_text(line.strip()), max(width, 10))]
-                if text:
-                    out.append((head, text))
-            return out
 
     class ProjectsView(Vertical):
         """A project's view in the right pane: the search row while a search is typed or set, then the
