@@ -3314,10 +3314,10 @@ class StatsLines(unittest.TestCase):
 class DetailLayout(unittest.TestCase):
     """The details on a real screen (SectionsOnScreen's folder, with Current state and Next on Printer fleet, a
     Next alone on Restore drill, and bodies on Printer fleet's Handoffs: Toner swap, the newest, and Toner
-    check). One column at any width, its sections at most 80 columns wide: the name line, then Next and
-    Current state, Sub-projects, Sessions, Handoffs, Notes, Details, and Stats. Above the content are only the
-    top bar, a blank row, a rule, a blank row, the summary strip, and a blank row; the list's first row and the
-    name line are on screen row 6."""
+    check). One column at any width, its sections as wide as the details, one blank column short of the
+    window's right edge: the name line, then Next and Current state, Sub-projects, Sessions, Handoffs, Notes,
+    Details, and Stats. Above the content are only the top bar, a blank row, a rule, a blank row, the summary
+    strip, and a blank row; the list's first row and the name line are on screen row 6."""
     run_on, on_project = ProjectRows.run_on, ProjectRows.on_project
     select, keys, sidebar = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(ProjectRows.sidebar)
     at, SIZE, WIDE, DESCRIPTION = staticmethod(TwoPanes.at), (120, 48), (180, 48), TwoPanes.DESCRIPTION
@@ -3482,8 +3482,11 @@ class DetailLayout(unittest.TestCase):
                 self.assertLess(state["bottom"], self.field_y(got, "│ Folder"), "before the fields")
                 self.assertEqual(words(" ".join(inside(lines, nxt))), words(NEXT_TEXT), "Next fits in 3 lines: all of it")
                 shown = [r.strip() for r in inside(lines, state) if r.strip()]
-                self.assertEqual(shown[-1], "… enter to expand", shown)
-                self.assertIn(words(" ".join(shown[:-1])), words(STATE_TEXT), "its first lines, wrapped")
+                if size == self.SIZE:
+                    self.assertEqual(shown[-1], "… enter to expand", shown)
+                    self.assertIn(words(" ".join(shown[:-1])), words(STATE_TEXT), "its first lines, wrapped")
+                else:  # 180 columns: each half is wide enough for it in 3 lines
+                    self.assertEqual(words(" ".join(shown)), words(STATE_TEXT), "it fits in 3 lines: all of it")
                 self.assertEqual(len(shown), 3)
         seen = {}
         self.run_on(self.projects, [self.on_project("drill"), self.grab(seen, "drill"),
@@ -3526,7 +3529,7 @@ class DetailLayout(unittest.TestCase):
         got = seen["fleet"]
         return got, {h: (y, x, got["lines"][y][x:]) for h, (y, x) in self.heads(got).items()}
 
-    def test_each_heading_is_bold_then_its_count_dim_in_its_outlines_top_edge_to_the_80_column_limit(self):
+    def test_each_heading_is_bold_then_its_count_dim_in_its_outlines_top_edge_to_the_details_right_edge(self):
         got, rows = self.heading_rows(self.WIDE)  # 180 columns: the details are far wider than 80
         W = roost.SIDEBAR_W
         counts = {"Sessions": 1, "Handoffs": 2, "Notes": 1}  # Printer fix; Toner swap and Toner check; Driver shortlist
@@ -3547,17 +3550,59 @@ class DetailLayout(unittest.TestCase):
                 ends[head] = x + len(text)
         full = {h: e for h, e in ends.items() if h != "Next"}  # Next sits at the left of Current state
         for head, end in full.items():
-            self.assertTrue(70 <= end - W <= 84, f"{head}: the outline stops at the 80-column limit: {end - W}")
+            self.assertEqual(end, self.WIDE[0] - 1, f"{head}: the outline's ╮ one blank column short of the window's right edge")
         self.assertEqual(len(set(full.values())), 1, ends)
         self.assertLess(ends["Next"], rows["Current state"][1], "Next's outline ends before Current state's starts")
 
-    def test_the_sections_stay_within_80_columns_at_any_width(self):
+    def test_the_sections_leave_the_windows_last_column_blank_at_any_width(self):
         for size in (self.SIZE, self.WIDE):
             got, _ = self.heading_rows(size)
             W, bottom = roost.SIDEBAR_W, size[1] - 3  # above the status bar and the key bar
             with self.subTest(size=size):
                 for y, l in enumerate(got["lines"][6:bottom], 6):  # under the top area and the summary strip, which spans the window
-                    self.assertLessEqual(len(l.rstrip()) - W, 84, f"row {y} runs past 80 columns: {l[W:]!r}")
+                    self.assertLessEqual(len(l.rstrip()), size[0] - 1, f"row {y} runs into the window's last column: {l[W:]!r}")
+
+    def test_an_items_time_sits_at_its_outlines_right_edge_at_180_columns(self):
+        got, rows = self.heading_rows(self.WIDE)
+        lines = got["lines"]
+        fix = next(s for s in self.sessions if s["name"] == "Printer fix")
+        when = roost.short_when(fix["last"])
+        b = next(b for b in boxes(lines, roost.SIDEBAR_W) if b["title"] == "Sessions")
+        self.assertEqual(b["right"], self.WIDE[0] - 2, "the fixture: Sessions' outline runs to the window's right")
+        line = next(lines[y] for y in range(b["top"] + 1, b["bottom"]) if "Printer fix" in lines[y])
+        self.assertTrue(line[:b["right"]].rstrip().endswith(when), line)
+        self.assertEqual(len(line[:b["right"]].rstrip()), b["right"] - 2, f"two blanks between its time and the │: {line!r}")
+
+    LONG_NAME = ("Printer fleet consolidation for the north and south offices, with one driver package, "
+                 "and the toner orders moved")
+
+    def test_the_name_line_shows_a_long_name_whole_when_the_details_are_wide_enough(self):
+        next(p for p in self.projects if p["id"] == "fleet").update(label=self.LONG_NAME)
+        seen = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "wide")], size=self.WIDE)
+        self.run_on(self.projects, [self.on_project("fleet"), self.grab(seen, "narrow")], size=(100, 48))
+        W = roost.SIDEBAR_W
+        self.assertGreater(len(self.LONG_NAME), 80, "the fixture: longer than the old 80-column limit")
+        wide = [l for l in seen["wide"]["lines"] if self.LONG_NAME in l[W:]]
+        self.assertEqual(len(wide), 1, "the whole name, unclipped, at 180 columns")
+        self.assertFalse([l for l in seen["narrow"]["lines"] if self.LONG_NAME in l[W:]], "clipped at 100 columns")
+        self.assertTrue([l for l in seen["narrow"]["lines"] if self.LONG_NAME[:40] in l[W:] and "…" in l], "clipped with …")
+
+    WIDE_DESCRIPTION = ("Move every office printer onto one driver package and retire the two oldest models "
+                        "before the quarter closes.")
+
+    def test_a_description_that_wraps_at_120_columns_fits_on_one_line_at_180(self):
+        next(p for p in self.projects if p["id"] == "fleet").update(summary=self.WIDE_DESCRIPTION)
+        W = roost.SIDEBAR_W
+        rows = {}
+        for size in (self.SIZE, self.WIDE):
+            got, heads = self.heading_rows(size)
+            under = [l[W:].strip(" │") for l in got["lines"][heads["Details"][0] + 1:heads["This month"][0]]]
+            at = next(i for i, l in enumerate(under) if l.startswith("Description"))
+            end = next(i for i in range(at + 1, len(under)) if re.match(r"(Repo|Category|Folder)\b", under[i]))
+            rows[size] = [under[at][len("Description"):].strip()] + under[at + 1:end]  # then the wrapped lines
+        self.assertGreater(len(rows[self.SIZE]), 1, ("the fixture: it wraps at 120 columns", rows[self.SIZE]))
+        self.assertEqual(rows[self.WIDE], [self.WIDE_DESCRIPTION], "one line, whole, at 180 columns")
 
     def test_each_item_has_its_mark_its_name_and_its_time_at_the_sections_right_edge(self):
         toner = TextualScreens.closed("Toner order", 30)  # closed half an hour ago: in the last 7 days
@@ -4240,9 +4285,10 @@ def inside(lines, box):
 class DetailPanels(unittest.TestCase):
     """The details as rounded outlines (SectionsOnScreen's folder; Printer fleet's Next is three short lines and
     its Current state a long paragraph; Restore drill has a Next alone): one per section, as wide as the details
-    (at most 80), titled in their top edge (the title bold, its count dim), in the line colour, the content two
-    columns in. Next and Current state side by side when both have text, the same height; each shows all of a
-    text that fits in 3 lines, else 2 lines and a dim "… enter to expand". With the keys in the details they're
+    (one blank column short of the window's right edge), titled in their top edge (the title bold, its count
+    dim), in the line colour, the content two columns in. Next and Current state side by side when both have
+    text, the same height, splitting the width; each shows all of a text that fits in 3 lines, else 2 lines and
+    a dim "… enter to expand". With the keys in the details they're
     the first items: selected, the outline and title turn green, with no ▌; enter expands one to the full width
     and all its text, "enter to collapse" dim at the right, the other below it collapsed; enter collapses it.
     The key bar says enter expand or collapse. Another project shows nothing expanded. No fills."""
@@ -4327,15 +4373,13 @@ class DetailPanels(unittest.TestCase):
             with self.subTest(section=b["title"]):
                 self.assertEqual(self.edge_colors(got, b), {LINE_COLOR})
 
-    def test_the_outlines_are_as_wide_as_the_details_at_most_80_and_the_content_two_columns_in(self):
-        for size in ((120, 60), (180, 60)):
+    def test_the_outlines_are_as_wide_as_the_details_and_the_content_two_columns_in(self):
+        for size in ((100, 60), (120, 60), (180, 60)):
             got = self.fleet(size=size)["start"]
             full = [b for b in got["boxes"] if b["title"] not in ("Next", "Current state")]
             with self.subTest(size=size):
                 self.assertEqual(len({(b["left"], b["right"]) for b in full}), 1, full)
-                self.assertLessEqual(full[0]["right"] - full[0]["left"] + 1, 80)
-                if size[0] == 120:  # the details are 86 wide here: the outline takes the 80
-                    self.assertGreaterEqual(full[0]["right"] - full[0]["left"] + 1, 76)
+                self.assertEqual(full[0]["right"], size[0] - 2, "the ╮ one blank column short of the window's right edge")
                 for title in ("Sessions", "Details", "This month"):
                     b = self.box(got, title)
                     starts = [b["left"] + 1 + len(r) - len(r.lstrip()) for r in inside(got["lines"], b) if r.strip()]
@@ -4360,6 +4404,27 @@ class DetailPanels(unittest.TestCase):
         self.assertLessEqual(abs(wn - ws), 2, (wn, ws))
         self.assertGreaterEqual(nxt["left"], sessions["left"])
         self.assertLessEqual(state["right"], sessions["right"], "together as wide as the other outlines")
+
+    def test_next_and_current_state_split_the_full_width_between_them_at_any_width(self):
+        for size in ((100, 60), (120, 60), (180, 60)):
+            got = self.fleet(size=size)["start"]
+            nxt, state, sessions = self.box(got, "Next"), self.box(got, "Current state"), self.box(got, "Sessions")
+            wn, ws = nxt["right"] - nxt["left"] + 1, state["right"] - state["left"] + 1
+            with self.subTest(size=size):
+                self.assertEqual(sessions["right"], size[0] - 2, "the fixture: the full width runs to the window's right")
+                self.assertEqual((nxt["left"], state["right"]), (sessions["left"], sessions["right"]), "together the full width")
+                self.assertEqual(state["left"] - nxt["right"], 2, "one blank column between them")
+                self.assertLessEqual(abs(wn - ws), 1, ("each about half", wn, ws))
+
+    def test_an_expanded_panel_spans_the_full_width_at_180_columns(self):
+        open_ = {}
+        self.run_on(self.projects, [self.on_project("fleet"), self.loaded, self.keys("right", "down"), self.keys("enter"),
+                                    self.view(open_, "open")], size=(180, 60))
+        got = open_["open"]
+        self.assertTrue([l for l in got["lines"] if "enter to collapse" in l], "the fixture: Current state expanded")
+        state, nxt = self.box(got, "Current state"), self.box(got, "Next")
+        self.assertEqual((state["left"], state["right"]), (roost.SIDEBAR_W + 3, 178), "expanded: the full width")
+        self.assertEqual((nxt["left"], nxt["right"]), (roost.SIDEBAR_W + 3, 178), "the other, below it: the full width")
 
     def test_a_short_text_shows_whole_and_a_long_one_two_lines_then_enter_to_expand(self):
         got = self.fleet()["start"]
