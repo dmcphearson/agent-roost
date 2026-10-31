@@ -185,7 +185,7 @@ if Widget:
         Screen { background: ansi_default; layers: base over top; }
         TopBar { height: 3; }  /* the tabs, a blank row, a rule; redraw makes it 5 for a summary strip */
         #body { height: 1fr; }
-        #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 1 0 0 0; border-right: vkey #2c313a; }
+        #body > ProjectList { width: SIDEBAR_W; height: 1fr; margin: 1 0 0 0; border-right: vkey #3a4049; }
         #pane { width: 1fr; height: 100%; }
         KeyBar { height: 1; }
         Prompt { layer: top; position: absolute; display: none; background: #22262d; color: #d6dae0; height: auto; }

@@ -1314,7 +1314,7 @@ class TopTabs(unittest.TestCase):
                 self.assertEqual(shown, name)
                 top = "\n".join(lines[:7])
                 self.assertEqual(lines[2], "─" * 120, "a rule across the whole width:\n" + top)
-                self.assertEqual(set(rule), {roost.LINE.lower()}, "the rule is in the faint line color")
+                self.assertEqual(set(rule), {"#3a4049"}, "the rule is in the line color")
                 self.assertTrue(blank(lines[1]) and blank(lines[3]), "a blank row each side of the rule:\n" + top)
                 strip = name in ("Projects", "Sessions")
                 if strip:
@@ -1332,6 +1332,33 @@ class TopTabs(unittest.TestCase):
                     self.assertEqual(nm and nm[0], 6, ("the details' name line", nm))
                 if name == "Sessions":
                     self.assertRegex(lines[6], r"^\s*Running \(\d+\)\s+Closed \(\d+\)\s+Unfiled \(\d+\)", "the views row")
+
+    def test_the_lists_divider_and_the_sessions_and_notes_rules_are_in_the_line_color(self):
+        """#3a4049: the Projects list's divider, the Sessions list's section rules, and the Notes list's."""
+        seen = {}
+
+        def rules(app):
+            lines, out = screen_text(app), set()
+            for y, l in enumerate(lines[3:-3], 3):  # under the tab bar's rule, above the status and key bars
+                for x, ch in enumerate(l):
+                    if ch == "─":
+                        out.add(color_of(style_at(app, y, x)))
+            return out, lines
+
+        def divider(app):
+            lines, W = screen_text(app), roost.SIDEBAR_W
+            ys = [y for y, l in enumerate(lines[6:-3], 6) if len(l) >= W and l[W - 1].strip()]
+            return {color_of(style_at(app, y, W - 1)) for y in ys}, [lines[y][W - 1] for y in ys]
+        self.start([self.look(seen, "divider", divider), open_view("Sessions"), self.look(seen, "sessions", rules),
+                    open_view("Notes"), self.look(seen, "notes", rules)], size=(120, 40))
+        colors, chars = seen["divider"]
+        self.assertTrue(chars, "the fixture: the list's divider is drawn")
+        self.assertEqual(colors, {"#3a4049"}, ("the list's divider", chars))
+        for tab in ("sessions", "notes"):
+            colors, lines = seen[tab]
+            with self.subTest(tab=tab):
+                self.assertTrue(colors, "the fixture: a section rule is drawn\n" + "\n".join(lines[:12]))
+                self.assertEqual(colors, {"#3a4049"})
 
     def test_sessions_notes_and_stats_take_the_whole_window_with_no_project_list(self):
         widget = {"Sessions": [roost.SessionList], "Notes": [roost.NoteList, roost.NoteCard], "Stats": [roost.StatsView]}
