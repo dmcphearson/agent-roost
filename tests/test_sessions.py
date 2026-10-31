@@ -611,7 +611,8 @@ class StartingSessions(unittest.TestCase):
             ui.sessions = [dict(session("Old", state="closed", kind=None), id="bb2c0000-0000")]
             ui.load_projects()
             acts = labels(ui, ui.keys_sessions, ui.sessions)  # on the Sessions tab: the Projects tab lists no Sessions
-            self.assertEqual(acts[0], "Start a fresh Session for Title")  # by its README's heading
+            self.assertEqual(acts[0], "Write its Handoff from the transcript")  # no Handoff covers it: saving it comes first
+            self.assertIn("Start a fresh Session for Title", acts)  # by its README's heading
             self.assertFalse([a for a in acts if a.startswith(("Open", "Go to"))])
             # opening it directly is refused
             self.assertIsNone(ui.open_one(ui.sessions[0]))
@@ -955,6 +956,106 @@ class SessionMenuGroups(unittest.TestCase):
             real = [a for a in self.acts(ui, name) if a != DIV]
             self.assertTrue(real, name)
             self.assertEqual([a for a in real if "…" in a], [], name)
+
+class ClosedProjectSessionActions(unittest.TestCase):
+    """A closed Session an open project lists and no Handoff covers: its actions start with writing its
+    Handoff, then resuming it (with what re-reading its context costs), then a fresh Session for the project.
+    Resume reopens it the way open_one does; a plain open stays refused. A wrapped-up one gets no Resume."""
+    project, ui, fresh, acts = StartingSessions.project, StartingSessions.ui, Dismissing.fresh, Dismissing.acts
+    setUp = Dismissing.setUp
+    RESUME = "Resume this Session"
+
+    def fixture(self, **old):
+        """Project p (Title) listing Wrapped (aa1b9a71-0000, closed two hours ago, a Handoff covers it to its
+        last message) and Old (bb2c0000-0000, closed two hours ago, 412,000 tokens, no Handoff covers it);
+        old's keys go into Old."""
+        from datetime import datetime, timezone
+        folder = self.project("p", handoffs=[time.strftime("%Y-%m-%d-%H%M") + "-aaaaaaaa.md"])
+        wrapped = dict(session("Wrapped", state="closed", kind=None, mins=120, tokens=412_000), id="aa1b9a71-0000")
+        to = datetime.fromtimestamp(wrapped["last"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        (folder / "handoffs" / (time.strftime("%Y-%m-%d-%H%M") + "-aa1b9a71.md")).write_text(
+            f"---\nsession: aa1b9a71-0000\nname: Covered\nto: {to}\n---\n\nDone.\n")
+        self.sessions = [wrapped, dict(session("Old", state="closed", kind=None, mins=120, tokens=412_000), id="bb2c0000-0000", **old)]
+        ui = self.fresh()
+        self.assertEqual([ui.wrapped(s) for s in ui.sessions], [True, False])  # the fixture
+        return ui
+
+    def real(self, acts):
+        return [a for a in acts if a != DIV]
+
+    def assert_resumable(self, ui, name):
+        """name's actions offer Resume; leaves it the selected row."""
+        acts = self.acts(ui, name)
+        self.assertTrue([a for a in acts if a != DIV and a.startswith(self.RESUME)], f"no Resume action: {acts}")
+
+    def test_handoff_first_then_resume_then_a_fresh_session(self):
+        acts = self.real(self.acts(self.fixture(), "Old"))
+        self.assertEqual(acts[0], "Write its Handoff from the transcript", acts)
+        self.assertEqual(acts[1], "Resume this Session · 412k tokens, about 2× to re-read (824k tokens' worth)", acts)
+        self.assertIn("Start a fresh Session for Title", acts)
+        self.assertGreater(acts.index("Start a fresh Session for Title"), 1, acts)
+        self.assertEqual(sum(a.startswith(self.RESUME) for a in acts), 1, acts)
+
+    def test_resume_says_what_re_reading_costs_on_each_cache(self):
+        ui = self.fixture()
+        base = dict(ui.sessions[1])
+        for keys, want in (({}, "about 2× to re-read (824k tokens' worth)"),  # no ttl: the 1-hour cache, cold
+                           ({"ttl": 3600}, "about 2× to re-read (824k tokens' worth)"),
+                           ({"ttl": 300}, "about 1.25× to re-read (515k tokens' worth)"),
+                           ({"reply_at": time.time()}, "about 0.1× to re-read (41k tokens' worth)")):  # still warm
+            with self.subTest(keys=keys):
+                ui.sessions[1] = dict(base, **keys)
+                acts = self.real(self.acts(ui, "Old"))
+                self.assertIn(f"{self.RESUME} · 412k tokens, {want}", acts)
+
+    def test_with_no_tokens_resume_is_just_its_name(self):
+        acts = self.real(self.acts(self.fixture(tokens=0), "Old"))
+        self.assertEqual(acts[1], self.RESUME, acts)
+        self.assertEqual([a for a in acts if a.startswith(self.RESUME)], [self.RESUME])
+
+    def test_resume_opens_it_in_a_new_window_and_a_plain_open_is_still_refused(self):
+        ui = self.fixture()
+        opened = []
+        saved, roost.open_in_window = roost.open_in_window, lambda s, term: opened.append((s["id"], term)) or "opened"
+        try:
+            old = next(s for s in ui.sessions if s["name"] == "Old")
+            self.assert_resumable(ui, "Old")
+            act(ui, ui.keys_sessions, ui.sessions, self.RESUME)
+            self.assertEqual(opened, [("bb2c0000-0000", "ghostty")])
+            self.assertNotIn("fresh Session", ui.msg)  # not refused
+            ui.msg = ""
+            self.assertIsNone(ui.open_one(old))
+            self.assertIn("fresh Session", ui.msg)
+            self.assertEqual(opened, [("bb2c0000-0000", "ghostty")], "open_one still refuses it")
+        finally:
+            roost.open_in_window = saved
+
+    def test_with_no_terminal_resume_returns_it_to_run_here(self):
+        ui = self.fixture()
+        ui.term = None
+        opened = []
+        saved, roost.open_in_window = roost.open_in_window, lambda s, term: opened.append(s["id"]) or "opened"
+        try:
+            self.assert_resumable(ui, "Old")
+            got = act(ui, ui.keys_sessions, ui.sessions, self.RESUME)
+            self.assertEqual((got or {}).get("id"), "bb2c0000-0000", got)
+            self.assertEqual(opened, [])
+        finally:
+            roost.open_in_window = saved
+
+    def test_a_wrapped_up_project_session_gets_no_resume(self):
+        acts = self.real(self.acts(self.fixture(), "Wrapped"))
+        self.assertEqual(acts[0], "Start a fresh Session for Title", acts)
+        self.assertFalse([a for a in acts if a.startswith(self.RESUME)], acts)
+
+    def test_running_and_projectless_sessions_get_no_resume(self):
+        ui = self.fixture()
+        ui.sessions += [dict(session("Live"), id="cc3d0000-0000"), dict(session("Loose", state="closed", kind=None, mins=30, tokens=9000),
+                                                                         id="dd4e0000-0000")]
+        for name in ("Live", "Loose"):
+            with self.subTest(name=name):
+                self.assertFalse([a for a in self.acts(ui, name) if a.startswith(self.RESUME)])
+
 
 class SessionColumns(unittest.TestCase):
     """The Sessions tab's columns scale with the window, read off the drawn header and rows. NAME
