@@ -645,6 +645,27 @@ class TextualScreens(unittest.TestCase):
                 self.assertRegex(got["lines"][5].strip(), r"^$", "a blank row under the strip")
         self.assertEqual(sum(s["state"] == "closed" for s in cases["none closed"]), 0, "the fixture: a case with 0 closed today")
 
+    def test_the_sessions_strip_is_centered_across_the_whole_width(self):
+        """The blank columns before the strip and after it differ by at most 1, whatever its counts and the
+        screen's width; its parts in order, five blank columns between them."""
+        order = re.compile(r"^● \d+ running {5}\d+ closed today {5}\d+ unfiled$")
+
+        def strip(app):
+            return {"text": screen_text(app)[4], "gaps": row_gaps(app, 4), "width": app.size.width}
+        cases = {"none closed": list(self.sessions)}
+        self.views_fixture()
+        cases["views"] = list(self.sessions)
+        for case, sessions in cases.items():
+            for size in ((120, 30), (151, 30)):
+                self.sessions, seen = sessions, {}
+                self.run_app([open_view("Sessions"), self.look(seen, "x", strip)], size=size)
+                got = seen["x"]
+                with self.subTest(case=case, width=size[0]):
+                    self.assertRegex(got["text"].strip(), order, "the parts in order, five blank columns between them")
+                    before, after = got["gaps"]
+                    self.assertLessEqual(abs(before - after), 1, f"{before} blank columns before the strip and {after} "
+                                                                 f"after it, {got['width']} wide: {got['text']!r}")
+
     def test_the_current_view_is_bold_green_with_no_background_and_the_others_dim(self):
         self.views_fixture()
         seen = {}
