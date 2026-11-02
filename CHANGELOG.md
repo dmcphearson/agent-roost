@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.11.02
 
 - **Sessions rows:** the views are words over the table, the current one underlined, each with its count. The table sits in an outline with the view in its top edge. Each Session takes two lines, its row and then its status mark and last message; STATUS is no longer a column, and the panel no longer repeats the last message
 - **Live Sessions only:** a project's details list its running Sessions; a closed one a Handoff covers no longer shows (the Sessions tab's Closed view still has it). One closed in the last 7 days with no Handoff shows as closed, no Handoff, and its actions lead with writing its Handoff, then Resume this Session with its context's size and what re-reading it costs (2× on the 1-hour cache, 1.25× on the 5-minute one)
