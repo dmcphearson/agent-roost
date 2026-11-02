@@ -1323,11 +1323,11 @@ class SessionRows(unittest.TestCase):
         return TextualScreens.run_app(self, steps, size=size)
 
     def rows_fixture(self):
-        """Three running Sessions: Printer fix (idle, a last message with ** and backticks), Laptop refresh
-        (waiting, a last message far longer than the window), Badge audit (idle, no last message)."""
+        """Three running Sessions: Printer fix (idle, ○, a last message with ** and backticks), Laptop refresh
+        (waiting, ◆, a last message far longer than the window), Badge audit (working, ●, no last message)."""
         self.sessions = [dict(session("Printer fix", mins=5, tokens=41000), summary=self.TONER),
                          dict(session("Laptop refresh", state="waiting", mins=10, tokens=9000), summary=self.LONG),
-                         session("Badge audit", mins=20, tokens=2000)]
+                         session("Badge audit", state="busy", mins=20, tokens=2000)]
 
     @staticmethod
     def box(app):
@@ -1470,15 +1470,16 @@ class SessionRows(unittest.TestCase):
 
     def lines_of(self, app):
         """For each Session in the view: its row's text, its second line's, and the line after them, with
-        the selected row's › column, NAME's column, and each second line's ● color as drawn and as its
-        status is colored (status_cell's attr)."""
+        the selected row's › column, NAME's column, and each second line's status mark (the first character
+        of status_cell's text) and its color as drawn and as its status is colored (status_cell's attr)."""
         top, bottom, left, right, lines = self.box(app)
         ui = app.ui
         out = {}
         for i, s in enumerate(ui.srows):
             y = self.name_y(app, s["name"])
-            mark = lines[y + 1].find("●")
-            out[s["name"]] = {"y": y, "row": lines[y], "second": lines[y + 1], "after": lines[y + 2] if y + 2 < bottom else None,
+            symbol = ui.status_cell(s)[0][0]
+            mark = lines[y + 1].find(symbol)
+            out[s["name"]] = {"symbol": symbol, "y": y, "row": lines[y], "second": lines[y + 1], "after": lines[y + 2] if y + 2 < bottom else None,
                               "mark": mark, "drawn": color_of(style_at(app, y + 1, mark)) if mark >= 0 else None,
                               "want": color_of(ui.style(ui.status_cell(s)[1])), "selected": i == ui.sel,
                               "msg": [style_at(app, y + 1, x) for x in range(mark + 1, right)]}
@@ -1496,17 +1497,22 @@ class SessionRows(unittest.TestCase):
         last = max(out, key=lambda n: out[n]["y"])
         for name, got in out.items():
             with self.subTest(name=name):
-                self.assertEqual(got["mark"], tick, f"● in the column where › sits: {got['second']!r}")
-                self.assertEqual(got["drawn"], got["want"], "● is colored as its status is")
+                self.assertEqual(got["second"][tick:tick + 1], got["symbol"],
+                                 f"its status mark {got['symbol']} in the column where › sits: {got['second']!r}")
+                self.assertEqual(got["mark"], tick, f"{got['symbol']} in the column where › sits: {got['second']!r}")
+                self.assertEqual(got["drawn"], got["want"], f"{got['symbol']} is colored as its status is")
                 self.assertEqual(got["second"][left + 1:tick].strip(), "", got["second"])
                 if name != last:
                     self.assertIsNotNone(got["after"])
                     self.assertEqual(got["after"][left + 1:right].strip(), "", f"a blank line after {name}")
         self.assertNotEqual(out["Printer fix"]["want"], out["Laptop refresh"]["want"], "the fixture: two statuses, two colors")
+        self.assertEqual({n: g["symbol"] for n, g in out.items()},
+                         {"Printer fix": "○", "Laptop refresh": "◆", "Badge audit": "●"}, "the fixture: three status marks")
         toner = out["Printer fix"]["second"]
         self.assertEqual(toner.find(self.TONER_PLAIN), name_x, f"the last message, plain, starts under NAME: {toner!r}")
         self.assertEqual(toner[right:right + 1], "│")
-        self.assertEqual(out["Badge audit"]["second"][left + 1:right].strip(), "●", "no last message: just the mark")
+        self.assertEqual(out["Badge audit"]["second"][left + 1:right].strip(), out["Badge audit"]["symbol"],
+                         "no last message: just its status mark")
 
     def test_the_last_message_is_dim_on_one_line_clipped_to_the_outline(self):
         self.rows_fixture()
