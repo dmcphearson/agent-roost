@@ -610,7 +610,7 @@ class ProjectsTab:
         self.corner = (root + (" · missing: run roost setup" if self.projects is None else ""),
                        self.YELLOW | curses.A_BOLD if self.projects is None else self.DIM)
         self.subhead = None
-        self.pname, self.pfields = self.panel_of(r, h, w - SIDEBAR_W - 2)  # Details' values sit 2 further in
+        self.pname, self.pfields = self.panel_of(r, h, w - SIDEBAR_W - 4)  # the pane is w - SIDEBAR_W - 1 wide; its outline takes 3 more
         self.pstatus = self.name_note(r)
         keys = DETAIL_KEYS if self.focus == "pane" else LIST_KEYS
         items = self.detail_items(r) if r and self.focus == "pane" else []
