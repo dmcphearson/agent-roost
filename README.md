@@ -68,7 +68,7 @@ Clone this repo and run `./dev-link.sh`. It links `~/.local/bin/roost` and `~/.r
 
 ### Views and sections
 
-Sessions has two views: **Running** and **Closed** (newest first, a history to dig through). Running sessions are grouped into:
+Sessions has three views, the words over its table: **Running**, **Closed** (newest first, a history to dig through), and **Unfiled**. The table sits in an outline with the view and its count in its top edge; each Session is its row (name, last active, context, project), then its status mark and its last message, so you see what it's doing or waiting on. Running sessions are grouped into:
 
 - **Open**: a terminal window has the session
 - **Pinned**: running in the background and never closed for being idle
@@ -164,7 +164,7 @@ Several of these are internal to Claude Code and can change between releases. If
 
 ### Cache and cost
 
-Claude keeps each session's context in the prompt cache after every request. **STATUS** gives each state its own word, symbol, and color, so it reads without color too:
+Claude keeps each session's context in the prompt cache after every request. Each state has its own symbol and color, the mark before a Session's last message, and its word in the panel, so it reads without color too:
 
 | Status | Meaning |
 |---|---|

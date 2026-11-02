@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Sessions rows:** the views are words over the table, the current one underlined, each with its count. The table sits in an outline with the view in its top edge. Each Session takes two lines, its row and then its status mark and last message; STATUS is no longer a column, and the panel no longer repeats the last message
 - **Live Sessions only:** a project's details list its running Sessions; a closed one a Handoff covers no longer shows (the Sessions tab's Closed view still has it). One closed in the last 7 days with no Handoff shows as closed, no Handoff, and its actions lead with writing its Handoff, then Resume this Session with its context's size and what re-reading it costs (2× on the 1-hour cache, 1.25× on the 5-minute one)
 - **Full-width details:** a project's details fill the window beside the list instead of stopping at 80 columns; Next and Current state split the width
 - **Outlined details:** each section of a project's details is a rounded outline with its title and count in the top edge. Next and Current state sit side by side, each showing its first lines and `… enter to expand`; with the keys in the details they're the first items, and enter expands one to the full width with all its text, its outline green, and folds it back again. Stats is now This month
