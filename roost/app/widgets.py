@@ -85,11 +85,12 @@ class Line:
         return self.ui.style(attr or 0, self.card)
 
 
-def wren_below(region, out):
+def wren_below(region, out, reserve=0):
     """The wren, centred under a list with nothing to show, when the whole bird fits below what's drawn
-    (out, the region's lines so far): never a clipped one. Adds its lines to out."""
+    (out, the region's lines so far) and above the reserve lines kept at the bottom: never a clipped
+    one. Adds its lines to out."""
     art = wren.wren_rows()
-    if not art or len(out) + 1 + len(art) > region.size.height:
+    if not art or len(out) + 1 + len(art) + reserve > region.size.height:
         return
     x = max((region.size.width - len(art[0])) // 2, 0)
     out.append(region.line())
@@ -138,6 +139,23 @@ if Widget:
 
         def line(self, fill=None):
             return Line(self.ui, self.size.width, fill, card=getattr(self, "CARD", False))
+
+        def outline(self, rows, x, w, head, count, edge, title=curses.A_BOLD):
+            """Draw a rounded outline on rows, from column x, w wide: the title (and its count, dim) set
+            into the top edge. edge is the outline's look: the dim one draws it in the faint line color."""
+            top, bottom = rows[0], rows[-1]
+            top.edge(x, "╭─ ", edge)
+            end = top.put(x + 3, head, title)
+            if count:
+                end = top.put(end + 1, str(count), self.ui.DIM)
+            top.edge(end + 1, "─" * max(x + w - 2 - end, 0), edge)
+            top.edge(end, " ", edge)
+            top.edge(x + w - 1, "╮", edge)
+            for row in rows[1:-1]:
+                row.edge(x, "│", edge)
+                row.edge(x + w - 1, "│", edge)
+            bottom.edge(x, "╰" + "─" * (w - 2) + "╯", edge)
+            return rows
 
         def on_click(self, event):
             event.stop()

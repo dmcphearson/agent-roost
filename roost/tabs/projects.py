@@ -1152,23 +1152,6 @@ if Region:
                 ui.dtop = max(0, getattr(ui, "dtop", 0) + 3 * step)  # draw keeps it within the details
                 self.refresh()
 
-        def outline(self, rows, x, w, head, count, edge, title=curses.A_BOLD):
-            """Draw a rounded outline on rows, from column x, w wide: the title (and its count, dim) set
-            into the top edge. edge is the outline's look: the dim one draws it in the faint line color."""
-            top, bottom = rows[0], rows[-1]
-            top.edge(x, "╭─ ", edge)
-            end = top.put(x + 3, head, title)
-            if count:
-                end = top.put(end + 1, str(count), self.ui.DIM)
-            top.edge(end + 1, "─" * max(x + w - 2 - end, 0), edge)
-            top.edge(end, " ", edge)
-            top.edge(x + w - 1, "╮", edge)
-            for row in rows[1:-1]:
-                row.edge(x, "│", edge)
-                row.edge(x + w - 1, "│", edge)
-            bottom.edge(x, "╰" + "─" * (w - 2) + "╯", edge)
-            return rows
-
         def panels(self, out, r, picks, x0, bw, item_at):
             """Next and Current state, as outlines: side by side, each clipped to its first lines and
             "… enter to expand", or one expanded to the full width with all its text. Returns how many of

@@ -1,5 +1,5 @@
 """The Sessions tab."""
-import curses, os, textwrap, threading, time
+import curses, os, threading, time
 from datetime import date, datetime
 from pathlib import Path
 
@@ -63,6 +63,18 @@ class SessionsTab:
             return f"{ctx} · next prompt cheap for {span(left)}"
         return f"{ctx} · next prompt costs about {next_cost(s):g}× (cache expired)"
 
+    def view_count(self, i):
+        """How many the view at i holds: the Sessions it shows that match the search, or what's unfiled."""
+        if VIEWS[i] == "Unfiled":
+            return len(self.unfiled())
+        return sum(in_view(s, i, self.summarizing()) and matches(s, self.query) for s in self.sessions)
+
+    def last_message(self, s):
+        """s's last message on one line, plain: its Session recap's summary when it has one."""
+        recap = None if self.project_of(s) else self.recap_of(s)
+        text = plain_text(recap["summary"]) if recap and recap.get("summary") else s["summary"]
+        return " ".join(text.replace("**", "").replace("`", "").split())
+
     def cost_line(self, s):
         """What the next message costs, and what to do about it."""
         left, mult = cache_left(s), next_cost(s)
@@ -123,20 +135,18 @@ class SessionsTab:
     def session_widths(self, rows, w):
         """Column widths for a window w wide, sized the way the Projects tab sizes its own: each column
         fits its longest value + 2 and its header with a sort arrow, PROJECT up to 24.
-        When they don't all fit, PROJECT gives way first, then CONTEXT, LAST ACTIVE, and STATUS; NAME,
-        last. Spare width goes to NAME up to its longest name + 2, then to PROJECT up to its longest
+        When they don't all fit, PROJECT gives way first, then CONTEXT and LAST ACTIVE; NAME, last. Spare width goes to NAME up to its longest name + 2, then to PROJECT up to its longest
         label + 2, and what's left is spread evenly over every column, leftmost first."""
         head = lambda title: len(title) + 3  # the title, its sort arrow, and a space before the next
         names = max([len(shown_name(s)) for s in rows], default=0) + 2
         projs = max([len(s.get("proj") or "") for s in rows], default=0) + 2
         widths = {"NAME": max(16, names),
-                  "STATUS": max([head("STATUS")] + [len(self.status_cell(s)[0]) + 2 for s in rows]),
                   "LAST ACTIVE": max([head("LAST ACTIVE")] + [len(ago(s)) + 2 for s in rows]),
                   "CONTEXT": head("CONTEXT"),
                   "PROJECT": max(head("PROJECT"), min(24, projs))}
         over = sum(widths.values()) - (w - 6)  # NAME starts at 5; a column of margin on the right
         spare = -over  # room left over only when nothing has to give way
-        for col in ["PROJECT", "CONTEXT", "LAST ACTIVE", "STATUS", "NAME"]:
+        for col in ["PROJECT", "CONTEXT", "LAST ACTIVE", "NAME"]:
             if over <= 0:
                 break
             floor = 16 if col == "NAME" else 0
@@ -157,26 +167,26 @@ class SessionsTab:
         return widths
 
     def session_lines(self, rows, page):
-        """The list's lines: ("r", row index) for a Session, and where a view holds more than one
-        section, ("h", section) at the start of each and ("s", None) between them. Scrolls self.top
-        so the selected row (and its section's header, at the start of a section) is in the page."""
+        """The list's lines: ("r", row index) for a Session's row, ("m", row index) for its last message,
+        then ("s", None), a blank line; where a view holds more than one section, ("h", section) at the
+        start of each. Scrolls self.top so the selected Session's two lines (and its section's header,
+        at the start of a section) are in the page."""
         lines, sec_line = [], None
         sec = lambda s: group(s, self.wrapping)
         multi = len({sec(s) for s in rows}) > 1
         for idx, s in enumerate(rows):
             g = sec(s)
             if multi and (idx == 0 or sec(rows[idx - 1]) != g):
-                if idx:
-                    lines.append(("s", None))  # a blank line between sections
                 lines.append(("h", g))
             lines.append(("r", idx))
             if idx == self.sel:
                 sec_line = len(lines) - 1
+            lines += [("m", idx), ("s", None)]
         if sec_line is not None:
             if sec_line < self.top:
                 self.top = sec_line
-            elif sec_line >= self.top + page:
-                self.top = sec_line - page + 1
+            elif sec_line + 1 >= self.top + page:
+                self.top = sec_line - page + 2
             if self.top == sec_line and sec_line > 0 and lines[sec_line - 1][0] == "h":
                 self.top -= 1  # keep a section's header in view with its first row
         self.top = max(0, min(self.top, max(len(lines) - page, 0)))
@@ -587,31 +597,32 @@ class SessionsTab:
 
 if Region:
     class ViewRow(Region):
-        """Running and Closed, each with its count, then the search."""
+        """Running, Closed, and Unfiled as words, the current one underlined, each with its count; then
+        the search."""
         def lines(self):
             ui = self.ui
-            row, x, ui.tabs = self.line(), TAB_X - 1, []  # each view's label starts with a space, as the tab names do
+            row, x, ui.tabs = self.line(), TAB_X, []
             ui.view_row_y, x0 = self.region.y, self.region.x
             for i, label in enumerate(VIEWS):
-                count = (len(ui.unfiled()) if label == "Unfiled" else
-                         sum(in_view(s, i, ui.summarizing()) and matches(s, ui.query) for s in ui.sessions))
-                tab = f" {label} ({count}) "  # a count in ( ), as the Projects sections show theirs
-                ui.tabs.append((x0 + x, x0 + x + len(tab), i))  # in the screen's columns, as a click gives them
-                row.put(x, tab, curses.A_REVERSE | curses.A_BOLD if i == ui.view else ui.DIM)
-                x += len(tab) + 1
+                end = row.put(x, label, curses.A_BOLD | curses.A_UNDERLINE | ui.ACCENT if i == ui.view else ui.DIM)
+                ui.tabs.append((x0 + x, x0 + end, i))  # in the screen's columns, as a click gives them
+                x = row.put(end + 1, str(ui.view_count(i)), ui.DIM) + 4
             query = getattr(ui, ui.query_attr())
             if ui.searching or query:
-                row.put(x + 2, f"/ {query}" + ("▏" if ui.searching else ""), ui.ACCENT if ui.searching else ui.DIM)
+                row.put(x, f"/ {query}" + ("▏" if ui.searching else ""), ui.ACCENT if ui.searching else ui.DIM)
             return [row]
 
     class SessionList(Region):
-        """The column headers (a click sorts by one), then the Sessions, a section header where each starts."""
+        """The Sessions in a rounded outline, the view and its count in its top edge: the column headers
+        (a click sorts by one), then each Session's row and its last message, a section header where
+        each starts."""
         def lines(self):
-            ui, w, y0 = self.ui, self.size.width, self.region.y
+            ui, w, h, y0 = self.ui, self.size.width, self.size.height, self.region.y
             rows = getattr(ui, "srows", [])
-            page = ui.page = max(self.size.height - 3, 1)  # the headers, a blank row, and the position at the bottom
-            cols = ui.session_widths(rows, w)
-            head, cx, ui.col_x, ui.list_top = self.line(), 5, [], y0
+            page = ui.page = max(h - 4, 1)  # the outline's edges, the headers, and a blank row
+            cols = ui.session_widths(rows, w - 2)  # inside the outline
+            out = [self.line(), self.line(), self.line()]
+            head, cx, ui.col_x, ui.list_top = out[1], 5, [], y0 + 1
             for title, cw in cols.items():
                 if not cw:
                     continue
@@ -619,36 +630,36 @@ if Region:
                 head.put(cx, title + (" ▾" if ui.sort[1] else " ▴") if on else title, curses.A_BOLD | (ui.ACCENT if on else ui.DIM))
                 ui.col_x.append((self.region.x + cx, self.region.x + cx + cw - 1, title))
                 cx += cw
-            out = [head, self.line()]
             lines = ui.session_lines(rows, page)
             if not rows:
                 note = self.line()
                 note.put(3, "Nothing here. Try another view, or esc to clear the search.", ui.DIM)
                 out.append(note)
+                wren_below(self, out, reserve=1)  # the outline's bottom edge
             ui.row_y = {}
             for i, (kind_, val) in enumerate(lines[ui.top:ui.top + page]):
-                y = y0 + 2 + i
+                row = self.line()
+                out.append(row)
                 if kind_ == "s":
-                    out.append(self.line())
                     continue
                 if kind_ == "h":
-                    row = self.line()
                     n = sum(group(s, ui.wrapping) == val for s in rows)
                     label = f"{SECTIONS[val]} ({n}) "
                     row.put(2, label, curses.A_BOLD | (ui.ACCENT if val == 0 else 0))
-                    row.rule(2 + len(label), w - len(label) - 4, ui.DIM)
-                    out.append(row)
+                    row.rule(2 + len(label), w - len(label) - 5, ui.DIM)
                     continue
                 idx, s = val, rows[val]
-                ui.row_y[y] = idx
+                ui.row_y[y0 + 3 + i] = idx  # either of a Session's lines picks it
+                if kind_ == "m":
+                    text, attr = ui.status_cell(s)
+                    row.put(2, text[:1], attr)  # its status's own symbol, so it reads without color
+                    row.put(5, clip(ui.last_message(s), w - 7), ui.DIM)
+                    continue
                 hl = idx == ui.sel
-                row = self.line()
                 if hl:
-                    row.put(1, "›", curses.A_BOLD | ui.ACCENT)
-                text, attr = ui.status_cell(s)
+                    row.put(2, "›", curses.A_BOLD | ui.ACCENT)
                 done = s["state"] == "closed" and ui.wrapped(s)  # never re-read, so its size costs nothing
                 cells = {"NAME": (shown_name(s), ui.picked(0) if hl else curses.A_BOLD if group(s) == 0 else 0),
-                         "STATUS": (text, attr),
                          "LAST ACTIVE": (ago(s), 0),
                          # right-aligned under the word CONTEXT, so the sizes line up
                          "CONTEXT": (("—" if done else ktok(s["tokens"])).rjust(len("CONTEXT")), ui.DIM if done else 0),
@@ -658,20 +669,19 @@ if Region:
                     if cw:
                         row.put(cx, clip(cells[title][0], cw - 2), cells[title][1])
                         cx += cw
-                out.append(row)
-            if len(lines) > page:
-                while len(out) < self.size.height - 1:
-                    out.append(self.line())
-                pos = self.line()
-                pos.put(w - 12, f"{ui.sel + 1}/{len(rows)}", ui.DIM)
-                out.append(pos)
-            if not rows:
-                wren_below(self, out)
+            while len(out) < h:
+                out.append(self.line())
+            out = out[:h]
+            if h >= 2:
+                self.outline(out, 0, w, VIEWS[ui.view], ui.view_count(ui.view), ui.DIM)
+            if len(lines) > page and rows:
+                pos = f" {ui.sel + 1}/{len(rows)} "
+                out[-1].put(w - len(pos) - 3, pos, ui.DIM)  # in the bottom edge
             return out
 
     class SessionPanel(Region):
-        """The selected Session: warnings in the rule over it, its name and status, its facts in two
-        columns, then two lines of its last message."""
+        """The selected Session: warnings in the rule over it, its name and status, and its facts in two
+        columns. Its last message is in the list."""
         def lines(self):
             ui, w = self.ui, self.size.width
             rows = getattr(ui, "srows", [])
@@ -706,10 +716,6 @@ if Region:
                 row.put(12, clip(v1, half - 12), 0)
                 row.put(2 + half, l2, ui.DIM)
                 row.put(12 + half, clip(v2, w - half - 14), 0)
-            text = plain_text(recap["summary"]) if recap and recap.get("summary") else s["summary"]
-            lines = textwrap.wrap(" ".join(text.replace("**", "").replace("`", "").split()), w - 4)
-            for j, line in enumerate(lines[:2]):
-                out[6 + j].put(2, line + (" …" if j == 1 and len(lines) > 2 else ""))
             return out
 
     class SessionsView(Vertical):
