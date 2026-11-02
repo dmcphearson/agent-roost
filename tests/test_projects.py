@@ -3665,6 +3665,25 @@ class DetailLayout(unittest.TestCase):
         self.assertGreater(len(rows[self.SIZE]), 1, ("the fixture: it wraps at 120 columns", rows[self.SIZE]))
         self.assertEqual(rows[self.WIDE], [self.WIDE_DESCRIPTION], "one line, whole, at 180 columns")
 
+    LONG_DESCRIPTION = ("Move every office printer onto one driver package, retire the two oldest models, swap the "
+                        "toner on a schedule, label each tray by paper size, and keep a short log of jams so the "
+                        "worst units get replaced first when the budget allows it next spring.")
+
+    def test_every_wrapped_description_line_shows_whole_at_any_width(self):
+        # many widths, so some wrapped line fills the wrap width exactly
+        next(p for p in self.projects if p["id"] == "fleet").update(summary=self.LONG_DESCRIPTION)
+        W = roost.SIDEBAR_W
+        for cols in range(100, 171):  # from the narrowest window roost draws
+            got, heads = self.heading_rows((cols, 80))  # tall enough for Details and This month
+            under = [l[W:].strip(" │") for l in got["lines"][heads["Details"][0] + 1:heads["This month"][0]]]
+            at = next(i for i, l in enumerate(under) if l.startswith("Description"))
+            end = next(i for i in range(at + 1, len(under)) if re.match(r"(Repo|Category|Folder)\b", under[i]))
+            lines = [under[at][len("Description"):].strip()] + under[at + 1:end]
+            with self.subTest(cols=cols):
+                self.assertGreater(len(lines), 1, ("the fixture: it wraps", lines))
+                self.assertFalse([l for l in lines if "…" in l], ("no line clipped", lines))
+                self.assertEqual(" ".join(lines).split(), self.LONG_DESCRIPTION.split(), "every word, in order")
+
     def test_each_item_has_its_mark_its_name_and_its_time_at_the_sections_right_edge(self):
         toner = TextualScreens.closed("Toner order", 30)  # closed half an hour ago: in the last 7 days
         self.sessions.append(toner)
