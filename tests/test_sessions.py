@@ -1058,13 +1058,13 @@ class ClosedProjectSessionActions(unittest.TestCase):
 
 
 class SessionColumns(unittest.TestCase):
-    """The Sessions tab's columns scale with the window, read off the drawn header and rows. NAME
-    starts at column 5; then STATUS, LAST ACTIVE, CONTEXT, PROJECT."""
+    """The Sessions tab's columns scale with the window, read off the drawn header and rows, inside the
+    table's outline: NAME, LAST ACTIVE, CONTEXT, PROJECT."""
     setUp = TextualScreens.setUp
     proj = staticmethod(TextualScreens.proj)
     select = staticmethod(TextualScreens.select)
     run_on = ProjectRows.run_on
-    TITLES = [("NAME", "NAME"), ("STATUS", "STAT"), ("LAST ACTIVE", "LAST"), ("CONTEXT", "CONT"), ("PROJECT", "PROJ")]
+    TITLES = [("NAME", "NAME"), ("LAST ACTIVE", "LAST"), ("CONTEXT", "CONT"), ("PROJECT", "PROJ")]
 
     def fleet(self, names, label="Printer fleet"):
         """Running Sessions with these names (the first idle, the second waiting, the rest idle), at
@@ -1089,11 +1089,20 @@ class SessionColumns(unittest.TestCase):
             seen["list"] = pilot.app.query_one(roost.SessionList).region.width
             seen["x"] = pilot.app.query_one(roost.SessionList).region.x
             seen["cells"] = {s["name"]: (ui.status_cell(s)[0], roost.ago(s), s.get("proj") or "") for s in ui.srows}
-        lines = self.run_on(projects, [open_view("Sessions"), look], size=(w, 30), tab="Sessions", config=config).lines
+        # 40 rows: each Session takes three lines, and at 30 the table holds only two
+        lines = self.run_on(projects, [open_view("Sessions"), look], size=(w, 40), tab="Sessions", config=config).lines
         lines = [l[seen["x"]:] for l in lines]  # the list's part of each line
-        h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
-        edge = next(i for i in range(h + 1, len(lines)) if lines[i].strip() and set(lines[i].strip()) == {"─"})
+        h = self.header_y(lines)
+        edge = next((i for i in range(h + 1, len(lines)) if lines[i].strip().startswith("╰")), None)  # the outline's bottom
+        assert edge is not None, "no outline's bottom edge under the column headers:\n" + "\n".join(lines[h:])
         return lines[h:edge], seen["list"], seen["cells"]
+
+    @staticmethod
+    def header_y(lines):
+        """The row of the column headers: NAME is its first word, inside the table's outline."""
+        h = next((i for i, l in enumerate(lines) if re.match(r"^[│ ]*NAME\b", l)), None)
+        assert h is not None, "no column headers:\n" + "\n".join(lines)
+        return h
 
     def starts(self, header):
         """Where each drawn column title starts."""
@@ -1108,11 +1117,11 @@ class SessionColumns(unittest.TestCase):
     def row(listing, name):
         return next(l for l in listing[1:] if name[:12] in l)
 
-    def whole(self, listing, cells, w_titles=("NAME", "STATUS", "LAST ACTIVE", "PROJECT")):
-        """True when every Session's name, status, LAST ACTIVE and PROJECT text is drawn whole."""
+    def whole(self, listing, cells, w_titles=("NAME", "LAST ACTIVE", "PROJECT")):
+        """True when every Session's name, LAST ACTIVE and PROJECT text is drawn whole."""
         for name, (status, when, label) in cells.items():
             row = self.row(listing, name)
-            want = {"NAME": name, "STATUS": status, "LAST ACTIVE": when, "PROJECT": label}
+            want = {"NAME": name, "LAST ACTIVE": when, "PROJECT": label}
             if any(want[t] and want[t] not in row for t in w_titles):
                 return False
         return True
@@ -1122,14 +1131,16 @@ class SessionColumns(unittest.TestCase):
     # 1. NAME is its longest name + 2, whatever name_width says
 
     def test_name_grows_with_its_longest_name_not_a_fixed_width(self):
-        """Same window (200), same everything but the longest name, 12 then 20: NAME is 8 wider less
-        its share of the 8 spare columns it took (spread over five columns), so 5 to 8 wider."""
+        """Same window (200), same everything but the longest name, 16 then 24 (both over NAME's floor of
+        16): NAME is 8 wider less its share of the 8 spare columns it took (spread over four columns), so
+        5 to 8 wider."""
         widths = {}
-        for longest in ("Printer fixe", "Printer fix for desk"):  # 12, 20
+        for longest in ("Printer fix desk", "Printer fix for desk 12A"):  # 16, 24
             listing, _, _ = self.drawn(self.fleet([longest, "Laptop"]), 200)
-            widths[len(longest)] = self.starts(listing[0])["STATUS"] - 5
-        self.assertGreaterEqual(widths[20] - widths[12], 5, widths)
-        self.assertLessEqual(widths[20] - widths[12], 8, widths)
+            x = self.starts(listing[0])
+            widths[len(longest)] = x["LAST ACTIVE"] - x["NAME"]
+        self.assertGreaterEqual(widths[24] - widths[16], 5, widths)
+        self.assertLessEqual(widths[24] - widths[16], 8, widths)
 
     def test_sessions_name_ignores_the_name_width_setting(self):
         headers = {}
@@ -1148,7 +1159,7 @@ class SessionColumns(unittest.TestCase):
         self.assertTrue(cells[long_name][2], cells)  # it has its project
         for name, (status, when, proj) in cells.items():
             row = self.row(listing, name)
-            for text in (name, status, when, proj):
+            for text in (name, when, proj):
                 self.assertIn(text, row, (name, row))
             self.assertNotIn("…", row)
 
@@ -1156,9 +1167,9 @@ class SessionColumns(unittest.TestCase):
 
     def test_a_header_never_runs_into_the_next_one(self):
         """Every pair of drawn headers has a space between the first's text (its sort arrow included)
-        and the second's start, at widths from 100 to 200, sorted on LAST ACTIVE, CONTEXT, STATUS."""
+        and the second's start, at widths from 100 to 200, sorted on LAST ACTIVE, CONTEXT, NAME."""
         projects = self.fleet(["Printer fix", "Laptop", "Badge audit for the front lobby doors"], label="Fleet")
-        for sort in (("LAST ACTIVE", True), ("CONTEXT", True), ("STATUS", False), ("CONTEXT", False)):
+        for sort in (("LAST ACTIVE", True), ("CONTEXT", True), ("NAME", False), ("CONTEXT", False)):
             arrow = "▾" if sort[1] else "▴"
             for w in (100, 115, 130, 160, 200):
                 head = self.drawn(projects, w, sort=sort)[0][0]
@@ -1181,7 +1192,6 @@ class SessionColumns(unittest.TestCase):
             context_end = x["CONTEXT"] + len("CONTEXT")
             for name, (status, when, label) in cells.items():
                 row = self.row(listing, name)
-                self.assertEqual(row.find(status, x["STATUS"] - 2), x["STATUS"], (w, name, row))
                 self.assertEqual(row.find(when, x["LAST ACTIVE"] - 2), x["LAST ACTIVE"], (w, name, row))
                 s = next(q for q in self.sessions if q["name"] == name)
                 ctx = roost.ktok(s["tokens"])
@@ -1201,7 +1211,7 @@ class SessionColumns(unittest.TestCase):
             seen["x"] = pilot.app.query_one(roost.SessionList).region.x
         lines = self.run_on([proj], [self.select(lambda ui: setattr(ui, "view", CLOSED)), where], size=(160, 30), tab="Sessions").lines
         lines = [l[seen["x"]:] for l in lines]  # the list's part of each line
-        h = next(i for i, l in enumerate(lines) if l.startswith("     NAME"))
+        h = self.header_y(lines)
         x = self.starts(lines[h])
         row = next(l for l in lines[h + 1:] if "Old printer audit" in l)
         end = x["CONTEXT"] + len("CONTEXT")
@@ -1214,14 +1224,16 @@ class SessionColumns(unittest.TestCase):
         """At 240 with short values, each column is wider than its contents by about the same amount:
         no single column (PROJECT, last) takes the spare. A column's contents are its longest value or
         its title (with the sort arrow), whichever is longer, + 2; PROJECT runs to one column short of
-        the list's right edge."""
+        the outline's right edge."""
         listing, width, cells = self.drawn(self.fleet(self.SHORT), 240)
         x = self.starts(listing[0])
         self.assertEqual(list(x), [t for t, _ in self.TITLES], listing[0])
-        drawn = {"NAME": x["STATUS"] - 5, "STATUS": x["LAST ACTIVE"] - x["STATUS"],
+        right = listing[0].rstrip().rfind("│")  # the outline's right edge
+        self.assertGreater(right, x["PROJECT"], listing[0])
+        drawn = {"NAME": x["LAST ACTIVE"] - x["NAME"],
                  "LAST ACTIVE": x["CONTEXT"] - x["LAST ACTIVE"], "CONTEXT": x["PROJECT"] - x["CONTEXT"],
-                 "PROJECT": width - 1 - x["PROJECT"]}
-        values = {"NAME": [n for n in cells], "STATUS": [c[0] for c in cells.values()],
+                 "PROJECT": right - 1 - x["PROJECT"]}
+        values = {"NAME": [n for n in cells],
                   "LAST ACTIVE": [c[1] for c in cells.values()] + ["LAST ACTIVE ▾"],
                   "CONTEXT": [roost.ktok(s["tokens"]) for s in self.sessions], "PROJECT": [c[2] for c in cells.values()]}
         need = {t: max(len(v) for v in values[t] + [t]) + 2 for t in drawn}
@@ -1230,7 +1242,7 @@ class SessionColumns(unittest.TestCase):
             self.assertGreaterEqual(spare[t], 10, (t, spare, drawn))
         self.assertLessEqual(max(spare.values()) - min(spare.values()), 3, (spare, drawn))
 
-    # 6. A narrow window: PROJECT gives way first, then CONTEXT, LAST ACTIVE, STATUS; NAME last
+    # 6. A narrow window: PROJECT gives way first, then CONTEXT, LAST ACTIVE; NAME last
 
     def test_project_gives_way_first(self):
         """Find the narrowest window that shows every value whole; 3 columns narrower, only PROJECT
@@ -1254,34 +1266,349 @@ class SessionColumns(unittest.TestCase):
         full, narrow = fits(lo)[1], fits(lo - 3)[1]
         x, y = self.starts(full[0]), self.starts(narrow[0])
         self.assertIn("PROJECT", y, narrow[0])
-        for t in ("NAME", "STATUS", "LAST ACTIVE", "CONTEXT", "PROJECT"):
+        for t in ("NAME", "LAST ACTIVE", "CONTEXT", "PROJECT"):
             self.assertEqual(x[t], y[t], (t, full[0], narrow[0]))
         self.assertNotIn(label, self.row(narrow, long_name))
         self.assertIn(long_name, self.row(narrow, long_name))
 
     def test_then_context_then_last_active_and_name_keeps_its_width(self):
-        """At 100 columns, a longer and longer name: PROJECT goes first, then CONTEXT, then LAST
-        ACTIVE, and NAME stays its longest name + 2 while any column after it still has room."""
-        for n, gone, kept in ((56, ["PROJECT"], ["STATUS", "LAST ACTIVE"]),
-                              (66, ["PROJECT", "CONTEXT"], ["STATUS"]),
-                              (80, ["PROJECT", "CONTEXT", "LAST ACTIVE"], [])):
-            long_name = ("Quarterly laptop refresh and badge audit for the front lobby doors and the annex")[:n]
+        """At 100 columns, a longer and longer name (50 to 96, by 2): PROJECT goes first, then CONTEXT,
+        then LAST ACTIVE, each gone for good once gone, and NAME stays its longest name + 2 while any
+        column after it is still drawn."""
+        base = "Quarterly laptop refresh and badge audit for the front lobby doors and the annex and its loading dock"
+        gone_at = {}
+        for n in range(50, 98, 2):
+            long_name = base[:n]
             listing, _, cells = self.drawn(self.fleet([long_name, "Laptop refresh"], label="Printer fleet"), 100)
             x = self.starts(listing[0])
-            self.assertIn("STATUS", x, (n, listing[0]))
-            self.assertGreaterEqual(x["STATUS"] - 5, n + 2, (n, listing[0]))  # NAME whole
-            self.assertIn(long_name, self.row(listing, long_name), n)
-            for t in gone:
-                self.assertNotIn(t, x, (n, listing[0]))
-            for t in kept:
-                self.assertIn(t, listing[0], (n, listing[0]))
+            for t in ("PROJECT", "CONTEXT", "LAST ACTIVE"):
+                if t in x:
+                    self.assertNotIn(t, gone_at, (n, t, "back after it gave way", listing[0]))
+                else:
+                    gone_at.setdefault(t, n)
+            after = [t for t, _ in self.TITLES[1:] if t in x]
+            if after:
+                self.assertGreaterEqual(x[after[0]] - x["NAME"], n + 2, (n, listing[0]))  # NAME whole
+                self.assertIn(long_name, self.row(listing, long_name), n)
             for name, (status, when, label) in cells.items():
                 row = self.row(listing, name)
-                self.assertNotIn("Printer fleet", row, n)
-                if "STATUS" in kept:
-                    self.assertIn(status, row, (n, row))
-                if "LAST ACTIVE" in kept:
+                if "PROJECT" not in x:
+                    self.assertNotIn("Printer fleet", row, n)
+                if "CONTEXT" in x:  # LAST ACTIVE gives way only after CONTEXT: until then it's whole
                     self.assertIn(when, row, (n, row))
+        self.assertEqual(set(gone_at), {"PROJECT", "CONTEXT", "LAST ACTIVE"}, gone_at)
+        self.assertLess(gone_at["PROJECT"], gone_at["CONTEXT"], gone_at)
+        self.assertLess(gone_at["CONTEXT"], gone_at["LAST ACTIVE"], gone_at)
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class SessionRows(unittest.TestCase):
+    """The Running and Closed views: the view row as words (the current one bold, underlined, green), the
+    table in a rounded outline the tab's width with the view and its count in its top edge, the columns
+    NAME, LAST ACTIVE, CONTEXT, PROJECT, and each Session on two lines (its row, then its status mark and
+    its last message, dim) and a blank line. The panel under the table no longer shows the last message."""
+    setUp = TextualScreens.setUp
+    views_fixture = TextualScreens.views_fixture
+    closed = staticmethod(TextualScreens.closed)
+    look = staticmethod(TextualScreens.look)
+    select = staticmethod(TextualScreens.select)
+    keys = staticmethod(TextualScreens.keys)
+    on_session = TextualScreens.on_session
+
+    TONER = "Swapped the **toner** in `tray 2` and reprinted"
+    TONER_PLAIN = "Swapped the toner in tray 2 and reprinted"
+    LONG = "Imaged the spare laptops " + " ".join(f"step{i:02d}" for i in range(60))
+
+    def run_app(self, steps, size=(120, 40)):
+        """TextualScreens.run_app, 40 rows tall unless asked: at 30 the table holds only two Sessions."""
+        return TextualScreens.run_app(self, steps, size=size)
+
+    def rows_fixture(self):
+        """Three running Sessions: Printer fix (idle, a last message with ** and backticks), Laptop refresh
+        (waiting, a last message far longer than the window), Badge audit (idle, no last message)."""
+        self.sessions = [dict(session("Printer fix", mins=5, tokens=41000), summary=self.TONER),
+                         dict(session("Laptop refresh", state="waiting", mins=10, tokens=9000), summary=self.LONG),
+                         session("Badge audit", mins=20, tokens=2000)]
+
+    @staticmethod
+    def box(app):
+        """The Sessions table's outline: (top, bottom, left, right, lines), the rows of its top and bottom
+        edges and the columns of its left and right edges, on the screen as drawn."""
+        lines = screen_text(app)
+        top = next((y for y, l in enumerate(lines) if y > app.ui.view_row_y and "╭" in l), None)
+        assert top is not None, "no outline under the view row:\n" + "\n".join(lines)
+        left, right = lines[top].index("╭"), lines[top].find("╮")
+        assert right > left, f"the outline's top edge has no ╮: {lines[top]!r}"
+        bottom = next((y for y in range(top + 1, len(lines)) if len(lines[y]) > left and lines[y][left] == "╰"), None)
+        assert bottom is not None, "the outline has no bottom edge:\n" + "\n".join(lines)
+        return top, bottom, left, right, lines
+
+    @classmethod
+    def name_y(cls, app, name):
+        """The screen row of name's first line, inside the outline."""
+        top, bottom, left, right, lines = cls.box(app)
+        y = next((y for y in range(top + 1, bottom) if name in lines[y]), None)
+        assert y is not None, f"{name} isn't inside the outline:\n" + "\n".join(lines[top:bottom + 1])
+        return y
+
+    # 1. The view row: words, the current one bold, underlined and green, counts dim
+
+    def test_the_current_views_word_is_bold_underlined_and_green_and_the_others_and_every_count_dim(self):
+        self.views_fixture()
+        seen = {}
+
+        def styles(app):
+            y = app.ui.view_row_y
+            line = screen_text(app)[y]
+            out = {}
+            for label in roost.VIEWS:
+                m = re.search(rf"\b{label} (\d+)\b", line)
+                assert m, f"{label} and its count aren't in the view row {line!r}"
+                out[label] = ([style_at(app, y, x) for x in range(m.start(), m.start() + len(label))],
+                              [style_at(app, y, x) for x in range(m.start(1), m.end(1))])
+            return roost.VIEWS[app.ui.view], out, line
+        steps = [open_view("Sessions")]
+        for i in range(len(roost.VIEWS)):
+            steps += [self.look(seen, i, styles), self.keys("right")]
+        self.run_app(steps)
+        green, muted = roost.GREEN.lower(), roost.MUTED.lower()
+        self.assertEqual([seen[i][0] for i in range(len(roost.VIEWS))], list(roost.VIEWS), "the fixture: → went through each view")
+        for i in range(len(roost.VIEWS)):
+            current, out, line = seen[i]
+            for label, (word, count) in out.items():
+                with self.subTest(view=current, label=label):
+                    if label == current:
+                        self.assertTrue(all(color_of(st) == green and st.bold and st.underline for st in word),
+                                        f"{label} is bold, underlined and green: {line!r}")
+                    else:
+                        self.assertEqual({color_of(st) for st in word}, {muted}, f"{label} is dim while {current} shows")
+                        self.assertFalse([st for st in word if st.underline], f"{label} isn't underlined while {current} shows")
+                    self.assertEqual({color_of(st) for st in count}, {muted}, f"{label}'s count is dim: {line!r}")
+
+    # 2. The outline, its top edge, and what's inside it
+
+    def test_the_table_is_a_rounded_outline_the_tabs_width_with_the_view_and_its_count_in_its_top_edge(self):
+        self.views_fixture()  # 2 running, 3 closed
+        seen = {}
+        steps = [open_view("Sessions"), self.look(seen, "Running", self.box),
+                 self.keys("right"), self.look(seen, "Closed", self.box)]
+        app = self.run_app(steps)
+        width = app.size.width
+        for view, count in (("Running", 2), ("Closed", 3)):
+            top, bottom, left, right, lines = seen[view]
+            with self.subTest(view=view):
+                edge = lines[top][left:right + 1]
+                self.assertRegex(edge, rf"^╭─ {view} {count} ─+╮$")
+                self.assertRegex(lines[bottom][left:right + 1], r"^╰─+╯$")
+                self.assertLessEqual(left, 2, f"the outline starts at the tab's left: {lines[top]!r}")
+                self.assertGreaterEqual(right, width - 3, f"the outline runs to the tab's right: {lines[top]!r}")
+                for y in range(top + 1, bottom):
+                    self.assertEqual((lines[y][left:left + 1], lines[y][right:right + 1]), ("│", "│"),
+                                     f"row {y} has the outline's sides: {lines[y]!r}")
+                self.assertIn("NAME", lines[top + 1], "the column headers are the outline's first line")
+                self.assertEqual(lines[top + 2][left + 1:right].strip(), "", "a blank line under the headers")
+                names = [s["name"] for s in self.sessions if (s["state"] == "closed") == (view == "Closed")]
+                self.assertTrue(any(n in lines[top + 3] for n in names), f"a Session is under the blank line: {lines[top + 3]!r}")
+
+    def test_the_outlines_title_is_bold_its_count_dim_and_its_edge_in_the_line_color(self):
+        self.views_fixture()
+        seen = {}
+
+        def look(app):
+            top, bottom, left, right, lines = self.box(app)
+            m = re.search(r"Running (\d+)", lines[top])
+            return ([style_at(app, top, x) for x in range(m.start(), m.start() + len("Running"))],
+                    [style_at(app, top, x) for x in range(m.start(1), m.end(1))],
+                    [style_at(app, top, x) for x in (left, left + 1, right)] + [style_at(app, bottom, left + 3)])
+        self.run_app([open_view("Sessions"), self.look(seen, "x", look)])
+        title, count, edges = seen["x"]
+        self.assertTrue(all(st and st.bold for st in title), "the view's name is bold")
+        self.assertEqual({color_of(st) for st in count}, {roost.MUTED.lower()}, "its count is dim")
+        line = importlib.import_module("roost.app.widgets").LINE.lower()
+        self.assertEqual({color_of(st) for st in edges}, {line}, "the outline is in the line color, as the Projects tab's are")
+
+    def test_the_closed_views_section_headers_are_inside_the_outline(self):
+        self.views_fixture()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "dismissed.json"
+        spare = next(s for s in self.sessions if s["name"] == "Spare audit")
+        path.write_text(json.dumps([spare["id"]]))
+        patcher, _ = dismissed_file(path)
+        self.addCleanup(patcher.stop)
+        seen = {}
+        self.run_app([open_view("Sessions"), self.keys("right"), self.look(seen, "x", self.box)])
+        top, bottom, left, right, lines = seen["x"]
+        for head in ("Closed (2)", "Dismissed (1)"):
+            y = next((y for y, l in enumerate(lines) if head in l), None)
+            with self.subTest(head=head):
+                self.assertIsNotNone(y, "\n".join(lines))
+                self.assertTrue(top < y < bottom, f"{head} is inside the outline:\n" + "\n".join(lines[top:bottom + 1]))
+                self.assertGreater(lines[y].index(head), left)
+                self.assertEqual(lines[y][right:right + 1], "│", lines[y])
+
+    # 3. The columns: NAME, LAST ACTIVE, CONTEXT, PROJECT; no STATUS
+
+    def test_the_columns_are_name_last_active_context_and_project_with_no_status(self):
+        self.rows_fixture()
+        seen = {}
+
+        def look(app):
+            top, bottom, left, right, lines = self.box(app)
+            cells = {s["name"]: app.ui.status_cell(s)[0] for s in app.ui.srows}
+            return lines[top + 1], {s["name"]: lines[self.name_y(app, s["name"])] for s in app.ui.srows}, cells
+        self.run_app([open_view("Sessions"), self.look(seen, "x", look)])
+        head, rows, cells = seen["x"]
+        self.assertRegex(head, r"NAME.*\bLAST ACTIVE\b.*\bCONTEXT\b.*\bPROJECT\b")
+        self.assertNotIn("STATUS", head)
+        self.assertIn(roost.ktok(41000), rows["Printer fix"])  # 41k
+        for name, row in rows.items():
+            with self.subTest(name=name):
+                self.assertNotIn(cells[name], row, "its status isn't a column on its row")
+                self.assertFalse(set(row) & set("█▉▊▋▌▍▎▏░▒▓■"), f"CONTEXT has no bar: {row!r}")
+
+    # 4. Two lines a Session: its row, then its status mark and its last message; a blank line after
+
+    def lines_of(self, app):
+        """For each Session in the view: its row's text, its second line's, and the line after them, with
+        the selected row's › column, NAME's column, and each second line's ● color as drawn and as its
+        status is colored (status_cell's attr)."""
+        top, bottom, left, right, lines = self.box(app)
+        ui = app.ui
+        out = {}
+        for i, s in enumerate(ui.srows):
+            y = self.name_y(app, s["name"])
+            mark = lines[y + 1].find("●")
+            out[s["name"]] = {"y": y, "row": lines[y], "second": lines[y + 1], "after": lines[y + 2] if y + 2 < bottom else None,
+                              "mark": mark, "drawn": color_of(style_at(app, y + 1, mark)) if mark >= 0 else None,
+                              "want": color_of(ui.style(ui.status_cell(s)[1])), "selected": i == ui.sel,
+                              "msg": [style_at(app, y + 1, x) for x in range(mark + 1, right)]}
+        return out, lines[top + 1].index("NAME"), left, right
+
+    def test_each_session_is_its_row_then_its_status_mark_and_last_message_then_a_blank_line(self):
+        self.rows_fixture()
+        seen = {}
+        self.run_app([open_view("Sessions"), self.on_session("Printer fix"), self.look(seen, "x", self.lines_of)])
+        out, name_x, left, right = seen["x"]
+        sel = out["Printer fix"]
+        self.assertTrue(sel["selected"], "the fixture: Printer fix is selected")
+        tick = sel["row"].find("›")
+        self.assertTrue(left < tick < sel["row"].index("Printer fix"), f"› before the selected name: {sel['row']!r}")
+        last = max(out, key=lambda n: out[n]["y"])
+        for name, got in out.items():
+            with self.subTest(name=name):
+                self.assertEqual(got["mark"], tick, f"● in the column where › sits: {got['second']!r}")
+                self.assertEqual(got["drawn"], got["want"], "● is colored as its status is")
+                self.assertEqual(got["second"][left + 1:tick].strip(), "", got["second"])
+                if name != last:
+                    self.assertIsNotNone(got["after"])
+                    self.assertEqual(got["after"][left + 1:right].strip(), "", f"a blank line after {name}")
+        self.assertNotEqual(out["Printer fix"]["want"], out["Laptop refresh"]["want"], "the fixture: two statuses, two colors")
+        toner = out["Printer fix"]["second"]
+        self.assertEqual(toner.find(self.TONER_PLAIN), name_x, f"the last message, plain, starts under NAME: {toner!r}")
+        self.assertEqual(toner[right:right + 1], "│")
+        self.assertEqual(out["Badge audit"]["second"][left + 1:right].strip(), "●", "no last message: just the mark")
+
+    def test_the_last_message_is_dim_on_one_line_clipped_to_the_outline(self):
+        self.rows_fixture()
+        seen = {}
+        self.run_app([open_view("Sessions"), self.look(seen, "x", self.lines_of)])
+        out, name_x, left, right = seen["x"]
+        got = out["Laptop refresh"]
+        shown = got["second"][name_x:right].rstrip()
+        self.assertGreater(len(shown), 40, f"the message is drawn: {got['second']!r}")
+        self.assertTrue(self.LONG.startswith(shown.rstrip("…").rstrip()), f"its start, clipped: {shown!r}")
+        self.assertEqual(got["second"][right:right + 1], "│", "clipped inside the outline")
+        self.assertEqual(got["after"][left + 1:right].strip(), "", f"not wrapped onto the next line: {got['after']!r}")
+        x0 = name_x - got["mark"] - 1  # msg starts the column after the mark
+        text = [st for st, ch in zip(got["msg"][x0:], got["second"][name_x:right]) if ch.strip()]
+        self.assertTrue(text)
+        self.assertEqual({color_of(st) for st in text}, {roost.MUTED.lower()}, "the last message is dim")
+
+    def test_a_session_with_a_recap_shows_the_recaps_summary_plain(self):
+        import unittest.mock
+        loose = dict(session("Loose ends", mins=3), summary="the raw last message")
+        self.sessions = [loose]
+        recap = {"id": "loose-recap", "path": "/tmp/loose-recap.md", "summary": "Recap: cleared the **print** queue with `lpstat`",
+                 "last": time.time(), "sessions": [loose["id"]], "folder": None, "covered": {}}
+        seen = {}
+        with unittest.mock.patch.object(roost, "read_recaps", lambda: [recap]):
+            self.run_app([open_view("Sessions"), self.look(seen, "x", self.lines_of)])
+        out, name_x, left, right = seen["x"]
+        second = out["Loose ends"]["second"]
+        self.assertEqual(second.find("Recap: cleared the print queue with lpstat"), name_x, second)
+        self.assertNotIn("raw last message", second)
+
+    # 5. Either line selects; ↑ ↓ go Session by Session; scrolling keeps both lines in view
+
+    def test_a_click_on_either_of_a_sessions_lines_selects_it(self):
+        self.rows_fixture()
+        seen = {}
+
+        def click(name, line):
+            async def step(pilot):
+                pilot.app.redraw()
+                await pilot.pause()
+                await pilot.click(offset=(30, self.name_y(pilot.app, name) + line))
+                await pilot.pause()
+                seen[(name, line)] = pilot.app.ui.srows[pilot.app.ui.sel]["name"]
+            return step
+        self.run_app([open_view("Sessions"), self.on_session("Printer fix"),
+                      click("Badge audit", 1), click("Laptop refresh", 1), click("Printer fix", 0), click("Laptop refresh", 0)])
+        self.assertEqual(seen, {("Badge audit", 1): "Badge audit", ("Laptop refresh", 1): "Laptop refresh",
+                                ("Printer fix", 0): "Printer fix", ("Laptop refresh", 0): "Laptop refresh"})
+
+    def test_up_and_down_move_session_by_session(self):
+        self.rows_fixture()
+        seen = {}
+        name = lambda app: app.ui.srows[app.ui.sel]["name"]
+        order = lambda app: [s["name"] for s in app.ui.srows]
+        steps = [open_view("Sessions"), self.select(lambda ui: setattr(ui, "sel", 0)), self.look(seen, "order", order),
+                 self.look(seen, 0, name)]
+        for i, k in enumerate(["down", "down", "up"], 1):
+            steps += [self.keys(k), self.look(seen, i, name)]
+        self.run_app(steps)
+        o = seen["order"]
+        self.assertEqual([seen[i] for i in range(4)], [o[0], o[1], o[2], o[1]])
+
+    def test_scrolling_keeps_the_selected_sessions_both_lines_in_view(self):
+        self.sessions = [dict(session(f"Desk {i:02d}", mins=i + 1), summary=f"Note for desk {i:02d}") for i in range(14)]
+        seen = []
+
+        async def check(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            app = pilot.app
+            s = app.ui.srows[app.ui.sel]
+            top, bottom, left, right, lines = self.box(app)
+            y = next((y for y in range(top + 1, bottom) if s["name"] in lines[y]), None)
+            seen.append((s["name"], y is not None and top < y + 1 < bottom and s["summary"] in lines[y + 1],
+                         "\n".join(lines[top:bottom + 1])))
+        steps = [open_view("Sessions"), self.select(lambda ui: setattr(ui, "sel", 0)), check]
+        for k in ["down"] * 13 + ["up"] * 13:
+            steps += [self.keys(k), check]
+        self.run_app(steps, size=(120, 30))
+        self.assertEqual(len({n for n, _, _ in seen}), 14, "the fixture: ↓ reached every Session")
+        for name, ok, shown in seen:
+            self.assertTrue(ok, f"{name}'s row and its last message are both in view:\n{shown}")
+
+    # 6. The panel keeps its facts but no longer shows the last message
+
+    def test_the_panel_has_no_last_message_now_the_list_shows_it(self):
+        self.rows_fixture()
+        seen = {}
+
+        def look(app):
+            box = app.query_one(roost.SessionPanel).region
+            lines = screen_text(app)
+            return lines[box.y:box.y + box.height], lines[:box.y]
+        self.run_app([open_view("Sessions"), self.on_session("Printer fix"), self.look(seen, "x", look)])
+        panel, above = seen["x"]
+        text = "\n".join(panel)
+        self.assertIn("Printer fix", text, "the panel shows the selected Session")
+        self.assertRegex(text, r"Project +none")
+        self.assertIn("Context", text)
+        self.assertTrue(any(self.TONER_PLAIN in l for l in above), "the list shows its last message")
+        self.assertNotIn("Swapped the", text, "the panel doesn't")
 
 
 if __name__ == "__main__":
