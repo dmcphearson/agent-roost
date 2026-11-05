@@ -2761,6 +2761,29 @@ class DetailPane(unittest.TestCase):
             self.assertEqual(got, [path], label)
         self.assertEqual((edited, shown), ([path], [path]), "each action did only its own thing")
 
+    def test_on_linux_with_a_display_a_handoff_shows_in_files_by_opening_its_folder(self):
+        """The handoff's menu names the file manager this computer has ("Files" on Linux with a display);
+        choosing it opens the folder that holds the Handoff, since xdg-open can't select a file."""
+        import unittest.mock
+        system, shell = importlib.import_module("roost.core.system"), importlib.import_module("roost.app.shell")
+        path = next((self.root / "fleet" / "handoffs").glob("*-cc000000.md"))  # Toner check
+        ran, seen = [], {}
+
+        async def pick(pilot):
+            ui = pilot.app.ui
+            at = next((i for i, o in enumerate(ui.choice_options()) if o[0] == "Show it in Files"), None) if ui.choosing else None
+            if at is not None:  # else the menu's assertion below says what came up instead
+                ui.choosing["sel"] = at
+                await pilot.press("enter")
+        with unittest.mock.patch.object(system.sys, "platform", "linux"), \
+                unittest.mock.patch.dict(system.os.environ, {"WAYLAND_DISPLAY": "wayland-0"}, clear=True), \
+                unittest.mock.patch.object(system.shutil, "which", lambda name, *a, **k: "/usr/bin/xdg-open" if name == "xdg-open" else None), \
+                unittest.mock.patch.object(shell.subprocess, "run", lambda argv, *a, **k: ran.append(list(argv))):
+            self.run_on(self.projects, [self.on_project("fleet"), self.keys("right"), self.index_of("handoff", "Toner check"),
+                                        self.keys("enter"), self.state(seen, "menu"), pick], size=self.SIZE)
+        self.assertEqual(seen["menu"]["menu"], ("Toner check", ["Open it", "Show it in Files"]))
+        self.assertIn(["xdg-open", str(path.parent)], ran)
+
     # the mouse
 
     def test_a_click_on_an_items_line_selects_it_and_moves_the_keys_into_the_pane(self):

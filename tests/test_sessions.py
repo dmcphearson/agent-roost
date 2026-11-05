@@ -243,6 +243,17 @@ class Retention(unittest.TestCase):
             finally:
                 roost.RETENTION_SETTINGS = saved
 
+    def test_managed_settings_come_from_this_computers_path_ahead_of_the_users(self):
+        """RETENTION_SETTINGS (built when roost starts) is this computer's managed settings,
+        system.managed_settings() (on Linux, /etc/claude-code/managed-settings.json), then the user's
+        ~/.claude/settings.json. The real platform is asked here, not the tests' macOS default, because
+        the list was built on it; test_settings_priority_and_default pins the order's effect."""
+        import importlib, sys, unittest.mock
+        system = importlib.import_module("roost.core.system")
+        with unittest.mock.patch.object(system.sys, "platform", sys.platform):
+            here = system.managed_settings()
+        self.assertEqual(roost.RETENTION_SETTINGS, [here, Path.home() / ".claude" / "settings.json"])
+
     def test_parse_reads_entrypoint(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "abc.jsonl"

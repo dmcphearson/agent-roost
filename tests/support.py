@@ -47,6 +47,24 @@ class Everything:
 
 roost = Everything()
 
+
+class MacLike:
+    """sys as roost.core.system sees it in every test: the real one, except that the platform is macOS,
+    so what the screens offer (Finder, pbcopy, open) is the same on any computer. A test that wants
+    another platform patches system.sys.platform, which wins over this default; the real sys.platform
+    is never changed."""
+    platform = "darwin"
+
+    def __getattr__(self, name):
+        return getattr(sys, name)
+
+
+import importlib
+try:  # once roost.core.system exists
+    importlib.import_module("roost.core.system").sys = MacLike()
+except ModuleNotFoundError:
+    pass
+
 RUNNING, CLOSED = roost.VIEWS.index("Running"), roost.VIEWS.index("Closed")
 _SCRATCH = tempfile.TemporaryDirectory()
 roost.NOTES, roost.RECAPS = Path(_SCRATCH.name) / "notes", Path(_SCRATCH.name) / "sessions"  # never the person's own
