@@ -434,7 +434,7 @@ class ProjectsTab:
         return x[1], self.handoff_actions(x[2])
 
     def handoff_actions(self, path):
-        return [("Open it", lambda: self.edit(path)), ("Show it in Finder", lambda: self.show_in_finder(path, reveal=True))]
+        return [("Open it", lambda: self.edit(path))] + self.show_in("Show it", path, reveal=True)
 
     def keys_detail(self, k, r):
         """The detail pane's keys, with the keys in it: ↑↓ through its items, enter for one's actions."""
@@ -785,7 +785,7 @@ class ProjectsTab:
             organize.append(("Edit its description", lambda: self.edit_description(p)))
         if p.get("readme") and real:
             organize.append(("Rename", lambda: self.rename_project_ui(p)))
-        organize.append(("Show its folder in Finder", lambda: self.show_in_finder(p["path"])))
+        organize += self.show_in("Show its folder", p["path"])
         if p["readme"] and not p["closed"] and not p.get("adopted", True):  # a demo project counts as adopted
             remove.append(("Adopt it: plan its README and files, then write its Handoffs", lambda: self.ask_adopt(p)))
         for name, _ in p.get("archives") or []:
@@ -809,7 +809,7 @@ class ProjectsTab:
             organize.append(("Edit its description", lambda: self.edit_description(s)))
         if real:
             organize.append(("Rename", lambda: self.rename_project_ui(s)))
-        organize.append(("Show its folder in Finder", lambda: self.show_in_finder(s["path"])))
+        organize += self.show_in("Show its folder", s["path"])
         return grouped(work, organize, [("Delete", lambda: self.delete_project_ui(s))] if real else [])
 
     def start_in_sub(self, p):

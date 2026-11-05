@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Resizable project list:** on the Projects tab, < and > make the list 4 columns narrower or wider, or drag the line between it and the details. It stays at least 24 columns and leaves the details at least 40, and roost keeps the width in config.json as project_list_width
+- **Copy and Show in Files off the Mac:** copying uses tmux's clipboard inside tmux (it reaches your own computer's clipboard over SSH), then wl-copy, xclip or xsel, else the terminal itself. Show in Finder says Files and opens it with xdg-open on Linux with a display, and isn't offered without one. Claude Code's managed settings are read from `/etc/claude-code/` on Linux
 
 ## 2026.11.02
 

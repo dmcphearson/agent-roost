@@ -14,6 +14,7 @@ from roost.core.config import (
 )
 from roost.core.formatting import short
 from roost.core import config
+from roost.core import system
 
 
 # ---------- data ----------
@@ -434,7 +435,7 @@ def regather(old):
 
 
 # Settings files that can set retention, highest priority first (managed settings override the user's)
-RETENTION_SETTINGS = [Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+RETENTION_SETTINGS = [system.managed_settings(),
                       Path.home() / ".claude" / "settings.json"]
 
 

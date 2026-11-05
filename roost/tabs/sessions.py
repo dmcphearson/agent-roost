@@ -432,7 +432,7 @@ class SessionsTab:
             remove.append(("Delete to the Trash", lambda: self.ask_confirm("delete", s)))
         organize.append(("Copy its id", lambda: self.copy_id(s)))
         if s.get("cwd") and os.path.isdir(s["cwd"]):
-            organize.append(("Show its folder in Finder", lambda: self.show_in_finder(s["cwd"])))
+            organize += self.show_in("Show its folder", s["cwd"])
         return grouped(work, organize, remove)
 
     def dismiss(self, s, on=True):

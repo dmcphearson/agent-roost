@@ -15,6 +15,7 @@ from roost.core import install
 from roost.core import plugin
 from roost.core import adopt as adopting
 from roost.core import terminals
+from roost.core import system
 
 
 # ---------- UI ----------
@@ -792,14 +793,29 @@ class Shell:
             config.log(f"copy: {e}")
             self.msg = f"Couldn't copy: {e}"
 
-    @staticmethod
-    def clipboard(text):
-        subprocess.run(["pbcopy"], input=text, text=True, timeout=5, check=True)
+    def clipboard(self, text):
+        cmd = system.copy_command()
+        if cmd:
+            subprocess.run(cmd, input=text, text=True, timeout=5, check=True)
+        else:
+            self.terminal_copy(text)
+
+    def terminal_copy(self, text):
+        """Hand text to the terminal's own clipboard (OSC 52); only a screen can."""
+        raise RuntimeError("no clipboard program here")
+
+    def show_in(self, label, path, reveal=False):
+        """The menu item that shows path in the file manager ("Show it" in Finder or Files), or none
+        when this computer has no file manager to show it in."""
+        fm = system.file_manager()
+        return [(f"{label} in {fm}", lambda: self.show_in_finder(path, reveal))] if fm else []
 
     def show_in_finder(self, path, reveal=False):
-        if path and os.path.exists(path):
-            subprocess.run(["open", "-R", path] if reveal else ["open", path], stdin=subprocess.DEVNULL, timeout=10)
+        if not (path and os.path.exists(path)):
+            self.msg = "Its folder no longer exists"
+        elif cmd := system.open_command(path, reveal):
+            subprocess.run(cmd, stdin=subprocess.DEVNULL, timeout=10)
             self.msg = f"Opened {short(path)}"
         else:
-            self.msg = "Its folder no longer exists"
+            self.msg = "No file manager here"
         return None

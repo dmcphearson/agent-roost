@@ -214,7 +214,7 @@ class NotesTab:
         if not n["project"]:
             organize.append(("Make it a project", lambda: self.note_to_project(n)))
         organize.append(("Edit its tags", lambda: self.edit_tags(n)))
-        organize.append(("Show it in Finder", lambda: self.show_in_finder(n["path"], reveal=True)))
+        organize += self.show_in("Show it", n["path"], reveal=True)
         return grouped(work, organize, [("Delete to the Trash", lambda: self.ask_confirm("note", n))])
 
     def keys_notes(self, k, rows):

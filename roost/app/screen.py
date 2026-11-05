@@ -51,6 +51,9 @@ class TextualUI(UI):
         self.styles = {}
         self.too_small = False
 
+    def terminal_copy(self, text):
+        self.app.copy_to_clipboard(text)  # OSC 52: the terminal puts it on its clipboard, over SSH too
+
     @staticmethod
     def pair(n):
         return n << 8
