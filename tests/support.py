@@ -18,6 +18,25 @@ sys.path.insert(0, str(ROOT))
 import roost as package
 
 
+class MacLike:
+    """sys as roost.core.system sees it in every test: the real one, except that the platform is macOS,
+    so what the screens offer (Finder, pbcopy, open) is the same on any computer. A test that wants
+    another platform patches system.sys.platform, which wins over this default; the real sys.platform
+    is never changed, and the namespace below never hands it out as roost.sys."""
+    platform = "darwin"
+
+    def __getattr__(self, name):
+        return getattr(sys, name)
+
+
+import importlib
+package.modules()  # every module loads on the real platform first (sessiondata builds RETENTION_SETTINGS then)
+try:  # once roost.core.system exists
+    importlib.import_module("roost.core.system").sys = MacLike()
+except ModuleNotFoundError:
+    pass
+
+
 class Everything:
     """All of roost's modules as one namespace, so a test reads or replaces a name without knowing
     which module defines it. Replacing one sets it in its defining module, where every caller sees it."""
@@ -25,8 +44,9 @@ class Everything:
         object.__setattr__(self, "_mods", package.modules())
         where = {}
         for m in self._mods:
-            for name in vars(m):
-                where.setdefault(name, m)
+            for name, value in vars(m).items():
+                if not isinstance(value, MacLike):  # a stand-in is no module's own name
+                    where.setdefault(name, m)
         object.__setattr__(self, "_where", where)
 
     def __getattr__(self, name):
@@ -46,24 +66,6 @@ class Everything:
 
 
 roost = Everything()
-
-
-class MacLike:
-    """sys as roost.core.system sees it in every test: the real one, except that the platform is macOS,
-    so what the screens offer (Finder, pbcopy, open) is the same on any computer. A test that wants
-    another platform patches system.sys.platform, which wins over this default; the real sys.platform
-    is never changed."""
-    platform = "darwin"
-
-    def __getattr__(self, name):
-        return getattr(sys, name)
-
-
-import importlib
-try:  # once roost.core.system exists
-    importlib.import_module("roost.core.system").sys = MacLike()
-except ModuleNotFoundError:
-    pass
 
 RUNNING, CLOSED = roost.VIEWS.index("Running"), roost.VIEWS.index("Closed")
 _SCRATCH = tempfile.TemporaryDirectory()

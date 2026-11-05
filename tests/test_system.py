@@ -107,10 +107,19 @@ class ThisComputer(unittest.TestCase):
         s = self.on("linux")
         self.assertEqual(s.managed_settings(), Path("/etc/claude-code/managed-settings.json"))
 
-    def test_it_is_listed_right_after_config(self):
-        mods = package.MODULES
-        self.assertEqual(mods[mods.index("core.config") + 1], "core.system")
-        self.assertIs(roost.system, system())  # reachable through the shared namespace
+    def test_it_comes_before_every_module_that_imports_it(self):
+        """MODULES is lowest first: core.system is listed, ahead of each module that holds it (at least
+        sessiondata and the shell); roost.system is that module, and roost.sys is the real sys, never the
+        tests' macOS stand-in."""
+        mods, s = package.MODULES, system()
+        self.assertIn("core.system", mods)
+        users = [name for name in mods
+                 if any(v is s for v in vars(importlib.import_module(f"roost.{name}")).values())]
+        self.assertTrue({"core.sessiondata", "app.shell"} <= set(users), users)
+        for name in users:
+            self.assertLess(mods.index("core.system"), mods.index(name), name)
+        self.assertIs(roost.system, s)  # reachable through the shared namespace
+        self.assertIs(roost.sys, sys)
 
 
 if __name__ == "__main__":
