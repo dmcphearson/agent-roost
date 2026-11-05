@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Resizable project list:** on the Projects tab, < and > make the list 4 columns narrower or wider, or drag the line between it and the details. It stays at least 24 columns and leaves the details at least 40, and roost keeps the width in config.json as project_list_width
+
 ## 2026.11.02
 
 - **Sessions rows:** the views are words over the table, the current one underlined, each with its count. The table sits in an outline with the view in its top edge. Each Session takes two lines, its row and then its status mark and last message; STATUS is no longer a column, and the panel no longer repeats the last message

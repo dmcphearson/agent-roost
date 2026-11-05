@@ -250,7 +250,9 @@ if Widget:
                 small.refresh()
                 return
             self.drawn = ui.draw()
-            self.query_one(ProjectList).display = ui.TABS[ui.tab].name == "Projects"  # the other tabs take the whole width
+            plist = self.query_one(ProjectList)
+            plist.display = ui.TABS[ui.tab].name == "Projects"  # the other tabs take the whole width
+            plist.styles.width = ui.list_width()
             for i, tab in enumerate(ui.TABS):
                 view = self.query_one(tab.widget)
                 view.display = i == ui.tab

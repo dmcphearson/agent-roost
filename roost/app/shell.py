@@ -52,11 +52,18 @@ RIGHT_CLICK = curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED
 BAR_KEYS = "↑↓ move   ←→ views   enter actions   / search   ctrl+n new   tab next tab   ? help   ctrl+q quit"
 LIST_KEYS = BAR_KEYS.replace("←→ views", "→ into details")  # the Projects tab, with the keys in its list
 DETAIL_KEYS = BAR_KEYS.replace("←→ views", "← back   page up/down scroll")  # and with them in a project's details
-SIDEBAR_W = 34  # the Projects tab's list; its details take the rest
+SIDEBAR_W = 34  # the Projects tab's list to start with; its details take the rest
+LIST_MIN, PANE_MIN, LIST_STEP = 24, 40, 4  # the list's narrowest, the details' narrowest, and what < and > move it by
 PIN = "\uf435"  # a pinned Session's mark: Nerd Font's pin (nf-oct-pin), which Ghostty ships
 TAB_X = 12  # where the first tab's name starts: the views and searches under the tabs line up with it
 SEARCH_KEYS = "type to search · enter keep it · esc clear"
 NOTE_READ_KEYS = "↑↓ scroll   page up/down a screen   ← or esc back to the list   enter actions"
+
+
+def saved_list_width():
+    """The Projects list's width as saved in config.json, or SIDEBAR_W when there's none to use."""
+    w = config.read_config().get("project_list_width")
+    return w if type(w) is int else SIDEBAR_W
 
 
 def start_tab(names):
@@ -75,6 +82,7 @@ class Shell:
     reading, fresh, told = False, None, None  # a refresh's reads in a thread (see read_later)
     keys_seen = 0  # keys so far: a read that a key came during may be out of date
     focus, dsel = "side", 0  # on the Projects tab, where keys go: its list ("side") or the details ("pane")
+    list_w = SIDEBAR_W  # the Projects list's width as set (setup reads the saved one); list_width() holds it to the window
 
     def setup(self, sessions, query):
         """Everything the screens keep, read once at start: no terminal is touched."""
@@ -93,6 +101,7 @@ class Shell:
         names = [tab.name for tab in self.TABS]
         self.tab = names.index("Sessions") if query else start_tab(names)  # a search is for Sessions
         self.focus = "side"
+        self.list_w = saved_list_width()
         self.psel, self.ptop, self.prow_y, self.tab_x, self.dopen = 0, 0, {}, [], None
         self.pquery = ""  # the Projects tab's search
         self.folded = {"Inactive", "Closed"}  # closed sections
@@ -522,6 +531,21 @@ class Shell:
                             self.switch_tab(i)
                 return None
         return tab.keys(self, k, drawn)
+
+    def list_width(self):
+        """The Projects list's width on screen, its divider included: as set, held between LIST_MIN and
+        what leaves the details PANE_MIN columns."""
+        return self.held_list_width(self.list_w)
+
+    def held_list_width(self, w):
+        scr = getattr(self, "scr", None)  # none yet: no window to hold it to
+        return max(LIST_MIN, min(w, scr.getmaxyx()[1] - PANE_MIN) if scr else w)
+
+    def set_list_width(self, w):
+        """Set the Projects list's width (held as list_width holds it) and save it when it changes."""
+        self.list_w = self.held_list_width(w)
+        if config.read_config().get("project_list_width") != self.list_w:
+            config.save_config(project_list_width=self.list_w)
 
     def query_attr(self):
         """Each tab keeps its own search."""

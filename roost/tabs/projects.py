@@ -19,7 +19,7 @@ from roost.core.adopt import (
     plan_problems,
 )
 from roost.core.formatting import clip, plain_text, short, short_when, slug
-from roost.app.shell import (DETAIL_KEYS, LIST_KEYS, LAST_MESSAGE_LINES, RECENT_PROJECT_DAYS, Row, SECTION_RULES, SIDEBAR_W,
+from roost.app.shell import (DETAIL_KEYS, LIST_KEYS, LAST_MESSAGE_LINES, LIST_STEP, RECENT_PROJECT_DAYS, Row, SECTION_RULES,
                              first_action, grouped)
 from roost.core.config import VIEWS
 from roost.app.widgets import Widget
@@ -610,7 +610,7 @@ class ProjectsTab:
         self.corner = (root + (" · missing: run roost setup" if self.projects is None else ""),
                        self.YELLOW | curses.A_BOLD if self.projects is None else self.DIM)
         self.subhead = None
-        self.pname, self.pfields = self.panel_of(r, h, w - SIDEBAR_W - 4)  # the pane is w - SIDEBAR_W - 1 wide; its outline takes 3 more
+        self.pname, self.pfields = self.panel_of(r, h, w - self.list_width() - 4)  # the pane is w - list_width() - 1 wide; its outline takes 3 more
         self.pstatus = self.name_note(r)
         keys = DETAIL_KEYS if self.focus == "pane" else LIST_KEYS
         items = self.detail_items(r) if r and self.focus == "pane" else []
@@ -713,6 +713,7 @@ class ProjectsTab:
         ("Projects", f"the {RECENT_ROWS} most recently worked open projects, then More projects (the rest, and the closed ones), opened in place with enter or →"),
         ("Details", "the selected project's: Next, Current state, sub-projects, Sessions, Handoffs, notes, and spend · → moves into them, ← back · the wheel or page up/down scrolls them"),
         ("Sub-projects", "pieces of a project's work (feature, bugfix, research, chore), each with its own README and Handoffs; New sub-project is in a project's actions"),
+        ("Width", "< and > make the list narrower or wider, or drag the line between it and the details; roost keeps the width"),
         ("Marks", "● a Session runs in it or one of its sub-projects · ◆ ready to pick up: a Handoff newer than its last Session"),
         ("Sessions", "Show its Sessions, in a project's actions, opens the Sessions tab on just its Sessions, searching project:<its id>"),
         ("Kinds", "each project has one category (what kind of work) and any tags (what it's about), both from its actions"),
@@ -936,7 +937,10 @@ class ProjectsTab:
     def keys_projects(self, k, rows):
         """The Projects tab's keys: the list's, or the details' once → has moved the keys there (see keys_detail)."""
         r = rows[self.psel] if rows and self.psel < len(rows) else None
-        if (isinstance(k, tuple) and k[1] >= SIDEBAR_W) or self.focus == "pane":  # the details'
+        if k in ("<", ">"):  # narrow or widen the list
+            self.set_list_width(self.list_width() + (LIST_STEP if k == ">" else -LIST_STEP))
+            return None
+        if (isinstance(k, tuple) and k[1] >= self.list_width()) or self.focus == "pane":  # the details'
             return self.keys_detail(k, r)
         if isinstance(k, tuple):
             _, mx, my, bstate = k
@@ -979,7 +983,37 @@ class ProjectsTab:
 if Region:
     class ProjectList(Region):
         """The Projects tab's list: the recent projects, More projects, and + New project, each project with
-        its marks at the right."""
+        its marks at the right. Its divider, the right border, drags to make it narrower or wider."""
+        dragging = dragged = False
+
+        # Textual runs Region's handlers after these unless prevent_default() says not to: calling them
+        # here as well would make one click two, and two on one row are a double-click.
+        def on_mouse_down(self, event):
+            self.dragged = False  # a drag's release that brought no click mustn't eat this one
+            if event.button == 1 and event.screen_x == self.region.right - 1:  # on the divider
+                event.stop()
+                event.prevent_default()
+                self.dragging = True
+                self.capture_mouse()
+
+        def on_mouse_move(self, event):
+            if self.dragging:  # the divider follows the mouse; it's saved when let go
+                self.ui.list_w = event.screen_x + 1
+                self.app.redraw()
+
+        def on_mouse_up(self, event):
+            if self.dragging:
+                event.stop()
+                self.dragging, self.dragged = False, True  # the click that follows isn't a click on a row
+                self.release_mouse()
+                self.ui.set_list_width(event.screen_x + 1)
+                self.app.redraw()
+
+        def on_click(self, event):
+            if self.dragged:
+                self.dragged = False
+                event.stop()
+                event.prevent_default()
         def lines(self):
             ui, w, y0 = self.ui, self.size.width, self.region.y
             rows = getattr(ui, "prows", [])
