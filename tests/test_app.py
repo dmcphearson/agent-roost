@@ -549,6 +549,58 @@ class Tabs(unittest.TestCase):
         self.assertEqual((len(done), self.ui.asking, self.ui.msg), (1, None, "Cancelled"))
 
 
+
+class OpenInToggle(unittest.TestCase):
+    """#325: ctrl+t on any tab flips open_in between tab and window (missing is tab), saves it in config.json,
+    and says which; not while typing in a search or a prompt. ? names the current choice. Uses Tabs' UI."""
+    setUp, tearDown = Tabs.setUp, Tabs.tearDown
+
+    def help_text(self):
+        return " ".join(f"{a} {b}" for a, b in self.ui.help_rows())
+
+    def test_ctrl_t_is_ctrl_t_in_the_curses_screen(self):
+        self.assertEqual(roost.UI.CONTROL_KEYS.get("\x14"), "ctrl+t")
+
+    def test_ctrl_t_flips_between_a_window_and_a_tab_and_saves_it(self):
+        self.ui.dispatch("ctrl+t", None)  # nothing saved yet counts as tab
+        self.assertEqual((roost.read_config().get("open_in"), self.ui.msg), ("window", "Sessions open in a new window"))
+        self.ui.dispatch("ctrl+t", None)
+        self.assertEqual((roost.read_config().get("open_in"), self.ui.msg), ("tab", "Sessions open in a new tab"))
+        self.assertEqual(self.got, [], "ctrl+t goes to no tab's keys")
+
+    def test_ctrl_t_works_on_every_tab(self):
+        for tab, before, after in [(0, "window", "tab"), (1, "tab", "window"), (1, "sideways", "window")]:
+            with self.subTest(tab=tab, before=before):
+                roost.save_config(open_in=before)
+                self.ui.tab = tab
+                self.ui.dispatch("ctrl+t", None)
+                self.assertEqual(roost.read_config().get("open_in"), after)
+        self.assertEqual(self.got, [])
+
+    def test_ctrl_t_does_nothing_to_open_in_while_searching_or_in_a_prompt(self):
+        roost.save_config(open_in="window")
+        self.ui.tab = 1  # Projects: its search needs no view
+        self.ui.dispatch("/", None)
+        self.ui.dispatch("ctrl+t", None)
+        self.assertTrue(self.ui.searching)
+        self.assertEqual(roost.read_config().get("open_in"), "window")
+        self.ui.searching = False
+        self.ui.ask("Name: ", "x", lambda text: None)
+        self.ui.dispatch("ctrl+t", None)
+        self.assertIsNotNone(self.ui.asking)
+        self.assertEqual(roost.read_config().get("open_in"), "window")
+
+    def test_help_names_ctrl_t_and_the_current_choice(self):
+        self.assertIn("ctrl+t", self.help_text())
+        roost.save_config(open_in="window")
+        entry = next((f"{a} {b}" for a, b in self.ui.help_rows() if "ctrl+t" in f"{a} {b}"), "")
+        self.assertIn("window", entry)
+        roost.save_config(open_in="tab")
+        entry_tab = next((f"{a} {b}" for a, b in self.ui.help_rows() if "ctrl+t" in f"{a} {b}"), "")
+        self.assertNotEqual(entry, entry_tab, "the entry changes with the choice")
+        self.assertIn("tab", entry_tab)
+
+
 class KeyBar(unittest.TestCase):
     def bar(self, width, keys, note=""):
         ui = object.__new__(roost.UI)
@@ -702,6 +754,69 @@ class WorkedStaysInFilesAndCommands(unittest.TestCase):
 
     def test_a_handoffs_times_keep_the_long_form(self):
         self.assertRegex(roost.iso_time("2026-10-07T16:12:00.000Z"), r"^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d\d (am|pm)$")
+
+
+
+class SetupOpenIn(unittest.TestCase):
+    """#325: roost setup asks whether Sessions open in a new tab or a new window (tab by default) after
+    the terminal app, and saves open_in with the rest. Nothing real runs: no claude, no osascript."""
+    QUESTION = "Open Sessions in a new tab or a new window?"
+
+    def run_setup(self, terminal_answer, open_in_answer=""):
+        """roost setup with Ghostty the only terminal installed (options: 1 Ghostty, 2 same). Returns
+        (exit code, what it printed and asked, the saved config, the scripts osa ran)."""
+        import subprocess, unittest.mock
+        install = sys.modules["roost.core.install"]
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        projects = Path(tmp.name) / "projects"
+        projects.mkdir()
+        saved = roost.CONFIG
+        roost.CONFIG = Path(tmp.name) / "config.json"
+        self.addCleanup(setattr, roost, "CONFIG", saved)
+        out, asked, scripts = io.StringIO(), [], []
+
+        def run(argv, **kw):
+            return subprocess.CompletedProcess(argv, 0, "[]" if "agents" in argv else "9.9.9 (Claude Code)", "")
+
+        def answer(prompt=""):
+            asked.append(prompt)
+            if "Projects folder" in prompt:
+                return str(projects)
+            if len(asked) == 1:
+                return terminal_answer
+            return open_in_answer
+
+        with unittest.mock.patch.object(install.shutil, "which", lambda name: f"/fake/bin/{name}"), \
+                unittest.mock.patch.object(install.subprocess, "run", run), \
+                unittest.mock.patch.object(install, "setup_textual", lambda: 0), \
+                unittest.mock.patch.object(install, "setup_plugin", lambda: 0), \
+                unittest.mock.patch.object(install, "app_installed", lambda app: app == "Ghostty"), \
+                unittest.mock.patch.object(roost.terminals, "detect_terminal", lambda: "ghostty"), \
+                unittest.mock.patch.object(roost.terminals, "osa", lambda script, *a: scripts.append(script) or "ok"), \
+                unittest.mock.patch("builtins.input", answer), contextlib.redirect_stdout(out):
+            code = install.setup()
+        return code, out.getvalue() + "\n".join(asked), roost.read_config(), scripts
+
+    def test_enter_keeps_a_tab_and_it_is_saved(self):
+        code, text, cfg, scripts = self.run_setup("1", "")
+        self.assertEqual(code, 0)
+        self.assertIn(self.QUESTION, text)
+        self.assertEqual(cfg.get("open_in"), "tab")
+        self.assertEqual(cfg.get("terminal"), "ghostty")
+        self.assertTrue(cfg.get("projects_dir"))
+
+    def test_the_test_window_is_still_a_window(self):
+        code, text, cfg, scripts = self.run_setup("1", "")
+        self.assertEqual(scripts, [roost.TERMINALS["ghostty"]["new"]])
+
+    def test_this_terminal_does_not_ask_or_save_open_in(self):
+        code, text, cfg, scripts = self.run_setup("2")
+        self.assertEqual(code, 0)
+        self.assertNotIn(self.QUESTION, text)
+        self.assertNotIn("open_in", cfg)
+        self.assertEqual(cfg.get("terminal"), "same")
+        self.assertEqual(scripts, [])
 
 
 if __name__ == "__main__":
