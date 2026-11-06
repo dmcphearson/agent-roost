@@ -2013,6 +2013,17 @@ class SectionData(unittest.TestCase):
                 (roost.handoff_time(paths[0]), "Printer fix", str(paths[0])), (roost.handoff_time(paths[2]), paths[2].stem, str(paths[2]))]
         self.assertEqual([tuple(h) for h in p["handoffs"]], want)
 
+    def test_a_handoff_with_a_title_is_listed_by_its_title_and_a_roll_up_stays_a_roll_up(self):
+        folder = self.project("rollout")
+        now = time.time()
+        titled = folder / "handoffs" / handoff_name(now - 3600, "aa1b9a71").replace(".md", "-roost-version-2-5.md")
+        titled.write_text("---\nsession: aa1b9a71-0000\nname: Printer fix\ntitle: roost version 2.5\n---\n\nDid the work.\n")
+        [rolled] = self.handoffs(folder, [(now - 7200, "rollup: alpha\nname: Printer fix\ntitle: Ignored title\n")])
+        p = roost.read_project(folder)
+        self.assertEqual([tuple(h) for h in p["handoffs"]],
+                         [(roost.handoff_time(titled), "roost version 2.5", str(titled)),
+                          (roost.handoff_time(rolled), "Roll-up of alpha", str(rolled))])
+
     def test_notes_are_listed_newest_edit_first_titled_as_read_note_gives_them(self):
         folder = self.project("rollout")
         now = time.time()
@@ -2248,6 +2259,17 @@ class DetailSections(unittest.TestCase):
             self.assertIn(f"Handoff {d}", l)
             self.assertLess(l.index(when), l.index(f"Handoff {d}"), l)
         self.assertFalse([l for l in lines if "Handoff 5" in l])
+
+    def test_a_titled_handoff_shows_its_title(self):
+        folder = self.project("b", self.readme())
+        when = time.time() - 3600
+        path = folder / "handoffs" / handoff_name(when, "aa1b9a71").replace(".md", "-roost-version-2-5.md")
+        path.write_text("---\nsession: aa1b9a71-0000\nname: Long-lived builder\ntitle: roost version 2.5\n---\n\nDid it.\n")
+        lines = self.section(self.ui(), "project", "b", "Handoffs")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn(roost.short_when(roost.handoff_time(path)), lines[0])
+        self.assertIn("roost version 2.5", lines[0])
+        self.assertNotIn("Long-lived builder", lines[0])
 
     def test_no_handoffs_yet(self):
         self.project("b", self.readme())

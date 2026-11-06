@@ -764,6 +764,14 @@ class StartingSessions(unittest.TestCase):
         for cmd in ["handoff", "project"]:  # every command the skill names exists
             self.assertIn(cmd, roost.COMMANDS)
 
+    def test_the_wrap_up_skill_passes_a_name_it_is_given_as_the_handoffs_title(self):
+        """/wrap-up <name> names the Handoff: the skill reads its arguments and passes them with --title."""
+        skill = (ROOT / "plugin" / "skills" / "wrap-up" / "SKILL.md").read_text()
+        self.assertTrue("$ARGUMENTS" in skill, "wrap-up/SKILL.md never reads $ARGUMENTS")
+        self.assertTrue([l for l in skill.splitlines() if "roost handoff" in l and "--title" in l],
+                        "wrap-up/SKILL.md has no roost handoff command with --title")
+        self.assertIn("roost handoff --session ${CLAUDE_SESSION_ID} <<'ROOST_SUMMARY'", skill)  # no name: no --title
+
     def test_the_pickup_skill_runs_brief_with_this_sessions_id(self):
         skill = (ROOT / "plugin" / "skills" / "pickup" / "SKILL.md").read_text()
         meta = roost.frontmatter(skill)

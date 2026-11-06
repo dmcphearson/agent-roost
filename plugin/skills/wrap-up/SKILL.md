@@ -5,6 +5,8 @@ description: Wrap up this Session so it can be closed without losing what it lea
 
 # Wrap up this Session
 
+The Handoff's name: `$ARGUMENTS` (if that's empty, the Handoff has no name and is listed by the Session's).
+
 Wrap-up leaves the next Session everything it needs: a Handoff in the project, and a README that says where the work stands. The Session itself stays open; never end it, run `/exit` or `/clear`, or close it for the person.
 
 1. **Draft the summary** from this Session's conversation, in Markdown, with these headings (the Handoff puts it under `## Summary`, so use `###`):
@@ -24,6 +26,12 @@ Wrap-up leaves the next Session everything it needs: a Handoff in the project, a
    roost handoff --session ${CLAUDE_SESSION_ID} <<'ROOST_SUMMARY'
    …the summary…
    ROOST_SUMMARY
+   ```
+
+   With a name, add it as `--title`, so roost lists the Handoff by it rather than by the Session's name:
+
+   ```
+   roost handoff --session ${CLAUDE_SESSION_ID} --title "<the name>" <<'ROOST_SUMMARY'
    ```
 
    - It prints `Wrote <path>`. The project folder is the folder above `handoffs/`; in a sub-project (`<project>/sub/<slug>/`) that's the sub-project's folder, and its parent project isn't touched until the sub-project is finished (step 4). A path in `~/.roost/notes/` is a Session recap: skip steps 3 and 4, since a recap has no README or status.
