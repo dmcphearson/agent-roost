@@ -157,13 +157,22 @@ if Widget:
             bottom.edge(x, "╰" + "─" * (w - 2) + "╯", edge)
             return rows
 
+        def dividers(self):
+            return self.app.query("ProjectList")  # by name: the Projects tab's list, where there is one
+
         def on_click(self, event):
             event.stop()
+            for plist in self.dividers():
+                if plist.dragged:  # the release of a divider drag, not a click
+                    plist.dragged = False
+                    return
             if event.button == 1 and event.chain <= 2:  # a third click in a row would act a second time
                 state = curses.BUTTON1_DOUBLE_CLICKED if event.chain == 2 else curses.BUTTON1_CLICKED
                 self.app.press(("mouse", event.screen_x, event.screen_y, state))
 
         def on_mouse_down(self, event):
+            if any(plist.grab(event) for plist in self.dividers()):
+                return
             if event.button == 3:
                 event.stop()
                 self.app.press(("mouse", event.screen_x, event.screen_y, curses.BUTTON3_PRESSED))

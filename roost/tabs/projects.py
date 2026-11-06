@@ -986,15 +986,20 @@ if Region:
         its marks at the right. Its divider, the right border, drags to make it narrower or wider."""
         dragging = dragged = False
 
-        # Textual runs Region's handlers after these unless prevent_default() says not to: calling them
-        # here as well would make one click two, and two on one row are a double-click.
-        def on_mouse_down(self, event):
-            self.dragged = False  # a drag's release that brought no click mustn't eat this one
-            if event.button == 1 and event.screen_x == self.region.right - 1:  # on the divider
-                event.stop()
-                event.prevent_default()
-                self.dragging = True
-                self.capture_mouse()
+        def grab(self, event):
+            """Start dragging the divider on a press in the list's last column, on the divider, or in the
+            details' first column beside it (Region's mouse down asks, whichever widget was pressed).
+            Returns whether it did. The screen's text selection, started by the same press, is dropped."""
+            self.dragged = False  # a drag's release that brought no click mustn't eat the next one
+            right = self.region.right  # the column just past the divider
+            if not (self.display and event.button == 1 and right - 2 <= event.screen_x <= right):
+                return False
+            event.stop()
+            event.prevent_default()
+            self.dragging = True
+            self.capture_mouse()
+            self.screen.clear_selection()
+            return True
 
         def on_mouse_move(self, event):
             if self.dragging:  # the divider follows the mouse; it's saved when let go
@@ -1009,11 +1014,6 @@ if Region:
                 self.ui.set_list_width(event.screen_x + 1)
                 self.app.redraw()
 
-        def on_click(self, event):
-            if self.dragged:
-                self.dragged = False
-                event.stop()
-                event.prevent_default()
         def lines(self):
             ui, w, y0 = self.ui, self.size.width, self.region.y
             rows = getattr(ui, "prows", [])
