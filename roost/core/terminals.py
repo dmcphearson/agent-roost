@@ -29,10 +29,10 @@ def start_plain(cwd, term):
         argv = ["claude"]
     if not term:
         return {"start": argv, "cwd": cwd}
-    t = TERMINALS[term]
-    if osa(t["new"], cwd, *window_command(shlex.join(argv), os.path.basename(cwd.rstrip("/")) or cwd)) is None:
-        return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
-    return f"Started a Session in {short(cwd)}"
+    opened, where, hint = open_new(term, cwd, shlex.join(argv), os.path.basename(cwd.rstrip("/")) or cwd)
+    if not opened:
+        return failed(term, where)
+    return f"Started a Session in {short(cwd)}{hint}"
 
 
 def start_session(pid, cwd, term, name=None):
@@ -47,16 +47,16 @@ def start_session(pid, cwd, term, name=None):
     if not term:
         projectdata.assign_session(sid, name, folder)
         return {"start": argv, "cwd": cwd}
-    t = TERMINALS[term]
-    if osa(t["new"], cwd, *window_command(shlex.join(argv), name)) is None:
-        return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
+    opened, where, hint = open_new(term, cwd, shlex.join(argv), name)
+    if not opened:
+        return failed(term, where)
     projectdata.assign_session(sid, name, folder)
-    return f"Started a Session for {name} in {short(cwd)}"
+    return f"Started a Session for {name} in {short(cwd)}{hint}"
 
 
 # ---------- terminals ----------
-# Each terminal gets two AppleScripts: "new" opens a window in a folder and
-# runs a command; "focus" brings forward a window whose title ends with one of
+# Each terminal gets three AppleScripts: "new" opens a window in a folder and
+# runs a command; "tab" does the same in a new tab of its front window; "focus" brings forward a window whose title ends with one of
 # the given names (Claude Code puts the session name in the title).
 
 TERMINALS = {
@@ -72,6 +72,21 @@ on run argv
     set initial working directory of cfg to item 1 of argv
     set command of cfg to item 3 of argv
     new window with configuration cfg
+    activate
+  end tell
+end run
+""",
+        "tab": """
+on run argv
+  tell application "Ghostty"
+    set cfg to new surface configuration
+    set initial working directory of cfg to item 1 of argv
+    set command of cfg to item 3 of argv
+    if (count of windows) is 0 then
+      new window with configuration cfg
+    else
+      new tab in front window with configuration cfg
+    end if
     activate
   end tell
 end run
@@ -110,6 +125,23 @@ on run argv
   end tell
 end run
 """,
+        # Terminal can't open a tab by script: cmd+T through System Events, which needs Accessibility
+        # permission for the terminal roost runs in. Without it this fails and roost opens a window.
+        "tab": """
+on run argv
+  tell application "Terminal"
+    if (count of windows) is 0 then
+      do script "cd " & quoted form of (item 1 of argv) & " && " & (item 2 of argv)
+    else
+      activate
+      tell application "System Events" to tell process "Terminal" to keystroke "t" using command down
+      delay 0.3
+      do script "cd " & quoted form of (item 1 of argv) & " && " & (item 2 of argv) in selected tab of front window
+    end if
+    activate
+  end tell
+end run
+""",
         "focus": """
 on run argv
   tell application "Terminal"
@@ -144,6 +176,20 @@ on run argv
   end tell
 end run
 """,
+        "tab": """
+on run argv
+  tell application "iTerm"
+    if (count of windows) is 0 then
+      set w to (create window with default profile)
+    else
+      set w to current window
+      tell w to create tab with default profile
+    end if
+    tell current session of w to write text "cd " & quoted form of (item 1 of argv) & " && " & (item 2 of argv)
+    activate
+  end tell
+end run
+""",
         "focus": """
 on run argv
   tell application "iTerm"
@@ -168,6 +214,27 @@ end run
 """,
     },
 }
+
+
+def open_in():
+    """Where roost opens a Session: "tab" (the default) or "window", from config.json's open_in."""
+    return "window" if config.read_config().get("open_in") == "window" else "tab"
+
+
+def open_new(term, cwd, cmd, title):
+    """Open cmd in cwd in a new tab or window of term, as open_in says. Returns (opened, where, hint):
+    where is "tab" or "window"; Terminal falls back to a window when it can't open a tab, with a hint."""
+    t, where = TERMINALS[term], open_in()
+    if osa(t["tab" if where == "tab" else "new"], cwd, *window_command(cmd, title)) is not None:
+        return True, where, ""
+    if where == "tab" and term == "terminal" and osa(t["new"], cwd, *window_command(cmd, title)) is not None:
+        return True, "window", (" (a tab needs Accessibility permission for your terminal: System Settings → "
+                                "Privacy & Security → Accessibility)")
+    return False, where, ""
+
+
+def failed(term, where):
+    return f"Couldn't open a {TERMINALS[term]['label']} {where} (check Automation permission, or run roost setup)"
 
 
 def detect_terminal():
@@ -252,7 +319,7 @@ def window_command(cmd, title):
 
 
 def open_in_window(s, term):
-    """Open the session in a new window of `term` without leaving roost. Returns a status message."""
+    """Open the session in a new tab or window of `term` (open_in) without leaving roost. Returns a status message."""
     if s.get("desktop"):
         return go_to_desktop(s)
     t = TERMINALS[term]
@@ -262,11 +329,11 @@ def open_in_window(s, term):
             return f"Switched to {s['name']}, already open"
         return f"{s['name']} is already open, but its window wasn't found"
     cmd = f"claude attach {s['attach']}" if s.get("attach") else f"claude --resume {s['id']}"
-    cwd = launch_dir(s)
-    if osa(t["new"], cwd, *window_command(cmd, s["name"])) is None:
-        return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
+    opened, where, hint = open_new(term, launch_dir(s), cmd, s["name"])
+    if not opened:
+        return failed(term, where)
     s["opening"] = time.time()
-    return f"Opened {s['name']} in a new window"
+    return f"Opened {s['name']} in a new {where}{hint}"
 
 
 def go_to_desktop(s):
