@@ -4944,6 +4944,59 @@ class ResizableList(unittest.TestCase):
         self.assertEqual(self.widths([self.drag(70, 50)]), [34, 34])  # starts in the details
         self.assertNotIn("project_list_width", self.saved_config())
 
+    def test_a_drag_starts_from_the_lists_last_column_the_divider_or_the_details_first_column(self):
+        """The divider is hard to hit on its own, so a press in the column either side of it starts the
+        drag too: list_width - 2 (the list's), list_width - 1 (the divider), list_width (the details pane's)."""
+        for grab in (32, 33, 34):  # at the width it starts at, 34
+            with self.subTest(grab=grab):
+                self.config.write_text("{}")
+                self.assertEqual(self.widths([self.drag(grab, 49)]), [34, 50], "the divider goes where the mouse is let go")
+                self.assertEqual(self.saved_config().get("project_list_width"), 50)
+                self.assertEqual(self.widths([self.drag(grab + 16, 115)]), [50, 80], "from the saved 50, held to the bounds")
+                self.assertEqual(self.saved_config().get("project_list_width"), 80)
+
+    def test_a_press_two_columns_past_the_divider_or_four_inside_it_starts_no_drag(self):
+        for press in (35, 30):  # the details pane's second column, and well inside the list
+            with self.subTest(press=press):
+                self.config.write_text("{}")
+                self.assertEqual(self.widths([self.drag(press, 60)]), [34, 34])
+                self.assertNotIn("project_list_width", self.saved_config())
+
+    def test_dragging_the_divider_selects_and_copies_no_text(self):
+        """Textual's screen starts a text selection on the mouse down, so a divider drag across text would
+        highlight it and copy it when let go. A drag from a grab column selects nothing and copies nothing."""
+        import unittest.mock
+        row = 9  # a project row: its name in the list, a Sub-projects item in the details
+
+        def drag_watching(x0, x1, seen):
+            async def step(pilot):
+                await pilot.mouse_down(offset=(x0, row))
+                await pilot.hover(offset=(x1, row))
+                await pilot.pause()
+                seen["during"] = pilot.app.screen.get_selected_text()
+                await pilot.mouse_up(offset=(x1, row))
+                await pilot.pause()
+                seen["after"] = pilot.app.screen.get_selected_text()
+            return step
+
+        def run(x0, x1):
+            seen, copied = {}, []
+            self.config.write_text("{}")
+            with unittest.mock.patch.object(roost.UI, "clipboard", lambda ui, text: copied.append(text)):
+                app = self.run_on([drag_watching(x0, x1, seen)])
+            return seen, copied, app
+
+        seen, copied, app = run(30, 60)  # the fixture: the same move from a column that isn't a grab column
+        self.assertTrue(seen["after"] and copied, "a plain drag over this row selects and copies text")
+        for grab in (32, 33, 34):
+            with self.subTest(grab=grab):
+                seen, copied, app = run(grab, 60)
+                self.assertEqual(self.saved_config().get("project_list_width"), 61, "the fixture: the divider was dragged")
+                self.assertFalse(seen["during"], "nothing is selected while the divider is dragged")
+                self.assertFalse(seen["after"], "nothing is selected once it's let go")
+                self.assertEqual(copied, [])
+                self.assertNotEqual(app.ui.msg, "Copied the selected text")
+
     def test_the_keys_dont_resize_the_list_on_another_tab(self):
         steps = [open_view("Sessions"), self.keys("<", "<", ">", ">", ">"), open_view("Projects")]
         self.assertEqual(self.widths(steps)[-1], 34)
