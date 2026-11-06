@@ -1636,5 +1636,221 @@ class SessionRows(unittest.TestCase):
         self.assertNotIn("Swapped the", text, "the panel doesn't")
 
 
+
+class OpeningInATab(unittest.TestCase):
+    """#325: roost opens a Session in a new tab of the chosen terminal by default; config open_in "window"
+    keeps a new window. Terminal.app's tab needs Accessibility, so there a failed tab falls back to a window."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.saved = roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings, roost.NOTES
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.NOTES = base / "config.json", base / "_done", base / "sessions", base / "notes"
+        roost.claude_settings = lambda: {}
+        roost.PLUGIN, roost.PROJECTS = base / "plugin", base / "transcripts"
+        (roost.PLUGIN / ".claude-plugin").mkdir(parents=True)
+        (roost.PLUGIN / ".claude-plugin" / "plugin.json").write_text("{}")
+        self.root = base / "projects"
+        self.root.mkdir()
+        self.work = base / "work"
+        self.work.mkdir()
+        roost.save_config(projects_dir=str(self.root))
+        self.calls = []  # (script, args) for each osa call
+        self.failing = set()  # scripts that fail (osa returns None)
+        roost.osa = lambda script, *args: self.calls.append((script, args)) or (None if script in self.failing else "ok")
+
+    def tearDown(self):
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings, roost.NOTES = self.saved
+        self.tmp.cleanup()
+
+    def script(self, term, kind):
+        return roost.TERMINALS[term].get(kind)
+
+    def which(self, term):
+        """Which of term's scripts each osa call ran: "tab", "new", "focus", or "other"."""
+        kinds = {self.script(term, k): k for k in ("focus", "new", "tab") if self.script(term, k)}
+        return [kinds.get(script, "other") for script, _ in self.calls]
+
+    def project(self, name):
+        folder = self.root / name
+        (folder / "handoffs").mkdir(parents=True)
+        (folder / "README.md").write_text(README)
+        return folder
+
+    def sessions_in(self, folder):
+        return len(roost.frontmatter((folder / "README.md").read_text())["sessions"])
+
+    def demo(self, name="Printer fix"):
+        return session(name, cwd=str(self.work))
+
+    # the scripts
+
+    def test_every_terminal_has_a_tab_script(self):
+        for term in roost.TERMINALS:
+            with self.subTest(term=term):
+                self.assertIsInstance(self.script(term, "tab"), str)
+                self.assertIn("item 1 of argv", self.script(term, "tab") or "")
+
+    def test_ghostty_opens_a_tab_in_the_front_window_or_a_window_when_there_is_none(self):
+        tab = self.script("ghostty", "tab") or ""
+        self.assertIn("new tab", tab)
+        self.assertIn("new window", tab)
+        self.assertIn("item 3 of argv", tab)  # Ghostty runs the direct-exec form, as in "new"
+
+    def test_iterm2_creates_a_tab_or_a_window_when_there_is_none(self):
+        tab = self.script("iterm2", "tab") or ""
+        self.assertIn("create tab with default profile", tab)
+        self.assertIn("create window", tab)
+        self.assertIn("item 2 of argv", tab)
+
+    def test_terminal_presses_cmd_t_and_runs_the_command_in_the_front_tab(self):
+        tab = self.script("terminal", "tab") or ""
+        self.assertIn("System Events", tab)
+        self.assertIn('keystroke "t" using command down', tab)
+        self.assertRegex(tab, r"do script .* in ")
+        self.assertIn("item 2 of argv", tab)
+
+    # open_in_window
+
+    def test_open_in_window_uses_a_tab_by_default(self):
+        for term in roost.TERMINALS:
+            with self.subTest(term=term):
+                self.calls.clear()
+                s = self.demo()
+                self.assertEqual(roost.open_in_window(s, term), "Opened Printer fix in a new tab")
+                self.assertEqual(self.which(term), ["tab"])
+                self.assertEqual(self.calls[0][1], (str(self.work), *roost.window_command(f"claude attach {s['attach']}", "Printer fix")))
+
+    def test_open_in_tab_and_an_unknown_value_both_mean_a_tab(self):
+        for value in ("tab", "sideways", None, ""):
+            with self.subTest(open_in=value):
+                roost.save_config(open_in=value)
+                self.calls.clear()
+                self.assertEqual(roost.open_in_window(self.demo(), "ghostty"), "Opened Printer fix in a new tab")
+                self.assertEqual(self.which("ghostty"), ["tab"])
+
+    def test_open_in_window_keeps_a_window(self):
+        roost.save_config(open_in="window")
+        for term in roost.TERMINALS:
+            with self.subTest(term=term):
+                self.calls.clear()
+                self.assertEqual(roost.open_in_window(self.demo(), term), "Opened Printer fix in a new window")
+                self.assertEqual(self.which(term), ["new"])
+
+    def test_a_failed_tab_says_tab_and_ghostty_and_iterm2_do_not_fall_back(self):
+        for term, label in [("ghostty", "Ghostty"), ("iterm2", "iTerm2")]:
+            with self.subTest(term=term):
+                self.calls.clear()
+                self.failing = {self.script(term, "tab")}
+                s = self.demo()
+                self.assertEqual(roost.open_in_window(s, term),
+                                 f"Couldn't open a {label} tab (check Automation permission, or run roost setup)")
+                self.assertEqual(self.which(term), ["tab"])
+                self.assertNotIn("opening", s)
+
+    def test_a_failed_window_still_says_window(self):
+        roost.save_config(open_in="window")
+        self.failing = {self.script("ghostty", "new")}
+        self.assertEqual(roost.open_in_window(self.demo(), "ghostty"),
+                         "Couldn't open a Ghostty window (check Automation permission, or run roost setup)")
+
+    def test_terminal_app_falls_back_to_a_window_and_says_tabs_need_accessibility(self):
+        self.failing = {self.script("terminal", "tab")}
+        s = self.demo()
+        msg = roost.open_in_window(s, "terminal")
+        self.assertIn("in a new window", msg)
+        self.assertIn("Accessibility", msg)
+        self.assertEqual(self.which("terminal"), ["tab", "new"])
+        self.assertEqual(self.calls[0][1], self.calls[1][1])  # the window runs the same command in the same folder
+
+    def test_terminal_app_with_neither_a_tab_nor_a_window_says_it_couldnt_open(self):
+        self.failing = {self.script("terminal", "tab"), self.script("terminal", "new")}
+        self.assertTrue(self.script("terminal", "tab"))
+        self.assertIn("Couldn't open", roost.open_in_window(self.demo(), "terminal"))
+        self.assertEqual(self.which("terminal"), ["tab", "new"])
+
+    def test_focusing_an_open_session_is_unchanged(self):
+        for value in (None, "window"):
+            with self.subTest(open_in=value):
+                roost.save_config(open_in=value)
+                self.calls.clear()
+                s = self.demo()
+                s["attached"] = True
+                self.assertEqual(roost.open_in_window(s, "ghostty"), "Switched to Printer fix, already open")
+                self.assertEqual(self.which("ghostty"), ["focus"])
+
+    # start_session
+
+    def test_start_session_opens_a_tab_and_records_it(self):
+        folder = self.project("p")
+        msg = roost.start_session("p", str(folder), "ghostty")
+        self.assertTrue(msg.startswith("Started a Session for p"), msg)
+        self.assertEqual(self.which("ghostty"), ["tab"])
+        cwd, typed, direct = self.calls[0][1]
+        self.assertEqual(cwd, str(folder))
+        self.assertIn("/roost:pickup p", direct)
+        self.assertEqual(self.sessions_in(folder), 3)
+
+    def test_start_session_with_open_in_window_opens_a_window(self):
+        roost.save_config(open_in="window")
+        folder = self.project("p")
+        self.assertTrue(roost.start_session("p", str(folder), "ghostty").startswith("Started a Session for p"))
+        self.assertEqual(self.which("ghostty"), ["new"])
+        self.assertEqual(self.sessions_in(folder), 3)
+
+    def test_start_session_in_a_failed_tab_records_nothing(self):
+        folder = self.project("p")
+        self.failing = {self.script("iterm2", "tab")}
+        self.assertTrue(self.script("iterm2", "tab"))
+        self.assertEqual(roost.start_session("p", str(folder), "iterm2"),
+                         "Couldn't open a iTerm2 tab (check Automation permission, or run roost setup)")
+        self.assertEqual(self.which("iterm2"), ["tab"])
+        self.assertEqual(self.sessions_in(folder), 2)
+
+    def test_start_session_in_terminal_app_falls_back_to_a_window_and_records_it(self):
+        folder = self.project("p")
+        self.failing = {self.script("terminal", "tab")}
+        self.assertTrue(self.script("terminal", "tab"))
+        msg = roost.start_session("p", str(folder), "terminal")
+        self.assertTrue(msg.startswith("Started a Session for p"), msg)
+        self.assertIn("Accessibility", msg)
+        self.assertEqual(self.which("terminal"), ["tab", "new"])
+        self.assertEqual(self.sessions_in(folder), 3)
+
+    def test_start_session_when_terminal_app_opens_nothing_records_nothing(self):
+        folder = self.project("p")
+        self.failing = {self.script("terminal", "tab"), self.script("terminal", "new")}
+        self.assertTrue(self.script("terminal", "tab"))
+        self.assertIn("Couldn't open", roost.start_session("p", str(folder), "terminal"))
+        self.assertEqual(self.sessions_in(folder), 2)
+
+    # start_plain
+
+    def test_start_plain_opens_a_tab(self):
+        msg = roost.start_plain(str(self.work), "ghostty")
+        self.assertTrue(msg.startswith("Started a Session in"), msg)
+        self.assertEqual(self.which("ghostty"), ["tab"])
+        self.assertEqual(self.calls[0][1][0], str(self.work))
+
+    def test_start_plain_with_open_in_window_opens_a_window(self):
+        roost.save_config(open_in="window")
+        self.assertTrue(roost.start_plain(str(self.work), "ghostty").startswith("Started a Session in"))
+        self.assertEqual(self.which("ghostty"), ["new"])
+
+    def test_start_plain_in_a_failed_tab_says_tab(self):
+        self.failing = {self.script("ghostty", "tab")}
+        self.assertTrue(self.script("ghostty", "tab"))
+        self.assertEqual(roost.start_plain(str(self.work), "ghostty"),
+                         "Couldn't open a Ghostty tab (check Automation permission, or run roost setup)")
+        self.assertEqual(self.which("ghostty"), ["tab"])
+
+    def test_start_plain_in_terminal_app_falls_back_to_a_window(self):
+        self.failing = {self.script("terminal", "tab")}
+        self.assertTrue(self.script("terminal", "tab"))
+        msg = roost.start_plain(str(self.work), "terminal")
+        self.assertTrue(msg.startswith("Started a Session in"), msg)
+        self.assertIn("Accessibility", msg)
+        self.assertEqual(self.which("terminal"), ["tab", "new"])
+
+
 if __name__ == "__main__":
     unittest.main()

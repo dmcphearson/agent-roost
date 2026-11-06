@@ -457,10 +457,13 @@ class Shell:
 
     def help_rows(self):
         """What ? shows: the keys every tab shares, then what the current tab lists."""
-        return self.GLOBAL_HELP + self.TABS[self.tab].help
+        where = terminals.open_in()
+        other = "window" if where == "tab" else "tab"
+        return (self.GLOBAL_HELP + [("Open in", f"Sessions open in a new {where} · ctrl+t for a new {other}")]
+                + self.TABS[self.tab].help)
 
     CONTROL_KEYS = {"\n": "enter", "\r": "enter", "\t": "tab", "\x1b": "escape", "\x7f": "backspace",
-                    "\b": "backspace", "\x0e": "ctrl+n", "\x11": "ctrl+q", "\x15": "ctrl+u"}
+                    "\b": "backspace", "\x0e": "ctrl+n", "\x11": "ctrl+q", "\x14": "ctrl+t", "\x15": "ctrl+u"}
 
     def dispatch(self, k, drawn):
         """Handle one key (see handle). In an IDE's terminal, a session to open here is copied
@@ -516,6 +519,11 @@ class Shell:
                 return None
             if k == "ctrl+n":  # ctrl+n: a new project, Session, or note, from any tab
                 return self.new_menu()
+            if k == "ctrl+t":  # ctrl+t: Sessions open in a new tab, or a new window
+                where = "window" if terminals.open_in() == "tab" else "tab"
+                config.save_config(open_in=where)
+                self.msg = f"Sessions open in a new {where}"
+                return None
             if k == "escape" and getattr(self, "nreading", False):  # esc leaves a note's text
                 self.nreading = False
                 return None
