@@ -283,7 +283,14 @@ class Shell:
         """The tab's key bar: its keys (or the search's while typing one) and a note at the right. A
         prompt or a confirmation takes its place."""
         self.bar = None if self.asking or self.confirm else \
-            (self.bar_lines(SEARCH_KEYS if self.searching else keys, note), note_attr)
+            (self.bar_lines(SEARCH_KEYS if self.searching else f"{keys}   {self.opens_entry()}", note), note_attr)
+
+    def opens_entry(self):
+        """The key bar's word on where Open puts a Session, always in sight: ctrl+t flips tab and window."""
+        term = getattr(self, "term", None)
+        if term == "tmux":
+            return "opens tmux window"
+        return f"ctrl+t new {terminals.open_in()}" if term else "opens here"
 
     def alert_text(self):
         """A failure, or why an action didn't run, as a box until any key: its first clause is the title."""

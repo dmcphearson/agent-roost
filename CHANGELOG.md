@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Where Sessions open, in sight:** the key bar ends with `ctrl+t new tab` or `ctrl+t new window`, `opens tmux window` in tmux, or `opens here` with no terminal set
+- **tmux:** inside tmux, roost opens a Session in a new tmux window named after it and jumps to its window when it's already open, on macOS and Linux. `roost setup` offers tmux when it's installed. On Linux, roost no longer offers the macOS-only terminals, and outside tmux a Session runs in the same terminal
 - **Sessions open in a tab:** Ghostty, iTerm2, and Terminal.app open a Session in a new tab of their front window instead of a new window. ctrl+t switches between tab and window from any tab, `roost setup` asks, and the choice is `open_in` in config.json. Terminal.app needs Accessibility permission to open a tab and opens a window without it
 - **Named Handoffs:** `/wrap-up roost version 2.5` names that Handoff: roost lists it as roost version 2.5 instead of by the Session's name, and its file name ends with `roost-version-2-5`. `roost handoff --title` does the same; without a name nothing changes
 - **Resizable project list:** on the Projects tab, < and > make the list 4 columns narrower or wider, or drag the line between it and the details. It stays at least 24 columns and leaves the details at least 40, and roost keeps the width in config.json as project_list_width
