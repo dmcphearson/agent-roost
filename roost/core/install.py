@@ -11,6 +11,7 @@ from roost.core import wren
 from roost.core import plugin
 from roost.core import github
 from roost.core import terminals
+from roost.core import system
 
 
 # ---------- updates ----------
@@ -212,12 +213,15 @@ def setup(only=None):
     else:
         ok(f"roost is on your PATH ({shutil.which('roost')})")
 
-    installed = [k for k, v in TERMINALS.items() if app_installed(v["app"])]
+    installed = [k for k, v in TERMINALS.items() if system.mac() and app_installed(v["app"])]
+    if shutil.which("tmux"):
+        installed.append("tmux")
     detected = terminals.detect_terminal()
     print("\nWhen you press enter on a session, where should it open?\n")
     options = installed + ["same"]
     for i, k in enumerate(options, 1):
-        label = "This terminal (replaces roost, no new windows)" if k == "same" else f"New {TERMINALS[k]['label']} window"
+        label = ("This terminal (replaces roost, no new windows)" if k == "same" else "New tmux window" if k == "tmux"
+                 else f"New {TERMINALS[k]['label']} window")
         print(f"  {i}. {label}{'  (detected)' if k == detected else ''}")
     default = options.index(detected) + 1 if detected in options else 1
     try:
@@ -226,7 +230,7 @@ def setup(only=None):
         print(); return 1
     choice = options[int(raw) - 1] if raw.isdigit() and 1 <= int(raw) <= len(options) else options[default - 1]
 
-    if choice != "same":
+    if choice in TERMINALS:  # an AppleScript terminal: check roost may drive it (tmux needs no permission)
         print(f"\nOpening a test {TERMINALS[choice]['label']} window. If macOS asks to let your terminal")
         print(f"control {TERMINALS[choice]['app']}, click Allow.")
         line = "echo 'Agent Roost can open windows here. Closing…'; sleep 2"
@@ -263,7 +267,7 @@ def setup(only=None):
         ok(f"Projects folder {short(str(folder))}")
 
     config.save_config(terminal=choice, projects_dir=short(str(folder)),
-                       **({"open_in": open_in} if choice != "same" else {}))
+                       **({"open_in": open_in} if choice in TERMINALS else {}))
     ok(f"Saved to {short(str(config.CONFIG))}")
 
     print("\nInstalling roost's Claude Code plugin (its skills, like /roost:pickup and /roost:wrap-up).")
