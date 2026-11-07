@@ -953,7 +953,7 @@ class SessionMenuGroups(unittest.TestCase):
     def test_a_live_background_sessions_actions_in_groups(self):
         ui = self.fixture()
         self.assertEqual(self.acts(ui, "Live"),
-                         ["Open in a new window", "Write its Handoff from the transcript", "Ask what to do with it",
+                         ["Open in a new tab", "Write its Handoff from the transcript", "Ask what to do with it",
                           "Pin: keep it running when idle", DIV,
                           "Move to another project", "Rename", "Copy its id", "Show its folder in Finder", DIV,
                           "Stop"])
@@ -961,7 +961,7 @@ class SessionMenuGroups(unittest.TestCase):
     def test_a_closed_sessions_actions_in_groups(self):
         ui = self.fixture()
         self.assertEqual(self.acts(ui, "Loose"),
-                         ["Open in a new window", "Write its Session recap from the transcript", "Ask what to do with it",
+                         ["Open in a new tab", "Write its Session recap from the transcript", "Ask what to do with it",
                           "Restart in the background, pinned", DIV,
                           "New project from this Session", "Add to a project", "Rename", "Dismiss", "Copy its id",
                           "Show its folder in Finder", DIV,
@@ -976,6 +976,51 @@ class SessionMenuGroups(unittest.TestCase):
             real = [a for a in self.acts(ui, name) if a != DIV]
             self.assertTrue(real, name)
             self.assertEqual([a for a in real if "…" in a], [], name)
+
+class OpenActionSaysWhere(unittest.TestCase):
+    """A Session's open action names where it will open: a new tab of an AppleScript terminal (open_in tab,
+    or missing), a new window (open_in window), a new tmux window (term tmux, whatever open_in says), or
+    here with no terminal. Rows: Live (idle in the background, in a project) and Loose (closed, no project)."""
+    project, ui, fresh, acts = StartingSessions.project, StartingSessions.ui, Dismissing.fresh, Dismissing.acts
+    setUp, fixture = Dismissing.setUp, SessionMenuGroups.fixture
+    ROWS = ("Live", "Loose")
+
+    def first(self, term, **cfg):
+        """The first action of each row, with term as the terminal and config.json's open_in set to cfg's
+        (or removed when cfg has none)."""
+        if not hasattr(self, "built"):
+            self.built = self.fixture()
+        saved = {k: v for k, v in roost.read_config().items() if k != "open_in"}
+        roost.CONFIG.write_text(json.dumps({**saved, **cfg}))
+        ui = self.fresh()
+        ui.term = term
+        return {name: self.acts(ui, name)[0] for name in self.ROWS}
+
+    def test_a_terminal_with_no_open_in_says_a_new_tab(self):
+        got = self.first("ghostty")
+        self.assertNotIn("open_in", roost.read_config())
+        self.assertEqual(got, dict.fromkeys(self.ROWS, "Open in a new tab"))
+
+    def test_open_in_tab_says_a_new_tab(self):
+        for term in ("ghostty", "iterm2", "terminal"):
+            with self.subTest(term=term):
+                self.assertEqual(self.first(term, open_in="tab"), dict.fromkeys(self.ROWS, "Open in a new tab"))
+
+    def test_open_in_window_says_a_new_window(self):
+        for term in ("ghostty", "iterm2", "terminal"):
+            with self.subTest(term=term):
+                self.assertEqual(self.first(term, open_in="window"), dict.fromkeys(self.ROWS, "Open in a new window"))
+
+    def test_tmux_says_a_new_tmux_window_whatever_open_in_says(self):
+        for cfg in ({}, {"open_in": "tab"}, {"open_in": "window"}):
+            with self.subTest(cfg=cfg):
+                self.assertEqual(self.first("tmux", **cfg), dict.fromkeys(self.ROWS, "Open in a new tmux window"))
+
+    def test_no_terminal_says_open_here_whatever_open_in_says(self):
+        for cfg in ({}, {"open_in": "tab"}, {"open_in": "window"}):
+            with self.subTest(cfg=cfg):
+                self.assertEqual(self.first(None, **cfg), dict.fromkeys(self.ROWS, "Open here"))
+
 
 class ClosedProjectSessionActions(unittest.TestCase):
     """A closed Session an open project lists and no Handoff covers: its actions start with writing its
