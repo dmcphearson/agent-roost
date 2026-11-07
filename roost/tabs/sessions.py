@@ -402,7 +402,7 @@ class SessionsTab:
         elif done:
             work.append(("Start a fresh Session from its recap", lambda: self.start_from_recap(recap, s)))
         else:
-            label = "Go to Claude Desktop" if s.get("desktop") else "Go to its window" if in_window else "Open in a new window" if self.term else "Open here"
+            label = "Go to Claude Desktop" if s.get("desktop") else "Go to its window" if in_window else f"Open in a new {self.opens_in()}" if self.term else "Open here"
             work.append((label, lambda: self.open_one(s)))
         if recap:
             work.append((f"Read its Session recap in {self.editor_name().split()[0]}", lambda: self.edit(recap["path"])))
@@ -465,6 +465,10 @@ class SessionsTab:
         self.msg = terminals.open_in_window(s, self.term)
         self.refresh()
         return None
+
+    def opens_in(self):
+        """Where Open puts a Session: "tmux window" in tmux, else a "tab" or "window" as open_in says."""
+        return "tmux window" if self.term == "tmux" else terminals.open_in()
 
     def open_one(self, s):
         """Open a Session: in a new window (or jump to its window), or here when there's no terminal."""
