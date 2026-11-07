@@ -787,7 +787,7 @@ class SetupOpenIn(unittest.TestCase):
                 return terminal_answer
             return open_in_answer
 
-        with unittest.mock.patch.object(install.shutil, "which", lambda name: f"/fake/bin/{name}"), \
+        with unittest.mock.patch.object(install.shutil, "which", lambda name: None if name == "tmux" else f"/fake/bin/{name}"), \
                 unittest.mock.patch.object(install.subprocess, "run", run), \
                 unittest.mock.patch.object(install, "setup_textual", lambda: 0), \
                 unittest.mock.patch.object(install, "setup_plugin", lambda: 0), \
@@ -815,6 +815,157 @@ class SetupOpenIn(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn(self.QUESTION, text)
         self.assertNotIn("open_in", cfg)
+        self.assertEqual(cfg.get("terminal"), "same")
+        self.assertEqual(scripts, [])
+
+
+
+class ChoosingTmux(unittest.TestCase):
+    """Linux support: roost opens Sessions in tmux when it runs inside tmux ($TMUX set) or config says
+    "tmux". On Linux there's no AppleScript, so Ghostty, Terminal and iTerm2 are never chosen there."""
+    def setUp(self):
+        import unittest.mock
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        saved = roost.CONFIG
+        roost.CONFIG = Path(self.tmp.name) / "config.json"
+        self.addCleanup(setattr, roost, "CONFIG", saved)
+        self.system = importlib.import_module("roost.core.system")
+        self.mock = unittest.mock
+
+    def env(self, **values):
+        return self.mock.patch.dict(os.environ, {"TERM_PROGRAM": "", "TMUX": "", **values})
+
+    def linux(self):
+        return self.mock.patch.object(self.system.sys, "platform", "linux")
+
+    def test_inside_tmux_detects_tmux_before_the_terminal_app(self):
+        with self.env(TMUX="/tmp/tmux-demo/default,1234,0", TERM_PROGRAM="ghostty"):
+            self.assertEqual(roost.detect_terminal(), "tmux")
+        with self.env(TMUX="/tmp/tmux-demo/default,1234,0"):
+            self.assertEqual(roost.detect_terminal(), "tmux")
+
+    def test_an_empty_tmux_is_not_tmux(self):
+        with self.env(TMUX="", TERM_PROGRAM="ghostty"):
+            self.assertEqual(roost.detect_terminal(), "ghostty")
+
+    def test_a_configured_tmux_is_chosen(self):
+        roost.save_config(terminal="tmux")
+        with self.env(TERM_PROGRAM="ghostty"):
+            self.assertEqual(roost.chosen_terminal(), "tmux")
+
+    def test_with_no_terminal_configured_tmux_is_detected(self):
+        roost.save_config(name_width=32)
+        with self.env(TMUX="/tmp/tmux-demo/default,1234,0", TERM_PROGRAM="ghostty"):
+            self.assertEqual(roost.chosen_terminal(), "tmux")
+
+    def test_on_linux_no_applescript_terminal_is_detected(self):
+        with self.linux():
+            for tp in ("ghostty", "Apple_Terminal", "iTerm.app"):
+                with self.subTest(TERM_PROGRAM=tp), self.env(TERM_PROGRAM=tp):
+                    self.assertIsNone(roost.detect_terminal())
+                    self.assertIsNone(roost.chosen_terminal())
+
+    def test_on_linux_tmux_is_still_detected(self):
+        with self.linux(), self.env(TMUX="/tmp/tmux-demo/default,1234,0", TERM_PROGRAM="ghostty"):
+            self.assertEqual(roost.detect_terminal(), "tmux")
+
+    def test_on_linux_a_configured_applescript_terminal_is_none(self):
+        with self.linux(), self.env():
+            for term in ("ghostty", "terminal", "iterm2"):
+                with self.subTest(terminal=term):
+                    roost.save_config(terminal=term)
+                    self.assertIsNone(roost.chosen_terminal())
+            roost.save_config(terminal="tmux")
+            self.assertEqual(roost.chosen_terminal(), "tmux")
+
+
+class SetupTmux(unittest.TestCase):
+    """Linux support: roost setup offers tmux when it's installed (marked detected inside tmux). Choosing
+    it saves terminal "tmux" with no test window and no tab/window question. On Linux, the AppleScript
+    terminals are never offered. Nothing real runs: no claude, tmux or osascript."""
+    QUESTION = "Open Sessions in a new tab or a new window?"
+
+    def run_setup(self, pick, tmux_found=True, detected=None, apps=("Ghostty",), platform="darwin"):
+        """roost setup, answering the terminal question with the option whose label pick(label) is true
+        (or enter, if none is). Returns (exit code, printed and asked text, the offered labels, the saved
+        config, the scripts osa ran)."""
+        import subprocess, unittest.mock
+        install, system = sys.modules["roost.core.install"], importlib.import_module("roost.core.system")
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        projects = Path(tmp.name) / "projects"
+        projects.mkdir()
+        saved = roost.CONFIG
+        roost.CONFIG = Path(tmp.name) / "config.json"
+        self.addCleanup(setattr, roost, "CONFIG", saved)
+        out, asked, scripts, offered = io.StringIO(), [], [], []
+
+        def run(argv, *a, **kw):
+            return subprocess.CompletedProcess(argv, 0, "[]" if "agents" in argv else "9.9.9 (Claude Code)", "")
+
+        def which(name, *a, **k):
+            return None if name == "tmux" and not tmux_found else f"/fake/bin/{name}"
+
+        def answer(prompt=""):
+            asked.append(prompt)
+            if "Projects folder" in prompt:
+                return str(projects)
+            if prompt.strip().startswith("Choose"):
+                listing = out.getvalue().split("where should it open?")[-1]
+                options = re.findall(r"^\s+(\d+)\. (.*)$", listing, re.M)
+                offered.extend(label for _, label in options)
+                return next((n for n, label in options if pick(label)), "")
+            return ""
+
+        with unittest.mock.patch.object(install.shutil, "which", which), \
+                unittest.mock.patch.object(install.subprocess, "run", run), \
+                unittest.mock.patch.object(system.sys, "platform", platform), \
+                unittest.mock.patch.object(install, "setup_textual", lambda: 0), \
+                unittest.mock.patch.object(install, "setup_plugin", lambda: 0), \
+                unittest.mock.patch.object(install, "app_installed", lambda app: app in apps), \
+                unittest.mock.patch.object(roost.terminals, "detect_terminal", lambda: detected), \
+                unittest.mock.patch.object(roost.terminals, "osa", lambda script, *a: scripts.append(script) or "ok"), \
+                unittest.mock.patch("builtins.input", answer), contextlib.redirect_stdout(out):
+            code = install.setup()
+        return code, out.getvalue() + "\n".join(asked), offered, roost.read_config(), scripts
+
+    def test_tmux_is_offered_when_installed_and_marked_detected_inside_tmux(self):
+        code, text, offered, cfg, scripts = self.run_setup(lambda label: False, detected="tmux")
+        tmux = [label for label in offered if "tmux" in label]
+        self.assertEqual(len(tmux), 1, offered)
+        self.assertIn("(detected)", tmux[0])
+        self.assertEqual(cfg.get("terminal"), "tmux")  # enter takes the detected one
+
+    def test_tmux_is_not_offered_when_not_installed(self):
+        code, text, offered, cfg, scripts = self.run_setup(lambda label: False, tmux_found=False)
+        self.assertTrue(offered)
+        self.assertFalse([label for label in offered if "tmux" in label], offered)
+
+    def test_choosing_tmux_saves_it_with_no_test_window_and_no_tab_question(self):
+        code, text, offered, cfg, scripts = self.run_setup(lambda label: "tmux" in label)
+        self.assertEqual(code, 0)
+        self.assertEqual(cfg.get("terminal"), "tmux")
+        self.assertNotIn("open_in", cfg)
+        self.assertNotIn(self.QUESTION, text)
+        self.assertEqual(scripts, [])
+        self.assertTrue(cfg.get("projects_dir"))
+
+    def test_on_linux_only_tmux_and_this_terminal_are_offered(self):
+        code, text, offered, cfg, scripts = self.run_setup(
+            lambda label: False, platform="linux", apps=("Ghostty", "Terminal", "iTerm"))
+        self.assertEqual(len(offered), 2, offered)
+        self.assertIn("tmux", offered[0] + offered[1])
+        self.assertTrue(any(label.startswith("This terminal") for label in offered), offered)
+        for app in ("Ghostty", "Terminal (macOS)", "iTerm2"):
+            self.assertFalse([label for label in offered if app in label], (app, offered))
+        self.assertEqual(scripts, [])
+
+    def test_on_linux_without_tmux_only_this_terminal_is_offered(self):
+        code, text, offered, cfg, scripts = self.run_setup(
+            lambda label: False, platform="linux", tmux_found=False, apps=("Ghostty", "Terminal", "iTerm"))
+        self.assertEqual(len(offered), 1, offered)
+        self.assertTrue(offered[0].startswith("This terminal"), offered)
         self.assertEqual(cfg.get("terminal"), "same")
         self.assertEqual(scripts, [])
 
