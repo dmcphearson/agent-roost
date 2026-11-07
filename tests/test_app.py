@@ -601,6 +601,94 @@ class OpenInToggle(unittest.TestCase):
         self.assertIn("tab", entry_tab)
 
 
+class OpenInKeyBar(unittest.TestCase):
+    """The key bar always says where Open puts a Session, on every tab's keys: with a terminal roost
+    drives by AppleScript, "ctrl+t new tab" (open_in tab or missing) or "ctrl+t new window"; in tmux
+    "opens tmux window" (ctrl+t changes nothing there, so it isn't named); with no terminal "opens here".
+    The bar's other keys stay. Uses Tabs' UI, a 200-column screen, and a temp config.json."""
+    APPLESCRIPT = ("ghostty", "terminal", "iterm2")
+
+    def setUp(self):
+        Tabs.setUp(self)
+        self.addCleanup(Tabs.tearDown, self)
+        self.width(200)
+        self.ui.term = "ghostty"
+
+    def width(self, w):
+        self.ui.scr = type("Scr", (), {"getmaxyx": lambda self: (40, w)})()
+
+    def rows(self, keys=None):
+        """The bar's rows as drawn text (keys then note), after a tab hands key_bar its keys."""
+        self.ui.key_bar(roost.BAR_KEYS if keys is None else keys, self.ui.msg)
+        return [f"{k}   {n}" for k, n in self.ui.bar[0]]
+
+    def text(self, keys=None):
+        return "   ".join(self.rows(keys))
+
+    def test_an_applescript_terminal_names_ctrl_t_and_the_current_choice(self):
+        for term in self.APPLESCRIPT:
+            self.ui.term = term
+            for saved, want, not_want in [(None, "ctrl+t new tab", "ctrl+t new window"),
+                                          ("tab", "ctrl+t new tab", "ctrl+t new window"),
+                                          ("window", "ctrl+t new window", "ctrl+t new tab")]:
+                with self.subTest(term=term, open_in=saved):
+                    roost.CONFIG.write_text(json.dumps({} if saved is None else {"open_in": saved}))
+                    bar = self.text()
+                    self.assertIn(want, bar)
+                    self.assertNotIn(not_want, bar)
+
+    def test_after_ctrl_t_the_next_bar_shows_the_new_choice(self):
+        self.assertIn("ctrl+t new tab", self.text())
+        self.ui.dispatch("ctrl+t", None)
+        self.assertIn("ctrl+t new window", self.text())
+        self.ui.dispatch("ctrl+t", None)
+        self.assertIn("ctrl+t new tab", self.text())
+        self.assertNotIn("ctrl+t new window", self.text())
+
+    def test_in_tmux_the_bar_says_a_tmux_window_and_names_no_ctrl_t(self):
+        self.ui.term = "tmux"
+        for saved in (None, "tab", "window"):
+            with self.subTest(open_in=saved):
+                roost.CONFIG.write_text(json.dumps({} if saved is None else {"open_in": saved}))
+                bar = self.text()
+                self.assertIn("opens tmux window", bar)
+                self.assertNotIn("ctrl+t", bar)
+
+    def test_with_no_terminal_the_bar_says_here_and_names_no_ctrl_t(self):
+        self.ui.term = None
+        for saved in (None, "window"):
+            with self.subTest(open_in=saved):
+                roost.CONFIG.write_text(json.dumps({} if saved is None else {"open_in": saved}))
+                bar = self.text()
+                self.assertIn("opens here", bar)
+                self.assertNotIn("ctrl+t", bar)
+
+    def test_it_is_on_every_tabs_keys_and_their_own_keys_stay(self):
+        keys = {"Sessions": roost.BAR_KEYS, "Projects list": roost.LIST_KEYS, "Projects details": roost.DETAIL_KEYS,
+                "Notes": roost.BAR_KEYS.replace("←→ views", "→ read"),
+                "Stats": roost.STATS_KEYS}
+        for name, these in keys.items():
+            for term, want in [("ghostty", "ctrl+t new tab"), ("tmux", "opens tmux window"), (None, "opens here")]:
+                with self.subTest(keys=name, term=term):
+                    self.ui.term = term
+                    bar = self.text(these)
+                    self.assertIn(want, bar)
+                    for entry in (e for e in these.split("   ") if e):
+                        self.assertIn(entry, bar)
+
+    def test_on_a_narrow_screen_the_bar_wraps_and_keeps_the_entry_whole_on_one_row(self):
+        """The bar wraps between keys to fit (KeyBar.test_keys_wrap_between_keys...); the entry is one of them."""
+        for term, want in [("ghostty", "ctrl+t new tab"), ("tmux", "opens tmux window"), (None, "opens here")]:
+            with self.subTest(term=term):
+                self.ui.term = term
+                self.width(60)
+                rows = self.rows()
+                self.assertGreater(len(rows), 1, "60 columns can't hold the bar on one row")
+                self.assertTrue(any(want in r for r in rows), rows)
+                for k, _ in self.ui.bar[0]:
+                    self.assertLessEqual(len(k), 60 - 4, k)
+
+
 class KeyBar(unittest.TestCase):
     def bar(self, width, keys, note=""):
         ui = object.__new__(roost.UI)

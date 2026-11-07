@@ -1146,6 +1146,51 @@ class TextualScreens(unittest.TestCase):
 
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class OpenInOnScreen(unittest.TestCase):
+    """The key bar at the bottom of the screen says where Open puts a Session, on every tab: with Ghostty,
+    "ctrl+t new tab" until ctrl+t, then "ctrl+t new window". The real read_config and save_config, on a
+    temp config.json, so ctrl+t's choice is kept and read back."""
+    run_app = TextualScreens.run_app
+    keys = staticmethod(TextualScreens.keys)
+
+    def setUp(self):
+        import unittest.mock
+        real = dict(read_config=roost.read_config, save_config=roost.save_config)
+        TextualScreens.setUp(self)  # Ghostty, the chosen terminal
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for patcher in (unittest.mock.patch.multiple(roost, **real),
+                        unittest.mock.patch.object(roost, "CONFIG", Path(tmp.name) / "config.json")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def bottom(seen, label):
+        """A step that keeps, under label, the key bar's rows (the bottom of the screen) as one string."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            rows = len(pilot.app.ui.bar[0]) if pilot.app.ui.bar else 1
+            seen[label] = "   ".join(screen_text(pilot.app)[-rows:])
+            seen[label + " tab"] = pilot.app.ui.TABS[pilot.app.ui.tab].name
+        return step
+
+    def test_the_bottom_row_says_new_tab_and_after_ctrl_t_new_window_on_every_tab(self):
+        for name in [t.name for t in roost.UI.TABS]:
+            roost.CONFIG.write_text(json.dumps({"tab": name}))  # open_in missing: a new tab
+            seen = {}
+            self.run_app([open_view(name), self.bottom(seen, "before"), self.keys("ctrl+t"), self.bottom(seen, "after")])
+            with self.subTest(tab=name):
+                self.assertEqual((seen["before tab"], seen["after tab"]), (name, name))
+                self.assertEqual(json.loads(roost.CONFIG.read_text()).get("open_in"), "window", "ctrl+t saved the choice")
+                self.assertIn("ctrl+t new tab", seen["before"])
+                self.assertNotIn("ctrl+t new window", seen["before"])
+                self.assertIn("ctrl+t new window", seen["after"])
+                self.assertNotIn("ctrl+t new tab", seen["after"])
+                self.assertIn("ctrl+q quit", seen["after"], "the bar's other keys stay")
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class TopTabs(unittest.TestCase):
     """The top bar's tabs: Agent Roost, then Projects, Sessions, Notes, and Stats, the current one green and
     bold. Tab and shift+tab move to the next and previous tab, wrapping, wherever the keys are; a click on a
