@@ -235,6 +235,12 @@ def setup(only=None):
             bad("The test window didn't open. Allow it in System Settings → Privacy & Security → Automation, then rerun roost setup.")
             return 1
         ok("Test window opened")
+        try:
+            raw = input("\nOpen Sessions in a new tab or a new window? [tab/window, enter for tab]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print(); return 1
+        open_in = "window" if raw in ("w", "window", "2") else "tab"
+        ok(f"Sessions open in a new {open_in} (ctrl+t in roost switches)")
 
     current = config.read_config().get("projects_dir") or DEFAULT_PROJECTS
     print("\nWhere do your projects live? One folder per project; roost never moves what's there.")
@@ -256,7 +262,8 @@ def setup(only=None):
     else:
         ok(f"Projects folder {short(str(folder))}")
 
-    config.save_config(terminal=choice, projects_dir=short(str(folder)))
+    config.save_config(terminal=choice, projects_dir=short(str(folder)),
+                       **({"open_in": open_in} if choice != "same" else {}))
     ok(f"Saved to {short(str(config.CONFIG))}")
 
     print("\nInstalling roost's Claude Code plugin (its skills, like /roost:pickup and /roost:wrap-up).")

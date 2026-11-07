@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Sessions open in a tab:** Ghostty, iTerm2, and Terminal.app open a Session in a new tab of their front window instead of a new window. ctrl+t switches between tab and window from any tab, `roost setup` asks, and the choice is `open_in` in config.json. Terminal.app needs Accessibility permission to open a tab and opens a window without it
 - **Named Handoffs:** `/wrap-up roost version 2.5` names that Handoff: roost lists it as roost version 2.5 instead of by the Session's name, and its file name ends with `roost-version-2-5`. `roost handoff --title` does the same; without a name nothing changes
 - **Resizable project list:** on the Projects tab, < and > make the list 4 columns narrower or wider, or drag the line between it and the details. It stays at least 24 columns and leaves the details at least 40, and roost keeps the width in config.json as project_list_width
 - **Copy and Show in Files off the Mac:** copying uses tmux's clipboard inside tmux (it reaches your own computer's clipboard over SSH), then wl-copy, xclip or xsel, else the terminal itself. Show in Finder says Files and opens it with xdg-open on Linux with a display, and isn't offered without one. Claude Code's managed settings are read from `/etc/claude-code/` on Linux

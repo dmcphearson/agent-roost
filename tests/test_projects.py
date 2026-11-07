@@ -5081,3 +5081,38 @@ class ResizableList(unittest.TestCase):
         self.assertIn(" ".join(self.DESCRIPTION.split()[-4:]), re.sub(r"\s+", " ", details))
         for word in self.DESCRIPTION.split():
             self.assertIn(word, details)
+
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class OpenInToggleOnScreen(unittest.TestCase):
+    """#325 on the Textual screen: ctrl+t on any tab flips open_in (tab, window) in config.json and says
+    which on the status line; typed into a search it changes nothing."""
+    keys, select = staticmethod(TextualScreens.keys), staticmethod(TextualScreens.select)
+    SIZE, DESCRIPTION = ResizableList.SIZE, TwoPanes.DESCRIPTION
+    saved_config, run_on = ResizableList.saved_config, ResizableList.run_on
+
+    def setUp(self):
+        import unittest.mock
+        ResizableList.setUp(self)  # the real read_config and save_config, on a temp config.json
+        patcher = unittest.mock.patch.object(roost, "osa", lambda script, *a: None)  # never a real terminal
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_ctrl_t_flips_open_in_on_every_tab(self):
+        expect = "window"
+        for name in [t.name for t in roost.UI.TABS]:
+            with self.subTest(tab=name):
+                seen = {}
+
+                async def look(pilot):
+                    seen["msg"] = pilot.app.ui.msg
+                app = self.run_on([open_view(name), self.keys("ctrl+t"), look])
+                self.assertEqual(self.saved_config().get("open_in"), expect)
+                self.assertEqual(seen["msg"], f"Sessions open in a new {expect}")
+                self.assertTrue(any(f"Sessions open in a new {expect}" in l for l in app.lines), "\n".join(app.lines))
+                expect = "tab" if expect == "window" else "window"
+
+    def test_ctrl_t_in_a_search_leaves_open_in_alone(self):
+        self.run_on([self.keys("slash", "ctrl+t")])
+        self.assertNotIn("open_in", self.saved_config())
