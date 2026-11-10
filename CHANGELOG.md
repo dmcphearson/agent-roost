@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.11.10
 
 - **Where Sessions open, in sight:** the key bar ends with `ctrl+t new tab` or `ctrl+t new window`, `opens tmux window` in tmux, or `opens here` with no terminal set
 - **tmux:** inside tmux, roost opens a Session in a new tmux window named after it and jumps to its window when it's already open, on macOS and Linux. `roost setup` offers tmux when it's installed. On Linux, roost no longer offers the macOS-only terminals, and outside tmux a Session runs in the same terminal
