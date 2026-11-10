@@ -209,11 +209,13 @@ def last_covered(folder, ids):
     return max(ends) if ends else None
 
 
-def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=None, roll_up=False):
+def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=None, roll_up=False, title=None):
     """Write a Handoff for a Session into the project or Session recap that lists it: the facts since
     its last Handoff, then the summary, with secrets redacted. With recap, a Session nothing lists gets
     a new Session recap: a note in ~/.roost/notes/, named after it and tagged recap. `at` dates the Handoff's file name (default now).
     With roll_up, a done sub-project's Session writes its roll-up into the parent project instead.
+    title names the Handoff (roost lists it by that, not the Session's name): its heading, title: in its
+    frontmatter, and its slug at the end of the file name.
     Returns (path, redacted kinds). Raises ValueError with a reason, and never overwrites a Handoff."""
     summary = summary.strip()
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", sid or ""):
@@ -235,13 +237,16 @@ def write_handoff(sid, summary, now=None, recap=False, recap_summary=None, at=No
     table = pricing.prices(now)
     f = facts(sid, last_covered(folder, ids) if folder else None, table)
     stem = f"{datetime.fromtimestamp(at or now or time.time()):%Y-%m-%d-%H%M}-{sid[:8]}"
-    body = [f"# Handoff from {f['name']}", ""] + facts_lines(f, table) + ["", "## Summary", "", summary, ""]
+    title = " ".join((title or "").split())
+    body = [f"# {title}" if title else f"# Handoff from {f['name']}", ""] + facts_lines(f, table) + ["", "## Summary", "", summary, ""]
     if folder is None or folder.is_file():
         return write_recap_handoff(folder, sid, f, stem, "\n".join(body), info, recap_summary or first_point(summary))
-    text = "\n".join(["---", f"session: {sid}", f"name: {yaml_text(f['name'])}", f"from: {f['from'] or ''}",
-                      f"to: {f['to'] or ''}", "---", ""] + body)
+    text = "\n".join(["---", f"session: {sid}", f"name: {yaml_text(f['name'])}"]
+                     + ([f"title: {yaml_text(title)}"] if title else [])
+                     + [f"from: {f['from'] or ''}", f"to: {f['to'] or ''}", "---", ""] + body)
     text, kinds = redact(text)
-    return new_handoff(folder, f"{stem}.md", text), kinds
+    named = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60].strip("-")  # "" when nothing in it slugs
+    return new_handoff(folder, f"{stem}-{named}.md" if named else f"{stem}.md", text), kinds
 
 
 def write_roll_up(folder, sid, summary, info, at=None):
@@ -323,7 +328,7 @@ def handoff_command(args):
         return 1
     try:
         path, kinds = write_handoff(args.session, sys.stdin.read(), recap=args.recap, recap_summary=args.summary,
-                                    roll_up=args.roll_up)
+                                    roll_up=args.roll_up, title=args.title)
     except (ValueError, OSError) as e:
         print(f"roost handoff: {e}", file=sys.stderr)
         return 1
@@ -341,6 +346,8 @@ def handoff_flags(parser):
     parser.add_argument("--recap", "--note", dest="recap", action="store_true",
                         help="if nothing lists the Session, start a Session recap for it: a note in ~/.roost/notes/, tagged recap")
     parser.add_argument("--summary", metavar="TEXT", help="a new recap's one-sentence summary (default: its first point)")
+    parser.add_argument("--title", metavar="NAME",
+                        help="name this Handoff (roost lists it by this, not the Session's name), e.g. \"roost version 2.5\"")
     parser.add_argument("--roll-up", action="store_true",
                         help="a done sub-project's Session: write its roll-up into the parent project's handoffs/")
 

@@ -15,6 +15,7 @@ from roost.core import install
 from roost.core import plugin
 from roost.core import adopt as adopting
 from roost.core import terminals
+from roost.core import system
 
 
 # ---------- UI ----------
@@ -52,11 +53,18 @@ RIGHT_CLICK = curses.BUTTON3_CLICKED | curses.BUTTON3_PRESSED
 BAR_KEYS = "↑↓ move   ←→ views   enter actions   / search   ctrl+n new   tab next tab   ? help   ctrl+q quit"
 LIST_KEYS = BAR_KEYS.replace("←→ views", "→ into details")  # the Projects tab, with the keys in its list
 DETAIL_KEYS = BAR_KEYS.replace("←→ views", "← back   page up/down scroll")  # and with them in a project's details
-SIDEBAR_W = 34  # the Projects tab's list; its details take the rest
+SIDEBAR_W = 34  # the Projects tab's list to start with; its details take the rest
+LIST_MIN, PANE_MIN, LIST_STEP = 24, 40, 4  # the list's narrowest, the details' narrowest, and what < and > move it by
 PIN = "\uf435"  # a pinned Session's mark: Nerd Font's pin (nf-oct-pin), which Ghostty ships
 TAB_X = 12  # where the first tab's name starts: the views and searches under the tabs line up with it
 SEARCH_KEYS = "type to search · enter keep it · esc clear"
 NOTE_READ_KEYS = "↑↓ scroll   page up/down a screen   ← or esc back to the list   enter actions"
+
+
+def saved_list_width():
+    """The Projects list's width as saved in config.json, or SIDEBAR_W when there's none to use."""
+    w = config.read_config().get("project_list_width")
+    return w if type(w) is int else SIDEBAR_W
 
 
 def start_tab(names):
@@ -75,6 +83,7 @@ class Shell:
     reading, fresh, told = False, None, None  # a refresh's reads in a thread (see read_later)
     keys_seen = 0  # keys so far: a read that a key came during may be out of date
     focus, dsel = "side", 0  # on the Projects tab, where keys go: its list ("side") or the details ("pane")
+    list_w = SIDEBAR_W  # the Projects list's width as set (setup reads the saved one); list_width() holds it to the window
 
     def setup(self, sessions, query):
         """Everything the screens keep, read once at start: no terminal is touched."""
@@ -93,6 +102,7 @@ class Shell:
         names = [tab.name for tab in self.TABS]
         self.tab = names.index("Sessions") if query else start_tab(names)  # a search is for Sessions
         self.focus = "side"
+        self.list_w = saved_list_width()
         self.psel, self.ptop, self.prow_y, self.tab_x, self.dopen = 0, 0, {}, [], None
         self.pquery = ""  # the Projects tab's search
         self.folded = {"Inactive", "Closed"}  # closed sections
@@ -273,7 +283,14 @@ class Shell:
         """The tab's key bar: its keys (or the search's while typing one) and a note at the right. A
         prompt or a confirmation takes its place."""
         self.bar = None if self.asking or self.confirm else \
-            (self.bar_lines(SEARCH_KEYS if self.searching else keys, note), note_attr)
+            (self.bar_lines(SEARCH_KEYS if self.searching else f"{keys}   {self.opens_entry()}", note), note_attr)
+
+    def opens_entry(self):
+        """The key bar's word on where Open puts a Session, always in sight: ctrl+t flips tab and window."""
+        term = getattr(self, "term", None)
+        if term == "tmux":
+            return "opens tmux window"
+        return f"ctrl+t new {terminals.open_in()}" if term else "opens here"
 
     def alert_text(self):
         """A failure, or why an action didn't run, as a box until any key: its first clause is the title."""
@@ -447,10 +464,13 @@ class Shell:
 
     def help_rows(self):
         """What ? shows: the keys every tab shares, then what the current tab lists."""
-        return self.GLOBAL_HELP + self.TABS[self.tab].help
+        where = terminals.open_in()
+        other = "window" if where == "tab" else "tab"
+        return (self.GLOBAL_HELP + [("Open in", f"Sessions open in a new {where} · ctrl+t for a new {other}")]
+                + self.TABS[self.tab].help)
 
     CONTROL_KEYS = {"\n": "enter", "\r": "enter", "\t": "tab", "\x1b": "escape", "\x7f": "backspace",
-                    "\b": "backspace", "\x0e": "ctrl+n", "\x11": "ctrl+q", "\x15": "ctrl+u"}
+                    "\b": "backspace", "\x0e": "ctrl+n", "\x11": "ctrl+q", "\x14": "ctrl+t", "\x15": "ctrl+u"}
 
     def dispatch(self, k, drawn):
         """Handle one key (see handle). In an IDE's terminal, a session to open here is copied
@@ -506,6 +526,11 @@ class Shell:
                 return None
             if k == "ctrl+n":  # ctrl+n: a new project, Session, or note, from any tab
                 return self.new_menu()
+            if k == "ctrl+t":  # ctrl+t: Sessions open in a new tab, or a new window
+                where = "window" if terminals.open_in() == "tab" else "tab"
+                config.save_config(open_in=where)
+                self.msg = f"Sessions open in a new {where}"
+                return None
             if k == "escape" and getattr(self, "nreading", False):  # esc leaves a note's text
                 self.nreading = False
                 return None
@@ -522,6 +547,21 @@ class Shell:
                             self.switch_tab(i)
                 return None
         return tab.keys(self, k, drawn)
+
+    def list_width(self):
+        """The Projects list's width on screen, its divider included: as set, held between LIST_MIN and
+        what leaves the details PANE_MIN columns."""
+        return self.held_list_width(self.list_w)
+
+    def held_list_width(self, w):
+        scr = getattr(self, "scr", None)  # none yet: no window to hold it to
+        return max(LIST_MIN, min(w, scr.getmaxyx()[1] - PANE_MIN) if scr else w)
+
+    def set_list_width(self, w):
+        """Set the Projects list's width (held as list_width holds it) and save it when it changes."""
+        self.list_w = self.held_list_width(w)
+        if config.read_config().get("project_list_width") != self.list_w:
+            config.save_config(project_list_width=self.list_w)
 
     def query_attr(self):
         """Each tab keeps its own search."""
@@ -768,14 +808,29 @@ class Shell:
             config.log(f"copy: {e}")
             self.msg = f"Couldn't copy: {e}"
 
-    @staticmethod
-    def clipboard(text):
-        subprocess.run(["pbcopy"], input=text, text=True, timeout=5, check=True)
+    def clipboard(self, text):
+        cmd = system.copy_command()
+        if cmd:
+            subprocess.run(cmd, input=text, text=True, timeout=5, check=True)
+        else:
+            self.terminal_copy(text)
+
+    def terminal_copy(self, text):
+        """Hand text to the terminal's own clipboard (OSC 52); only a screen can."""
+        raise RuntimeError("no clipboard program here")
+
+    def show_in(self, label, path, reveal=False):
+        """The menu item that shows path in the file manager ("Show it" in Finder or Files), or none
+        when this computer has no file manager to show it in."""
+        fm = system.file_manager()
+        return [(f"{label} in {fm}", lambda: self.show_in_finder(path, reveal))] if fm else []
 
     def show_in_finder(self, path, reveal=False):
-        if path and os.path.exists(path):
-            subprocess.run(["open", "-R", path] if reveal else ["open", path], stdin=subprocess.DEVNULL, timeout=10)
+        if not (path and os.path.exists(path)):
+            self.msg = "Its folder no longer exists"
+        elif cmd := system.open_command(path, reveal):
+            subprocess.run(cmd, stdin=subprocess.DEVNULL, timeout=10)
             self.msg = f"Opened {short(path)}"
         else:
-            self.msg = "Its folder no longer exists"
+            self.msg = "No file manager here"
         return None

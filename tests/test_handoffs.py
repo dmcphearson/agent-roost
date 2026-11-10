@@ -389,6 +389,115 @@ class RollUp(unittest.TestCase):
         self.assertEqual(self.written(), ([], []))
 
 
+class TitledHandoffs(unittest.TestCase):
+    """roost handoff --title "<name>" (what /wrap-up <name> passes): the Handoff is named by that title, in its
+    file name, frontmatter, and heading, instead of only by its Session's name."""
+    setUp, tearDown, urlopen, transcript = Handoffs.setUp, Handoffs.tearDown, Handoffs.urlopen, Handoffs.transcript
+    WHEN = time.mktime((2026, 10, 9, 16, 5, 0, 0, 0, -1))
+    PLAIN = "2026-10-09-1605-11111111.md"
+    TITLED = "2026-10-09-1605-11111111-roost-version-2-5.md"
+
+    def run_handoff(self, *flags, summary="Fixed the printers.", when=None):
+        """(exit code, stdout, stderr) of roost handoff --session SID <flags> with the summary on stdin, at `when`."""
+        from unittest import mock
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("time.time", return_value=when or self.WHEN), mock.patch.object(sys, "stdin", io.StringIO(summary)), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = roost.run_command("handoff", ["--session", SID, *flags])
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def written(self):
+        return sorted(p.name for p in (self.folder / "handoffs").iterdir())
+
+    def test_a_titled_handoffs_file_name_ends_with_the_titles_slug(self):
+        code, out, err = self.run_handoff("--title", "roost version 2.5")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.slug("roost version 2.5"), "roost-version-2-5")
+        self.assertEqual(self.written(), [self.TITLED])
+        self.assertIn(self.TITLED, out)
+
+    def test_a_titled_handoff_keeps_its_title_as_typed_in_the_frontmatter(self):
+        code, _, err = self.run_handoff("--title", "roost version 2.5")
+        self.assertEqual(code, 0, err)
+        text = (self.folder / "handoffs" / self.TITLED).read_text()
+        self.assertIn(f"\ntitle: {roost.yaml_text('roost version 2.5')}\n", text.split("\n---", 1)[0] + "\n")
+        meta = roost.frontmatter(text)
+        self.assertEqual(meta["title"], "roost version 2.5")
+        self.assertEqual((meta["session"], meta["name"], meta["from"], meta["to"]),
+                         (SID, "Printer fix", "2026-10-09T10:00:00.000Z", "2026-10-09T11:00:00.000Z"))
+
+    def test_a_titled_handoffs_heading_is_its_title_and_its_facts_still_name_the_session(self):
+        code, _, err = self.run_handoff("--title", "roost version 2.5")
+        self.assertEqual(code, 0, err)
+        text = (self.folder / "handoffs" / self.TITLED).read_text()
+        body = text.split("\n---\n", 1)[1]
+        first = next(l for l in body.splitlines() if l.startswith("# "))
+        self.assertEqual(first, "# roost version 2.5")
+        self.assertNotIn("# Handoff from", text)
+        self.assertIn(f"- **Session:** Printer fix (`{SID}`)", text)
+        self.assertIn("## Summary\n\nFixed the printers.", text)
+
+    def test_without_a_title_the_file_name_and_heading_are_as_before(self):
+        code, _, err = self.run_handoff()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.written(), [self.PLAIN])
+        text = (self.folder / "handoffs" / self.PLAIN).read_text()
+        self.assertNotIn("title", roost.frontmatter(text))
+        self.assertIn("\n# Handoff from Printer fix\n", text)
+
+    def test_a_blank_title_is_no_title(self):
+        code, _, err = self.run_handoff("--title", "   ")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.written(), [self.PLAIN])
+        text = (self.folder / "handoffs" / self.PLAIN).read_text()
+        self.assertNotIn("title", roost.frontmatter(text))
+        self.assertIn("\n# Handoff from Printer fix\n", text)
+
+    def test_a_title_with_nothing_to_slug_has_no_suffix_and_keeps_the_title(self):
+        code, _, err = self.run_handoff("--title", "!!!")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.written(), [self.PLAIN])  # not -session, slug()'s stand-in for an empty slug
+        meta = roost.frontmatter((self.folder / "handoffs" / self.PLAIN).read_text())
+        self.assertEqual((meta["title"], meta["name"]), ("!!!", "Printer fix"))
+
+    def test_a_titled_handoffs_time_is_read_from_its_file_name(self):
+        code, _, err = self.run_handoff("--title", "roost version 2.5")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.handoff_time(self.folder / "handoffs" / self.TITLED), self.WHEN)
+        self.assertEqual(roost.read_project(self.folder)["last"], self.WHEN)
+
+    def test_a_later_handoff_starts_where_the_titled_one_stopped(self):
+        code, _, err = self.run_handoff("--title", "roost version 2.5")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(roost.last_covered(self.folder, [SID]), "2026-10-09T11:00:00.000Z")
+        self.assertEqual(roost.read_project(self.folder)["covered"], {SID: roost.stamp("2026-10-09T11:00:00.000Z")})
+        self.transcript(TRANSCRIPT + [reply("2026-10-09T17:00:00.000Z", "m3", USAGE, [
+            {"type": "tool_use", "id": "e9", "name": "Edit", "input": {"file_path": "/w/new.md"}}])])
+        later = time.mktime((2026, 10, 9, 17, 30, 0, 0, 0, -1))
+        code, _, err = self.run_handoff(summary="More.", when=later)
+        self.assertEqual(code, 0, err)
+        text = (self.folder / "handoffs" / "2026-10-09-1730-11111111.md").read_text()
+        self.assertIn("- **Files changed (1):**\n  - `/w/new.md`", text)
+        self.assertIn("claude-opus-5-5 (1 reply)", text)
+
+    def test_two_titled_handoffs_in_the_same_minute_never_overwrite_each_other(self):
+        code, _, err = self.run_handoff("--title", "roost version 2.5", summary="First part.")
+        self.assertEqual(code, 0, err)
+        first = (self.folder / "handoffs" / self.TITLED).read_text()
+        code, _, err = self.run_handoff("--title", "roost version 2.5", summary="Second part.")
+        self.assertEqual((self.folder / "handoffs" / self.TITLED).read_text(), first)
+        texts = [(self.folder / "handoffs" / n).read_text() for n in self.written()]
+        if code == 0:  # written beside the first
+            self.assertEqual(len(texts), 2, self.written())
+            self.assertEqual(sum("Second part." in t for t in texts), 1)
+        else:  # or refused, as an untitled one in the same minute is
+            self.assertIn("never overwrites", err)
+            self.assertEqual(self.written(), [self.TITLED])
+
+
 class TranscriptSummary(unittest.TestCase):
     """#52: the Handoff and README update from a transcript, without resuming the Session."""
     setUp, tearDown, urlopen, transcript = Handoffs.setUp, Handoffs.tearDown, Handoffs.urlopen, Handoffs.transcript

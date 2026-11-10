@@ -51,6 +51,9 @@ class TextualUI(UI):
         self.styles = {}
         self.too_small = False
 
+    def terminal_copy(self, text):
+        self.app.copy_to_clipboard(text)  # OSC 52: the terminal puts it on its clipboard, over SSH too
+
     @staticmethod
     def pair(n):
         return n << 8
@@ -250,7 +253,9 @@ if Widget:
                 small.refresh()
                 return
             self.drawn = ui.draw()
-            self.query_one(ProjectList).display = ui.TABS[ui.tab].name == "Projects"  # the other tabs take the whole width
+            plist = self.query_one(ProjectList)
+            plist.display = ui.TABS[ui.tab].name == "Projects"  # the other tabs take the whole width
+            plist.styles.width = ui.list_width()
             for i, tab in enumerate(ui.TABS):
                 view = self.query_one(tab.widget)
                 view.display = i == ui.tab

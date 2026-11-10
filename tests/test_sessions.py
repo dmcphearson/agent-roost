@@ -1,5 +1,6 @@
 from support import *  # noqa: F401,F403 (the shared namespace, helpers, and fixtures)
 from support import _SCRATCH, own_tests  # noqa: F401
+import shlex
 from test_projects import Projects, ProjectRows, SubProjects  # for their helpers; their tests run in test_projects.py
 from test_screens import TextualScreens  # for its helpers; its tests run in test_screens.py
 
@@ -242,6 +243,17 @@ class Retention(unittest.TestCase):
                 self.assertEqual(roost.retention(), (14, 90))
             finally:
                 roost.RETENTION_SETTINGS = saved
+
+    def test_managed_settings_come_from_this_computers_path_ahead_of_the_users(self):
+        """RETENTION_SETTINGS (built when roost starts) is this computer's managed settings,
+        system.managed_settings() (on Linux, /etc/claude-code/managed-settings.json), then the user's
+        ~/.claude/settings.json. The real platform is asked here, not the tests' macOS default, because
+        the list was built on it; test_settings_priority_and_default pins the order's effect."""
+        import importlib, sys, unittest.mock
+        system = importlib.import_module("roost.core.system")
+        with unittest.mock.patch.object(system.sys, "platform", sys.platform):
+            here = system.managed_settings()
+        self.assertEqual(roost.RETENTION_SETTINGS, [here, Path.home() / ".claude" / "settings.json"])
 
     def test_parse_reads_entrypoint(self):
         with tempfile.TemporaryDirectory() as d:
@@ -753,6 +765,14 @@ class StartingSessions(unittest.TestCase):
         for cmd in ["handoff", "project"]:  # every command the skill names exists
             self.assertIn(cmd, roost.COMMANDS)
 
+    def test_the_wrap_up_skill_passes_a_name_it_is_given_as_the_handoffs_title(self):
+        """/wrap-up <name> names the Handoff: the skill reads its arguments and passes them with --title."""
+        skill = (ROOT / "plugin" / "skills" / "wrap-up" / "SKILL.md").read_text()
+        self.assertTrue("$ARGUMENTS" in skill, "wrap-up/SKILL.md never reads $ARGUMENTS")
+        self.assertTrue([l for l in skill.splitlines() if "roost handoff" in l and "--title" in l],
+                        "wrap-up/SKILL.md has no roost handoff command with --title")
+        self.assertIn("roost handoff --session ${CLAUDE_SESSION_ID} <<'ROOST_SUMMARY'", skill)  # no name: no --title
+
     def test_the_pickup_skill_runs_brief_with_this_sessions_id(self):
         skill = (ROOT / "plugin" / "skills" / "pickup" / "SKILL.md").read_text()
         meta = roost.frontmatter(skill)
@@ -933,7 +953,7 @@ class SessionMenuGroups(unittest.TestCase):
     def test_a_live_background_sessions_actions_in_groups(self):
         ui = self.fixture()
         self.assertEqual(self.acts(ui, "Live"),
-                         ["Open in a new window", "Write its Handoff from the transcript", "Ask what to do with it",
+                         ["Open in a new tab", "Write its Handoff from the transcript", "Ask what to do with it",
                           "Pin: keep it running when idle", DIV,
                           "Move to another project", "Rename", "Copy its id", "Show its folder in Finder", DIV,
                           "Stop"])
@@ -941,7 +961,7 @@ class SessionMenuGroups(unittest.TestCase):
     def test_a_closed_sessions_actions_in_groups(self):
         ui = self.fixture()
         self.assertEqual(self.acts(ui, "Loose"),
-                         ["Open in a new window", "Write its Session recap from the transcript", "Ask what to do with it",
+                         ["Open in a new tab", "Write its Session recap from the transcript", "Ask what to do with it",
                           "Restart in the background, pinned", DIV,
                           "New project from this Session", "Add to a project", "Rename", "Dismiss", "Copy its id",
                           "Show its folder in Finder", DIV,
@@ -956,6 +976,51 @@ class SessionMenuGroups(unittest.TestCase):
             real = [a for a in self.acts(ui, name) if a != DIV]
             self.assertTrue(real, name)
             self.assertEqual([a for a in real if "…" in a], [], name)
+
+class OpenActionSaysWhere(unittest.TestCase):
+    """A Session's open action names where it will open: a new tab of an AppleScript terminal (open_in tab,
+    or missing), a new window (open_in window), a new tmux window (term tmux, whatever open_in says), or
+    here with no terminal. Rows: Live (idle in the background, in a project) and Loose (closed, no project)."""
+    project, ui, fresh, acts = StartingSessions.project, StartingSessions.ui, Dismissing.fresh, Dismissing.acts
+    setUp, fixture = Dismissing.setUp, SessionMenuGroups.fixture
+    ROWS = ("Live", "Loose")
+
+    def first(self, term, **cfg):
+        """The first action of each row, with term as the terminal and config.json's open_in set to cfg's
+        (or removed when cfg has none)."""
+        if not hasattr(self, "built"):
+            self.built = self.fixture()
+        saved = {k: v for k, v in roost.read_config().items() if k != "open_in"}
+        roost.CONFIG.write_text(json.dumps({**saved, **cfg}))
+        ui = self.fresh()
+        ui.term = term
+        return {name: self.acts(ui, name)[0] for name in self.ROWS}
+
+    def test_a_terminal_with_no_open_in_says_a_new_tab(self):
+        got = self.first("ghostty")
+        self.assertNotIn("open_in", roost.read_config())
+        self.assertEqual(got, dict.fromkeys(self.ROWS, "Open in a new tab"))
+
+    def test_open_in_tab_says_a_new_tab(self):
+        for term in ("ghostty", "iterm2", "terminal"):
+            with self.subTest(term=term):
+                self.assertEqual(self.first(term, open_in="tab"), dict.fromkeys(self.ROWS, "Open in a new tab"))
+
+    def test_open_in_window_says_a_new_window(self):
+        for term in ("ghostty", "iterm2", "terminal"):
+            with self.subTest(term=term):
+                self.assertEqual(self.first(term, open_in="window"), dict.fromkeys(self.ROWS, "Open in a new window"))
+
+    def test_tmux_says_a_new_tmux_window_whatever_open_in_says(self):
+        for cfg in ({}, {"open_in": "tab"}, {"open_in": "window"}):
+            with self.subTest(cfg=cfg):
+                self.assertEqual(self.first("tmux", **cfg), dict.fromkeys(self.ROWS, "Open in a new tmux window"))
+
+    def test_no_terminal_says_open_here_whatever_open_in_says(self):
+        for cfg in ({}, {"open_in": "tab"}, {"open_in": "window"}):
+            with self.subTest(cfg=cfg):
+                self.assertEqual(self.first(None, **cfg), dict.fromkeys(self.ROWS, "Open here"))
+
 
 class ClosedProjectSessionActions(unittest.TestCase):
     """A closed Session an open project lists and no Handoff covers: its actions start with writing its
@@ -1615,6 +1680,418 @@ class SessionRows(unittest.TestCase):
         self.assertIn("Context", text)
         self.assertTrue(any(self.TONER_PLAIN in l for l in above), "the list shows its last message")
         self.assertNotIn("Swapped the", text, "the panel doesn't")
+
+
+
+class OpeningInATab(unittest.TestCase):
+    """#325: roost opens a Session in a new tab of the chosen terminal by default; config open_in "window"
+    keeps a new window. Terminal.app's tab needs Accessibility, so there a failed tab falls back to a window."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.saved = roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings, roost.NOTES
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.NOTES = base / "config.json", base / "_done", base / "sessions", base / "notes"
+        roost.claude_settings = lambda: {}
+        roost.PLUGIN, roost.PROJECTS = base / "plugin", base / "transcripts"
+        (roost.PLUGIN / ".claude-plugin").mkdir(parents=True)
+        (roost.PLUGIN / ".claude-plugin" / "plugin.json").write_text("{}")
+        self.root = base / "projects"
+        self.root.mkdir()
+        self.work = base / "work"
+        self.work.mkdir()
+        roost.save_config(projects_dir=str(self.root))
+        self.calls = []  # (script, args) for each osa call
+        self.failing = set()  # scripts that fail (osa returns None)
+        roost.osa = lambda script, *args: self.calls.append((script, args)) or (None if script in self.failing else "ok")
+
+    def tearDown(self):
+        roost.CONFIG, roost.DONE, roost.RECAPS, roost.PLUGIN, roost.PROJECTS, roost.osa, roost.claude_settings, roost.NOTES = self.saved
+        self.tmp.cleanup()
+
+    def script(self, term, kind):
+        return roost.TERMINALS[term].get(kind)
+
+    def which(self, term):
+        """Which of term's scripts each osa call ran: "tab", "new", "focus", or "other"."""
+        kinds = {self.script(term, k): k for k in ("focus", "new", "tab") if self.script(term, k)}
+        return [kinds.get(script, "other") for script, _ in self.calls]
+
+    def project(self, name):
+        folder = self.root / name
+        (folder / "handoffs").mkdir(parents=True)
+        (folder / "README.md").write_text(README)
+        return folder
+
+    def sessions_in(self, folder):
+        return len(roost.frontmatter((folder / "README.md").read_text())["sessions"])
+
+    def demo(self, name="Printer fix"):
+        return session(name, cwd=str(self.work))
+
+    # the scripts
+
+    def test_every_terminal_has_a_tab_script(self):
+        for term in roost.TERMINALS:
+            with self.subTest(term=term):
+                self.assertIsInstance(self.script(term, "tab"), str)
+                self.assertIn("item 1 of argv", self.script(term, "tab") or "")
+
+    def test_ghostty_opens_a_tab_in_the_front_window_or_a_window_when_there_is_none(self):
+        tab = self.script("ghostty", "tab") or ""
+        self.assertIn("new tab", tab)
+        self.assertIn("new window", tab)
+        self.assertIn("item 3 of argv", tab)  # Ghostty runs the direct-exec form, as in "new"
+
+    def test_iterm2_creates_a_tab_or_a_window_when_there_is_none(self):
+        tab = self.script("iterm2", "tab") or ""
+        self.assertIn("create tab with default profile", tab)
+        self.assertIn("create window", tab)
+        self.assertIn("item 2 of argv", tab)
+
+    def test_terminal_presses_cmd_t_and_runs_the_command_in_the_front_tab(self):
+        tab = self.script("terminal", "tab") or ""
+        self.assertIn("System Events", tab)
+        self.assertIn('keystroke "t" using command down', tab)
+        self.assertRegex(tab, r"do script .* in ")
+        self.assertIn("item 2 of argv", tab)
+
+    # open_in_window
+
+    def test_open_in_window_uses_a_tab_by_default(self):
+        for term in roost.TERMINALS:
+            with self.subTest(term=term):
+                self.calls.clear()
+                s = self.demo()
+                self.assertEqual(roost.open_in_window(s, term), "Opened Printer fix in a new tab")
+                self.assertEqual(self.which(term), ["tab"])
+                self.assertEqual(self.calls[0][1], (str(self.work), *roost.window_command(f"claude attach {s['attach']}", "Printer fix")))
+
+    def test_open_in_tab_and_an_unknown_value_both_mean_a_tab(self):
+        for value in ("tab", "sideways", None, ""):
+            with self.subTest(open_in=value):
+                roost.save_config(open_in=value)
+                self.calls.clear()
+                self.assertEqual(roost.open_in_window(self.demo(), "ghostty"), "Opened Printer fix in a new tab")
+                self.assertEqual(self.which("ghostty"), ["tab"])
+
+    def test_open_in_window_keeps_a_window(self):
+        roost.save_config(open_in="window")
+        for term in roost.TERMINALS:
+            with self.subTest(term=term):
+                self.calls.clear()
+                self.assertEqual(roost.open_in_window(self.demo(), term), "Opened Printer fix in a new window")
+                self.assertEqual(self.which(term), ["new"])
+
+    def test_a_failed_tab_says_tab_and_ghostty_and_iterm2_do_not_fall_back(self):
+        for term, label in [("ghostty", "Ghostty"), ("iterm2", "iTerm2")]:
+            with self.subTest(term=term):
+                self.calls.clear()
+                self.failing = {self.script(term, "tab")}
+                s = self.demo()
+                self.assertEqual(roost.open_in_window(s, term),
+                                 f"Couldn't open a {label} tab (check Automation permission, or run roost setup)")
+                self.assertEqual(self.which(term), ["tab"])
+                self.assertNotIn("opening", s)
+
+    def test_a_failed_window_still_says_window(self):
+        roost.save_config(open_in="window")
+        self.failing = {self.script("ghostty", "new")}
+        self.assertEqual(roost.open_in_window(self.demo(), "ghostty"),
+                         "Couldn't open a Ghostty window (check Automation permission, or run roost setup)")
+
+    def test_terminal_app_falls_back_to_a_window_and_says_tabs_need_accessibility(self):
+        self.failing = {self.script("terminal", "tab")}
+        s = self.demo()
+        msg = roost.open_in_window(s, "terminal")
+        self.assertIn("in a new window", msg)
+        self.assertIn("Accessibility", msg)
+        self.assertEqual(self.which("terminal"), ["tab", "new"])
+        self.assertEqual(self.calls[0][1], self.calls[1][1])  # the window runs the same command in the same folder
+
+    def test_terminal_app_with_neither_a_tab_nor_a_window_says_it_couldnt_open(self):
+        self.failing = {self.script("terminal", "tab"), self.script("terminal", "new")}
+        self.assertTrue(self.script("terminal", "tab"))
+        self.assertIn("Couldn't open", roost.open_in_window(self.demo(), "terminal"))
+        self.assertEqual(self.which("terminal"), ["tab", "new"])
+
+    def test_focusing_an_open_session_is_unchanged(self):
+        for value in (None, "window"):
+            with self.subTest(open_in=value):
+                roost.save_config(open_in=value)
+                self.calls.clear()
+                s = self.demo()
+                s["attached"] = True
+                self.assertEqual(roost.open_in_window(s, "ghostty"), "Switched to Printer fix, already open")
+                self.assertEqual(self.which("ghostty"), ["focus"])
+
+    # start_session
+
+    def test_start_session_opens_a_tab_and_records_it(self):
+        folder = self.project("p")
+        msg = roost.start_session("p", str(folder), "ghostty")
+        self.assertTrue(msg.startswith("Started a Session for p"), msg)
+        self.assertEqual(self.which("ghostty"), ["tab"])
+        cwd, typed, direct = self.calls[0][1]
+        self.assertEqual(cwd, str(folder))
+        self.assertIn("/roost:pickup p", direct)
+        self.assertEqual(self.sessions_in(folder), 3)
+
+    def test_start_session_with_open_in_window_opens_a_window(self):
+        roost.save_config(open_in="window")
+        folder = self.project("p")
+        self.assertTrue(roost.start_session("p", str(folder), "ghostty").startswith("Started a Session for p"))
+        self.assertEqual(self.which("ghostty"), ["new"])
+        self.assertEqual(self.sessions_in(folder), 3)
+
+    def test_start_session_in_a_failed_tab_records_nothing(self):
+        folder = self.project("p")
+        self.failing = {self.script("iterm2", "tab")}
+        self.assertTrue(self.script("iterm2", "tab"))
+        self.assertEqual(roost.start_session("p", str(folder), "iterm2"),
+                         "Couldn't open a iTerm2 tab (check Automation permission, or run roost setup)")
+        self.assertEqual(self.which("iterm2"), ["tab"])
+        self.assertEqual(self.sessions_in(folder), 2)
+
+    def test_start_session_in_terminal_app_falls_back_to_a_window_and_records_it(self):
+        folder = self.project("p")
+        self.failing = {self.script("terminal", "tab")}
+        self.assertTrue(self.script("terminal", "tab"))
+        msg = roost.start_session("p", str(folder), "terminal")
+        self.assertTrue(msg.startswith("Started a Session for p"), msg)
+        self.assertIn("Accessibility", msg)
+        self.assertEqual(self.which("terminal"), ["tab", "new"])
+        self.assertEqual(self.sessions_in(folder), 3)
+
+    def test_start_session_when_terminal_app_opens_nothing_records_nothing(self):
+        folder = self.project("p")
+        self.failing = {self.script("terminal", "tab"), self.script("terminal", "new")}
+        self.assertTrue(self.script("terminal", "tab"))
+        self.assertIn("Couldn't open", roost.start_session("p", str(folder), "terminal"))
+        self.assertEqual(self.sessions_in(folder), 2)
+
+    # start_plain
+
+    def test_start_plain_opens_a_tab(self):
+        msg = roost.start_plain(str(self.work), "ghostty")
+        self.assertTrue(msg.startswith("Started a Session in"), msg)
+        self.assertEqual(self.which("ghostty"), ["tab"])
+        self.assertEqual(self.calls[0][1][0], str(self.work))
+
+    def test_start_plain_with_open_in_window_opens_a_window(self):
+        roost.save_config(open_in="window")
+        self.assertTrue(roost.start_plain(str(self.work), "ghostty").startswith("Started a Session in"))
+        self.assertEqual(self.which("ghostty"), ["new"])
+
+    def test_start_plain_in_a_failed_tab_says_tab(self):
+        self.failing = {self.script("ghostty", "tab")}
+        self.assertTrue(self.script("ghostty", "tab"))
+        self.assertEqual(roost.start_plain(str(self.work), "ghostty"),
+                         "Couldn't open a Ghostty tab (check Automation permission, or run roost setup)")
+        self.assertEqual(self.which("ghostty"), ["tab"])
+
+    def test_start_plain_in_terminal_app_falls_back_to_a_window(self):
+        self.failing = {self.script("terminal", "tab")}
+        self.assertTrue(self.script("terminal", "tab"))
+        msg = roost.start_plain(str(self.work), "terminal")
+        self.assertTrue(msg.startswith("Started a Session in"), msg)
+        self.assertIn("Accessibility", msg)
+        self.assertEqual(self.which("terminal"), ["tab", "new"])
+
+
+
+class OpeningInTmux(unittest.TestCase):
+    """Linux support: with terminal "tmux", roost opens and jumps to Sessions by running the tmux command
+    (tmux new-window, list-windows, switch-client, select-window), never AppleScript. Nothing real runs:
+    subprocess.run is a stand-in that answers as tmux would."""
+    setUp_tab, tearDown, project, sessions_in = OpeningInATab.setUp, OpeningInATab.tearDown, OpeningInATab.project, OpeningInATab.sessions_in
+    LIST = ["tmux", "list-windows", "-a", "-F", "#{session_name}:#{window_index}\t#{window_name}\t#{pane_title}"]
+    SID = "00000000-0000-4000-8000-0000000000aa"
+
+    def setUp(self):
+        import subprocess, unittest.mock
+        self.setUp_tab()  # osa records into self.calls; tmux must leave it empty
+        self.ran = []  # (argv, kwargs) for each subprocess.run
+        self.tmux_fails = None  # None, or "exit" (tmux exits 1) or "missing" (FileNotFoundError)
+        self.windows = ""  # what tmux list-windows prints
+
+        def run(argv, *a, **kw):
+            argv = list(argv)
+            self.ran.append((argv, kw))
+            if argv[:1] == ["tmux"]:
+                if self.tmux_fails == "missing":
+                    raise FileNotFoundError(2, "No such file or directory", "tmux")
+                if self.tmux_fails == "exit":
+                    return subprocess.CompletedProcess(argv, 1, "", "no server running")
+                return subprocess.CompletedProcess(argv, 0, self.windows if "list-windows" in argv else "", "")
+            return subprocess.CompletedProcess(argv, 0, "", "")  # ps, pgrep: nothing open
+        patches = [unittest.mock.patch.object(roost.terminals.subprocess, "run", run),
+                   unittest.mock.patch.object(roost.terminals.uuid, "uuid4", lambda: self.SID)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def tmux(self):
+        """The argv of every tmux command roost ran, in order."""
+        return [argv for argv, _ in self.ran if argv[:1] == ["tmux"]]
+
+    def assert_quiet(self):
+        """Every tmux command reads nothing from the terminal and keeps its output off the screen; no osa."""
+        import subprocess
+        for argv, kw in self.ran:
+            if argv[:1] == ["tmux"]:
+                self.assertEqual(kw.get("stdin"), subprocess.DEVNULL, argv)
+                self.assertTrue(kw.get("capture_output") or kw.get("stdout") == subprocess.PIPE, argv)
+        self.assertEqual(self.calls, [], "osa ran for tmux")
+
+    def new_window(self, cwd, name, cmd):
+        return ["tmux", "new-window", "-c", cwd, "-n", name, roost.window_command(cmd, name)[1]]
+
+    def pickup(self, pid, name):
+        return shlex.join(["claude", "--session-id", self.SID, "-n", name, *roost.plugin_args(), f"/roost:pickup {pid}"])
+
+    # start_session
+
+    def test_start_session_opens_a_tmux_window_and_records_it(self):
+        folder = self.project("p")
+        msg = roost.start_session("p", str(folder), "tmux")
+        self.assertEqual(msg, f"Started a Session for p in {roost.short(str(folder))}")
+        self.assertEqual(self.tmux(), [self.new_window(str(folder), "p", self.pickup("p", "p"))])
+        self.assert_quiet()
+        self.assertEqual(self.sessions_in(folder), 3)
+
+    def test_start_session_names_the_tmux_window_after_the_session(self):
+        folder = self.project("p")
+        roost.start_session("p", str(folder), "tmux", name="Printer fix")
+        self.assertEqual(self.tmux(), [self.new_window(str(folder), "Printer fix", self.pickup("p", "Printer fix"))])
+
+    def test_start_session_ignores_open_in(self):
+        for value in ("tab", "window"):
+            with self.subTest(open_in=value):
+                roost.save_config(open_in=value)
+                self.ran.clear()
+                folder = self.project(f"p-{value}")
+                self.assertTrue(roost.start_session(f"p-{value}", str(folder), "tmux").startswith(f"Started a Session for p-{value}"))
+                self.assertEqual([a[:2] for a in self.tmux()], [["tmux", "new-window"]])
+                self.assert_quiet()
+
+    def test_start_session_when_tmux_fails_records_nothing(self):
+        for fails in ("exit", "missing"):
+            with self.subTest(tmux=fails):
+                self.tmux_fails = fails
+                folder = self.project(f"p-{fails}")
+                self.assertEqual(roost.start_session(f"p-{fails}", str(folder), "tmux"),
+                                 "Couldn't open a tmux window (is tmux running? roost setup chooses another terminal)")
+                self.assertEqual(self.sessions_in(folder), 2)
+                self.assert_quiet()
+
+    # start_plain
+
+    def test_start_plain_opens_a_tmux_window_named_after_the_folder(self):
+        msg = roost.start_plain(str(self.work), "tmux")
+        self.assertEqual(msg, f"Started a Session in {roost.short(str(self.work))}")
+        cmd = shlex.join(["claude", *roost.plugin_args()])
+        self.assertEqual(self.tmux(), [self.new_window(str(self.work), "work", cmd)])
+        self.assert_quiet()
+
+    def test_start_plain_when_tmux_fails_says_so(self):
+        for fails in ("exit", "missing"):
+            with self.subTest(tmux=fails):
+                self.tmux_fails = fails
+                self.assertEqual(roost.start_plain(str(self.work), "tmux"),
+                                 "Couldn't open a tmux window (is tmux running? roost setup chooses another terminal)")
+                self.assert_quiet()
+
+    # open_in_window: a Session that isn't open
+
+    def test_open_in_window_opens_a_background_session_in_a_tmux_window(self):
+        for value in (None, "tab", "window"):
+            with self.subTest(open_in=value):
+                roost.save_config(open_in=value)
+                self.ran.clear()
+                s = session("Printer fix", cwd=str(self.work))
+                self.assertEqual(roost.open_in_window(s, "tmux"), "Opened Printer fix in a new tmux window")
+                self.assertEqual(self.tmux(), [self.new_window(roost.launch_dir(s), "Printer fix", f"claude attach {s['attach']}")])
+                self.assert_quiet()
+
+    def test_open_in_window_resumes_a_closed_session_in_a_tmux_window(self):
+        s = session("Printer fix", state="closed", kind=None, cwd=str(self.work))
+        self.assertEqual(roost.open_in_window(s, "tmux"), "Opened Printer fix in a new tmux window")
+        self.assertEqual(self.tmux(), [self.new_window(roost.launch_dir(s), "Printer fix", f"claude --resume {s['id']}")])
+        self.assert_quiet()
+
+    # open_in_window: jumping to an open Session
+
+    def test_jumping_to_an_open_session_switches_to_its_tmux_window(self):
+        self.windows = "main:0\tzsh\tdemo-host\nwork:3\t✳ Printer fix\tclaude\n"
+        for s in (session("Printer fix", kind="interactive"), session("Printer fix", attached=True)):
+            with self.subTest(kind=s["kind"]):
+                self.ran.clear()
+                self.assertEqual(roost.open_in_window(s, "tmux"), "Switched to Printer fix, already open")
+                self.assertEqual(self.tmux(), [self.LIST, ["tmux", "switch-client", "-t", "work:3"],
+                                               ["tmux", "select-window", "-t", "work:3"]])
+                self.assert_quiet()
+
+    def test_jumping_matches_a_pane_title(self):
+        self.windows = "main:0\tzsh\tdemo-host\nmain:2\tclaude\t✳ Printer fix\n"
+        self.assertEqual(roost.open_in_window(session("Printer fix", kind="interactive"), "tmux"),
+                         "Switched to Printer fix, already open")
+        self.assertEqual(self.tmux()[1:], [["tmux", "switch-client", "-t", "main:2"], ["tmux", "select-window", "-t", "main:2"]])
+
+    def test_jumping_matches_the_ai_title(self):
+        self.windows = "main:0\tzsh\tdemo-host\nmain:4\tclaude\t✳ Fix the demo printer\n"
+        s = session("Printer fix", kind="interactive")
+        s["ai_title"] = "Fix the demo printer"
+        self.assertEqual(roost.open_in_window(s, "tmux"), "Switched to Printer fix, already open")
+        self.assertEqual(self.tmux()[1:], [["tmux", "switch-client", "-t", "main:4"], ["tmux", "select-window", "-t", "main:4"]])
+
+    def test_jumping_takes_the_first_matching_window(self):
+        self.windows = "main:1\tPrinter fix\tclaude\nmain:5\tPrinter fix\tclaude\n"
+        roost.open_in_window(session("Printer fix", kind="interactive"), "tmux")
+        self.assertEqual(self.tmux()[1:], [["tmux", "switch-client", "-t", "main:1"], ["tmux", "select-window", "-t", "main:1"]])
+
+    def test_a_name_only_in_the_middle_of_a_title_is_no_match(self):
+        self.windows = "main:1\tPrinter fix notes\tvim\n"
+        self.assertEqual(roost.open_in_window(session("Printer fix", kind="interactive"), "tmux"),
+                         "Printer fix is already open, but its tmux window wasn't found")
+        self.assertEqual(self.tmux(), [self.LIST])
+        self.assert_quiet()
+
+    def test_jumping_with_no_matching_window_says_so(self):
+        for fails in (None, "exit", "missing"):
+            with self.subTest(tmux=fails):
+                self.ran.clear()
+                self.tmux_fails = fails
+                self.windows = "main:0\tzsh\tdemo-host\n"
+                self.assertEqual(roost.open_in_window(session("Printer fix", kind="interactive"), "tmux"),
+                                 "Printer fix is already open, but its tmux window wasn't found")
+                self.assertEqual(self.tmux(), [self.LIST])
+                self.assert_quiet()
+
+    # mark_open
+
+    def test_mark_open_marks_a_session_named_in_a_tmux_window_name_or_pane_title(self):
+        self.windows = "main:0\tzsh\tdemo-host\nmain:1\t✳ Printer fix\tclaude\nmain:2\tclaude\t✳ Toner check\n"
+        rows = [session("Printer fix"), session("Toner check"), session("Badge reader")]
+        roost.mark_open(rows, "tmux")
+        self.assertEqual([s["attached"] for s in rows], [True, True, False])
+        self.assertIn(self.LIST, self.tmux())
+        self.assert_quiet()
+
+    def test_mark_open_marks_only_background_sessions(self):
+        self.windows = "main:1\tPrinter fix\tclaude\n"
+        rows = [session("Printer fix", kind="interactive")]
+        roost.mark_open(rows, "tmux")
+        self.assertFalse(rows[0]["attached"])
+
+    def test_mark_open_when_tmux_fails_marks_nothing(self):
+        for fails in ("exit", "missing"):
+            with self.subTest(tmux=fails):
+                self.tmux_fails = fails
+                self.windows = "main:1\tPrinter fix\tclaude\n"
+                rows = [session("Printer fix", attached=True)]
+                roost.mark_open(rows, "tmux")
+                self.assertFalse(rows[0]["attached"])
+                self.assert_quiet()
 
 
 if __name__ == "__main__":

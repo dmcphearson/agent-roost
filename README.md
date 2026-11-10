@@ -127,11 +127,12 @@ What your Sessions cost: every reply's tokens at Anthropic's list price, before 
 
 ### Settings
 
-`roost setup` writes the first two; the rest are optional. All live in `~/.config/roost/config.json`.
+`roost setup` writes the first three; the rest are optional. All live in `~/.config/roost/config.json`.
 
 | Setting | What it does |
 |---|---|
-| `terminal` | Where sessions open: `ghostty`, `terminal`, or `iterm2` |
+| `terminal` | Where sessions open: `ghostty`, `terminal`, `iterm2`, or `tmux` |
+| `open_in` | `tab` (default) or `window`: whether a Session opens in a new tab or a new window; ctrl+t in roost switches |
 | `projects_dir` | Your Projects folder (default `~/.roost/projects`) |
 | `editor`, `editor_wait` | The editor notes open in, and whether roost waits for it (see Notes) |
 | `summary_model` | The model that writes Handoffs, recaps, and adopt plans and answers Ask (default `claude-sonnet-5-5`) |
@@ -145,7 +146,7 @@ Click a column header to sort by it, and click again to reverse.
 
 ## Terminals
 
-Ghostty, Terminal.app, and iTerm2 can open sessions in new windows. Choose one with `roost setup`; the choice is saved in `~/.config/roost/config.json`. With no terminal configured, Enter opens the session in the current terminal. In an IDE's terminal (IntelliJ and the other JetBrains IDEs, VS Code, Cursor), which roost can't open a tab in, it copies the command that runs the session instead and says how to open a new tab to paste it in; roost keeps running.
+Inside tmux, roost opens each session in a new tmux window named after it, and jumps to that window when it's already open; this works on macOS and Linux, and over SSH. On macOS, Ghostty, Terminal.app, and iTerm2 can open sessions in a new tab (the default) or a new window; ctrl+t switches, from any tab. Terminal.app needs Accessibility permission for your terminal to open a tab, and opens a window without it. Choose a terminal with `roost setup`; the choice is saved in `~/.config/roost/config.json`. With no terminal configured, Enter opens the session in the current terminal. In an IDE's terminal (IntelliJ and the other JetBrains IDEs, VS Code, Cursor), which roost can't open a tab in, it copies the command that runs the session instead and says how to open a new tab to paste it in; roost keeps running.
 
 ## How it works
 

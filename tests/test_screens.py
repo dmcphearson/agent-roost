@@ -1146,6 +1146,51 @@ class TextualScreens(unittest.TestCase):
 
 
 @unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class OpenInOnScreen(unittest.TestCase):
+    """The key bar at the bottom of the screen says where Open puts a Session, on every tab: with Ghostty,
+    "ctrl+t new tab" until ctrl+t, then "ctrl+t new window". The real read_config and save_config, on a
+    temp config.json, so ctrl+t's choice is kept and read back."""
+    run_app = TextualScreens.run_app
+    keys = staticmethod(TextualScreens.keys)
+
+    def setUp(self):
+        import unittest.mock
+        real = dict(read_config=roost.read_config, save_config=roost.save_config)
+        TextualScreens.setUp(self)  # Ghostty, the chosen terminal
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for patcher in (unittest.mock.patch.multiple(roost, **real),
+                        unittest.mock.patch.object(roost, "CONFIG", Path(tmp.name) / "config.json")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def bottom(seen, label):
+        """A step that keeps, under label, the key bar's rows (the bottom of the screen) as one string."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            rows = len(pilot.app.ui.bar[0]) if pilot.app.ui.bar else 1
+            seen[label] = "   ".join(screen_text(pilot.app)[-rows:])
+            seen[label + " tab"] = pilot.app.ui.TABS[pilot.app.ui.tab].name
+        return step
+
+    def test_the_bottom_row_says_new_tab_and_after_ctrl_t_new_window_on_every_tab(self):
+        for name in [t.name for t in roost.UI.TABS]:
+            roost.CONFIG.write_text(json.dumps({"tab": name}))  # open_in missing: a new tab
+            seen = {}
+            self.run_app([open_view(name), self.bottom(seen, "before"), self.keys("ctrl+t"), self.bottom(seen, "after")])
+            with self.subTest(tab=name):
+                self.assertEqual((seen["before tab"], seen["after tab"]), (name, name))
+                self.assertEqual(json.loads(roost.CONFIG.read_text()).get("open_in"), "window", "ctrl+t saved the choice")
+                self.assertIn("ctrl+t new tab", seen["before"])
+                self.assertNotIn("ctrl+t new window", seen["before"])
+                self.assertIn("ctrl+t new window", seen["after"])
+                self.assertNotIn("ctrl+t new tab", seen["after"])
+                self.assertIn("ctrl+q quit", seen["after"], "the bar's other keys stay")
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
 class TopTabs(unittest.TestCase):
     """The top bar's tabs: Agent Roost, then Projects, Sessions, Notes, and Stats, the current one green and
     bold. Tab and shift+tab move to the next and previous tab, wrapping, wherever the keys are; a click on a
@@ -1564,6 +1609,115 @@ class TopTabs(unittest.TestCase):
                 self.assertTrue(any(f"Keys, then {name}" in l for l in self.screen(app)), "\n".join(self.screen(app)))
 
     screen = TextualScreens.screen
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class ClipboardAndFiles(unittest.TestCase):
+    """Copying and showing a folder go through what this computer can do (roost.core.system): the clipboard
+    program copy_command() names, or the terminal itself (OSC 52, Textual's copy_to_clipboard) when it names
+    none; the file manager file_manager() names in the menu ("Finder", "Files"), or no item when there's none.
+    No real clipboard program or file manager runs: subprocess.run is caught where the shell calls it."""
+    setUp, run_app = TextualScreens.setUp, TextualScreens.run_app
+    keys, select = staticmethod(TextualScreens.keys), staticmethod(TextualScreens.select)
+    on_session, picked = TextualScreens.on_session, TextualScreens.picked
+
+    @staticmethod
+    def system():
+        return importlib.import_module("roost.core.system")
+
+    def caught_runs(self):
+        """Catch subprocess.run as the shell calls it; returns the list of (argv, kwargs) it got."""
+        import unittest.mock
+        shell, ran = importlib.import_module("roost.app.shell"), []
+
+        def run(argv, *a, **kw):
+            ran.append((list(argv), kw))
+            return subprocess_done(argv)
+        p = unittest.mock.patch.object(shell.subprocess, "run", run)
+        p.start()
+        self.addCleanup(p.stop)
+        return ran
+
+    def on(self, platform, env, found):
+        """This computer as roost.core.system sees it: the platform, exactly env, and the programs found."""
+        import unittest.mock
+        s = self.system()
+        for p in (unittest.mock.patch.object(s.sys, "platform", platform),
+                  unittest.mock.patch.dict(s.os.environ, env, clear=True),
+                  unittest.mock.patch.object(s.shutil, "which",
+                                             lambda name, *a, **k: f"/usr/bin/{name}" if name in found else None)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def copy_id(self):
+        """Copy its id on Printer fix, through its actions on the Sessions tab."""
+        return [open_view("Sessions")] + self.picked("Printer fix", "Copy its id") + [self.keys("enter")]
+
+    def menu_of(self, seen, name="Printer fix"):
+        """Steps that keep Printer fix's action labels under seen["menu"], then close the menu."""
+        async def look(pilot):
+            ui = pilot.app.ui
+            seen["menu"] = [o[0] for o in ui.choice_options() if not is_divider(o)] if ui.choosing else None
+        return [open_view("Sessions"), self.on_session(name), self.keys("enter"), look, self.keys("escape")]
+
+    # copying
+
+    def test_with_no_clipboard_program_copy_its_id_goes_through_the_terminal(self):
+        import unittest.mock
+        sent, ran = [], self.caught_runs()
+        sid = self.sessions[0]["id"]
+        with unittest.mock.patch.object(self.system(), "copy_command", lambda: None), \
+                unittest.mock.patch.object(roost.RoostApp, "copy_to_clipboard", lambda app, text: sent.append(text)):
+            app = self.run_app(self.copy_id())
+        self.assertEqual(sent, [sid])
+        self.assertFalse([r for r in ran if r[1].get("input") == sid], "no program got the id")
+        self.assertEqual(app.ui.msg, f"Copied {sid[:8]}… to the clipboard")
+
+    def test_with_a_clipboard_program_copy_its_id_pipes_it_in(self):
+        import unittest.mock
+        sent, ran = [], self.caught_runs()
+        sid = self.sessions[0]["id"]
+        with unittest.mock.patch.object(self.system(), "copy_command", lambda: ["tmux", "load-buffer", "-w", "-"]), \
+                unittest.mock.patch.object(roost.RoostApp, "copy_to_clipboard", lambda app, text: sent.append(text)):
+            app = self.run_app(self.copy_id())
+        self.assertEqual([(argv, kw.get("input")) for argv, kw in ran if kw.get("input") == sid],
+                         [(["tmux", "load-buffer", "-w", "-"], sid)])
+        self.assertEqual(sent, [], "the terminal path isn't used when a program copies it")
+        self.assertEqual(app.ui.msg, f"Copied {sid[:8]}… to the clipboard")
+
+    # showing a folder
+
+    def test_on_linux_with_a_display_the_sessions_menu_shows_its_folder_in_files(self):
+        self.on("linux", {"DISPLAY": ":0"}, found=("xdg-open",))
+        ran, seen = self.caught_runs(), {}
+        cwd = self.sessions[0]["cwd"]  # /tmp: a folder that exists on every computer
+        self.run_app(self.menu_of(seen))
+        self.assertIn("Show its folder in Files", seen["menu"])
+        self.assertFalse([l for l in seen["menu"] if "Finder" in l], seen["menu"])
+        self.run_app([open_view("Sessions")] + self.picked("Printer fix", "Show its folder in Files") + [self.keys("enter")])
+        self.assertIn(["xdg-open", cwd], [argv for argv, _ in ran])
+
+    def test_on_macos_the_sessions_menu_still_says_finder_and_runs_open(self):
+        self.on("darwin", {}, found=())
+        ran, seen = self.caught_runs(), {}
+        cwd = self.sessions[0]["cwd"]
+        self.run_app(self.menu_of(seen))
+        self.assertIn("Show its folder in Finder", seen["menu"])
+        self.run_app([open_view("Sessions")] + self.picked("Printer fix", "Show its folder in Finder") + [self.keys("enter")])
+        self.assertIn(["open", cwd], [argv for argv, _ in ran])
+
+    def test_with_no_file_manager_the_sessions_menu_leaves_the_item_out(self):
+        self.on("linux", {"SSH_CONNECTION": "192.0.2.1 50000 192.0.2.2 22"}, found=("xdg-open",))
+        seen = {}
+        self.run_app(self.menu_of(seen))
+        self.assertIsNotNone(seen["menu"], "Printer fix's actions never came up")
+        self.assertIn("Copy its id", seen["menu"])  # the menu is there, just without the item
+        self.assertFalse([l for l in seen["menu"] if l.startswith("Show ")], seen["menu"])
+
+
+def subprocess_done(argv):
+    import subprocess
+    return subprocess.CompletedProcess(argv, 0, "", "")
 
 
 if __name__ == "__main__":

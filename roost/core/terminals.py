@@ -1,4 +1,4 @@
-"""Terminals: which one, opening a Session in a window, and AppleScript."""
+"""Terminals: which one, opening a Session in a tab or window (AppleScript) or a tmux window, and jumping to it."""
 import os, re, shlex, subprocess, time, uuid
 from pathlib import Path
 
@@ -9,6 +9,7 @@ from roost.core.mdfiles import readme_lines
 from roost.core import config
 from roost.core import projectdata
 from roost.core import plugin
+from roost.core import system
 
 
 def mark_open(sessions, term):
@@ -29,10 +30,10 @@ def start_plain(cwd, term):
         argv = ["claude"]
     if not term:
         return {"start": argv, "cwd": cwd}
-    t = TERMINALS[term]
-    if osa(t["new"], cwd, *window_command(shlex.join(argv), os.path.basename(cwd.rstrip("/")) or cwd)) is None:
-        return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
-    return f"Started a Session in {short(cwd)}"
+    opened, where, hint = open_new(term, cwd, shlex.join(argv), os.path.basename(cwd.rstrip("/")) or cwd)
+    if not opened:
+        return failed(term, where)
+    return f"Started a Session in {short(cwd)}{hint}"
 
 
 def start_session(pid, cwd, term, name=None):
@@ -47,16 +48,16 @@ def start_session(pid, cwd, term, name=None):
     if not term:
         projectdata.assign_session(sid, name, folder)
         return {"start": argv, "cwd": cwd}
-    t = TERMINALS[term]
-    if osa(t["new"], cwd, *window_command(shlex.join(argv), name)) is None:
-        return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
+    opened, where, hint = open_new(term, cwd, shlex.join(argv), name)
+    if not opened:
+        return failed(term, where)
     projectdata.assign_session(sid, name, folder)
-    return f"Started a Session for {name} in {short(cwd)}"
+    return f"Started a Session for {name} in {short(cwd)}{hint}"
 
 
 # ---------- terminals ----------
-# Each terminal gets two AppleScripts: "new" opens a window in a folder and
-# runs a command; "focus" brings forward a window whose title ends with one of
+# Each terminal gets three AppleScripts: "new" opens a window in a folder and
+# runs a command; "tab" does the same in a new tab of its front window; "focus" brings forward a window whose title ends with one of
 # the given names (Claude Code puts the session name in the title).
 
 TERMINALS = {
@@ -72,6 +73,21 @@ on run argv
     set initial working directory of cfg to item 1 of argv
     set command of cfg to item 3 of argv
     new window with configuration cfg
+    activate
+  end tell
+end run
+""",
+        "tab": """
+on run argv
+  tell application "Ghostty"
+    set cfg to new surface configuration
+    set initial working directory of cfg to item 1 of argv
+    set command of cfg to item 3 of argv
+    if (count of windows) is 0 then
+      new window with configuration cfg
+    else
+      new tab in front window with configuration cfg
+    end if
     activate
   end tell
 end run
@@ -110,6 +126,23 @@ on run argv
   end tell
 end run
 """,
+        # Terminal can't open a tab by script: cmd+T through System Events, which needs Accessibility
+        # permission for the terminal roost runs in. Without it this fails and roost opens a window.
+        "tab": """
+on run argv
+  tell application "Terminal"
+    if (count of windows) is 0 then
+      do script "cd " & quoted form of (item 1 of argv) & " && " & (item 2 of argv)
+    else
+      activate
+      tell application "System Events" to tell process "Terminal" to keystroke "t" using command down
+      delay 0.3
+      do script "cd " & quoted form of (item 1 of argv) & " && " & (item 2 of argv) in selected tab of front window
+    end if
+    activate
+  end tell
+end run
+""",
         "focus": """
 on run argv
   tell application "Terminal"
@@ -144,6 +177,20 @@ on run argv
   end tell
 end run
 """,
+        "tab": """
+on run argv
+  tell application "iTerm"
+    if (count of windows) is 0 then
+      set w to (create window with default profile)
+    else
+      set w to current window
+      tell w to create tab with default profile
+    end if
+    tell current session of w to write text "cd " & quoted form of (item 1 of argv) & " && " & (item 2 of argv)
+    activate
+  end tell
+end run
+""",
         "focus": """
 on run argv
   tell application "iTerm"
@@ -170,7 +217,69 @@ end run
 }
 
 
+def open_in():
+    """Where roost opens a Session: "tab" (the default) or "window", from config.json's open_in."""
+    return "window" if config.read_config().get("open_in") == "window" else "tab"
+
+
+def open_new(term, cwd, cmd, title):
+    """Open cmd in cwd in a new tab or window of term, as open_in says. Returns (opened, where, hint):
+    where is "tab" or "window"; Terminal falls back to a window when it can't open a tab, with a hint."""
+    if term == "tmux":  # always a tmux window, whatever open_in says
+        return tmux("new-window", "-c", cwd, "-n", title, window_command(cmd, title)[1]) is not None, "tmux window", ""
+    t, where = TERMINALS[term], open_in()
+    if osa(t["tab" if where == "tab" else "new"], cwd, *window_command(cmd, title)) is not None:
+        return True, where, ""
+    if where == "tab" and term == "terminal" and osa(t["new"], cwd, *window_command(cmd, title)) is not None:
+        return True, "window", (" (a tab needs Accessibility permission for your terminal: System Settings → "
+                                "Privacy & Security → Accessibility)")
+    return False, where, ""
+
+
+def failed(term, where):
+    if term == "tmux":
+        return "Couldn't open a tmux window (is tmux running? roost setup chooses another terminal)"
+    return f"Couldn't open a {TERMINALS[term]['label']} {where} (check Automation permission, or run roost setup)"
+
+
+# ---------- tmux ----------
+# tmux is driven by its own command, on macOS and Linux: a Session opens in a new tmux window named
+# after it, and jumping to one finds the window whose name or pane title ends with its name.
+
+TMUX_WINDOWS = "#{session_name}:#{window_index}\t#{window_name}\t#{pane_title}"
+
+
+def tmux(*args):
+    """Run a tmux command; its output, or None when it fails or tmux isn't there."""
+    try:
+        r = subprocess.run(["tmux", *args], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def tmux_windows():
+    """(target, window name, pane title) for every tmux window, or [] when tmux isn't running."""
+    rows = [line.split("\t") for line in (tmux("list-windows", "-a", "-F", TMUX_WINDOWS) or "").splitlines()]
+    return [(r[0], r[1], r[2] if len(r) > 2 else "") for r in rows if len(r) >= 2]
+
+
+def tmux_focus(s):
+    """Switch to the tmux window s is open in. Returns a status message."""
+    names = [n for n in (s["name"], s.get("ai_title")) if n]
+    for target, name, title in tmux_windows():
+        if any(name.endswith(n) or title.endswith(n) for n in names):
+            tmux("switch-client", "-t", target)
+            tmux("select-window", "-t", target)
+            return f"Switched to {s['name']}, already open"
+    return f"{s['name']} is already open, but its tmux window wasn't found"
+
+
 def detect_terminal():
+    if os.environ.get("TMUX"):  # inside tmux, whatever terminal tmux runs in
+        return "tmux"
+    if not system.mac():  # the AppleScript terminals are macOS only
+        return None
     tp = os.environ.get("TERM_PROGRAM", "").lower()
     return next((k for k, v in TERMINALS.items() if v["term_program"] == tp), None)
 
@@ -207,7 +316,9 @@ def chosen_terminal():
     cfg = config.read_config()
     if "terminal" not in cfg:
         return detect_terminal()
-    return cfg["terminal"] if cfg["terminal"] in TERMINALS else None
+    if cfg["terminal"] == "tmux":
+        return "tmux"
+    return cfg["terminal"] if cfg["terminal"] in TERMINALS and system.mac() else None
 
 
 def app_running(app):
@@ -219,6 +330,8 @@ def app_running(app):
 def window_titles(term):
     """Titles of every open terminal tab. Claude doesn't report which background
     sessions are attached to a window, so titles are one way to tell."""
+    if term == "tmux":
+        return [x for _, name, title in tmux_windows() for x in (name, title) if x]
     if not term or not app_running(TERMINALS[term]["app"]):
         return []
     out = osa(TERMINALS[term]["titles"]) or ""
@@ -252,21 +365,23 @@ def window_command(cmd, title):
 
 
 def open_in_window(s, term):
-    """Open the session in a new window of `term` without leaving roost. Returns a status message."""
+    """Open the session in a new tab or window of `term` (open_in) without leaving roost. Returns a status message."""
     if s.get("desktop"):
         return go_to_desktop(s)
-    t = TERMINALS[term]
+    if term == "tmux" and (s["kind"] == "interactive" or s.get("attached")):
+        return tmux_focus(s)
+    t = TERMINALS.get(term)
     if s["kind"] == "interactive" or s.get("attached"):
         names = [n for n in {s["name"], s.get("ai_title")} if n]
         if osa(t["focus"], *names) == "ok":
             return f"Switched to {s['name']}, already open"
         return f"{s['name']} is already open, but its window wasn't found"
     cmd = f"claude attach {s['attach']}" if s.get("attach") else f"claude --resume {s['id']}"
-    cwd = launch_dir(s)
-    if osa(t["new"], cwd, *window_command(cmd, s["name"])) is None:
-        return f"Couldn't open a {t['label']} window (check Automation permission, or run roost setup)"
+    opened, where, hint = open_new(term, launch_dir(s), cmd, s["name"])
+    if not opened:
+        return failed(term, where)
     s["opening"] = time.time()
-    return f"Opened {s['name']} in a new window"
+    return f"Opened {s['name']} in a new {where}{hint}"
 
 
 def go_to_desktop(s):

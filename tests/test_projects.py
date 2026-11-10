@@ -2013,6 +2013,17 @@ class SectionData(unittest.TestCase):
                 (roost.handoff_time(paths[0]), "Printer fix", str(paths[0])), (roost.handoff_time(paths[2]), paths[2].stem, str(paths[2]))]
         self.assertEqual([tuple(h) for h in p["handoffs"]], want)
 
+    def test_a_handoff_with_a_title_is_listed_by_its_title_and_a_roll_up_stays_a_roll_up(self):
+        folder = self.project("rollout")
+        now = time.time()
+        titled = folder / "handoffs" / handoff_name(now - 3600, "aa1b9a71").replace(".md", "-roost-version-2-5.md")
+        titled.write_text("---\nsession: aa1b9a71-0000\nname: Printer fix\ntitle: roost version 2.5\n---\n\nDid the work.\n")
+        [rolled] = self.handoffs(folder, [(now - 7200, "rollup: alpha\nname: Printer fix\ntitle: Ignored title\n")])
+        p = roost.read_project(folder)
+        self.assertEqual([tuple(h) for h in p["handoffs"]],
+                         [(roost.handoff_time(titled), "roost version 2.5", str(titled)),
+                          (roost.handoff_time(rolled), "Roll-up of alpha", str(rolled))])
+
     def test_notes_are_listed_newest_edit_first_titled_as_read_note_gives_them(self):
         folder = self.project("rollout")
         now = time.time()
@@ -2248,6 +2259,17 @@ class DetailSections(unittest.TestCase):
             self.assertIn(f"Handoff {d}", l)
             self.assertLess(l.index(when), l.index(f"Handoff {d}"), l)
         self.assertFalse([l for l in lines if "Handoff 5" in l])
+
+    def test_a_titled_handoff_shows_its_title(self):
+        folder = self.project("b", self.readme())
+        when = time.time() - 3600
+        path = folder / "handoffs" / handoff_name(when, "aa1b9a71").replace(".md", "-roost-version-2-5.md")
+        path.write_text("---\nsession: aa1b9a71-0000\nname: Long-lived builder\ntitle: roost version 2.5\n---\n\nDid it.\n")
+        lines = self.section(self.ui(), "project", "b", "Handoffs")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn(roost.short_when(roost.handoff_time(path)), lines[0])
+        self.assertIn("roost version 2.5", lines[0])
+        self.assertNotIn("Long-lived builder", lines[0])
 
     def test_no_handoffs_yet(self):
         self.project("b", self.readme())
@@ -2760,6 +2782,29 @@ class DetailPane(unittest.TestCase):
             self.assertEqual(seen["menu"]["menu"], ("Toner check", ["Open it", "Show it in Finder"]))
             self.assertEqual(got, [path], label)
         self.assertEqual((edited, shown), ([path], [path]), "each action did only its own thing")
+
+    def test_on_linux_with_a_display_a_handoff_shows_in_files_by_opening_its_folder(self):
+        """The handoff's menu names the file manager this computer has ("Files" on Linux with a display);
+        choosing it opens the folder that holds the Handoff, since xdg-open can't select a file."""
+        import unittest.mock
+        system, shell = importlib.import_module("roost.core.system"), importlib.import_module("roost.app.shell")
+        path = next((self.root / "fleet" / "handoffs").glob("*-cc000000.md"))  # Toner check
+        ran, seen = [], {}
+
+        async def pick(pilot):
+            ui = pilot.app.ui
+            at = next((i for i, o in enumerate(ui.choice_options()) if o[0] == "Show it in Files"), None) if ui.choosing else None
+            if at is not None:  # else the menu's assertion below says what came up instead
+                ui.choosing["sel"] = at
+                await pilot.press("enter")
+        with unittest.mock.patch.object(system.sys, "platform", "linux"), \
+                unittest.mock.patch.dict(system.os.environ, {"WAYLAND_DISPLAY": "wayland-0"}, clear=True), \
+                unittest.mock.patch.object(system.shutil, "which", lambda name, *a, **k: "/usr/bin/xdg-open" if name == "xdg-open" else None), \
+                unittest.mock.patch.object(shell.subprocess, "run", lambda argv, *a, **k: ran.append(list(argv))):
+            self.run_on(self.projects, [self.on_project("fleet"), self.keys("right"), self.index_of("handoff", "Toner check"),
+                                        self.keys("enter"), self.state(seen, "menu"), pick], size=self.SIZE)
+        self.assertEqual(seen["menu"]["menu"], ("Toner check", ["Open it", "Show it in Files"]))
+        self.assertIn(["xdg-open", str(path.parent)], ran)
 
     # the mouse
 
@@ -4807,3 +4852,267 @@ class ScrolledPanels(unittest.TestCase):
                     got = seen["clicked"]
                     self.assertEqual((got["focus"], got["dsel"], got["menu"]), ("pane", dsel, None), "the click selects that panel")
                     self.assertTrue([l for l in seen["double"]["lines"] if "enter to collapse" in l], "the double-click expands it")
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class ResizableList(unittest.TestCase):
+    """The Projects tab's list can be made narrower or wider: < and > move its divider (its right border)
+    4 columns at a time, and dragging the divider puts it where the mouse is let go. The width is the
+    list's whole width, its divider included: 34 to start with, never under 24, and never so wide that the
+    details pane beside it has fewer than 40 columns. It's saved as project_list_width in config.json and
+    read back on start; a missing or unusable one gives 34."""
+    on_project, chosen = ProjectRows.on_project, staticmethod(ProjectRows.chosen)
+    select, keys, at = staticmethod(TextualScreens.select), staticmethod(TextualScreens.keys), staticmethod(TwoPanes.at)
+    DESCRIPTION = TwoPanes.DESCRIPTION
+    SIZE = (120, 40)
+
+    def setUp(self):
+        """TwoPanes' temp projects, with the real read_config and save_config on a temp config.json
+        (the screens' stand-ins would keep nothing)."""
+        import unittest.mock
+        real = dict(read_config=roost.read_config, save_config=roost.save_config)
+        TwoPanes.setUp(self)  # Projects.setUp has pointed CONFIG at a temp config.json
+        self.config = roost.CONFIG
+        patcher = unittest.mock.patch.multiple(roost, **real)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def saved_config(self):
+        return json.loads(self.config.read_text()) if self.config.exists() else {}
+
+    def run_on(self, steps=(), size=SIZE, config=None):
+        """Start roost on the Projects tab with config.json holding config (as well as tab and projects_dir),
+        do the steps, and return the app."""
+        import asyncio, unittest.mock
+        cfg = dict(self.saved_config(), tab="Projects", **(config or {}))
+        self.config.write_text(json.dumps(cfg))
+        with unittest.mock.patch.multiple(roost, read_projects=lambda sessions: self.projects):
+            app = roost.RoostApp(self.sessions, "")
+
+            async def go():
+                async with app.run_test(size=size) as pilot:
+                    await pilot.pause()
+                    for step in [self.select(lambda ui: None)] + list(steps):
+                        await step(pilot)
+                        await pilot.pause()
+                    app.lines = screen_text(app)
+            asyncio.run(go())
+        return app
+
+    @staticmethod
+    def width(seen, label):
+        """A step that keeps, under label, the list's width on screen (its divider included) and the
+        column the details pane starts at."""
+        async def step(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            shown = pilot.app.query_one("ProjectList")
+            seen[label] = (shown.outer_size.width, pilot.app.query_one("#pane").region.x, shown.display)
+        return step
+
+    def widths(self, steps, size=SIZE, config=None):
+        """The list's width after each of steps, starting with the width it starts at."""
+        seen, out = {}, []
+        plan = [self.width(seen, 0)]
+        for i, s in enumerate(steps, 1):
+            plan += [s, self.width(seen, i)]
+        self.run_on(plan, size=size, config=config)
+        for i in range(len(steps) + 1):
+            w, pane, shown = seen[i]
+            if shown:  # on the Projects tab
+                self.assertEqual(pane, w, f"the details pane starts right after the list (step {i})")
+            out.append(w)
+        return out
+
+    @staticmethod
+    def drag(x0, x1, y=12):
+        """A step that presses the mouse at column x0 and lets it go at column x1, on row y."""
+        async def step(pilot):
+            await pilot.mouse_down(offset=(x0, y))
+            await pilot.hover(offset=(x1, y))
+            await pilot.mouse_up(offset=(x1, y))
+        return step
+
+    def test_greater_than_widens_the_list_and_less_than_narrows_it_4_columns_at_a_time(self):
+        got = self.widths([self.keys(">"), self.keys(">"), self.keys("<")])
+        self.assertEqual(got, [34, 38, 42, 38])
+        self.assertEqual(self.saved_config().get("project_list_width"), 38, "the width is saved as it changes")
+
+    def test_the_list_is_never_under_24_columns(self):
+        got = self.widths([self.keys("<")] * 4)
+        self.assertEqual(got, [34, 30, 26, 24, 24])
+        self.assertEqual(self.saved_config().get("project_list_width"), 24)
+
+    def test_the_details_pane_keeps_at_least_40_columns_so_the_widest_depends_on_the_window(self):
+        for cols in (120, 140):
+            with self.subTest(window=cols):
+                self.config.write_text("{}")
+                got = self.widths([self.keys(*[">"] * 30)], size=(cols, 40))
+                self.assertEqual(got, [34, cols - 40])
+                self.assertEqual(self.saved_config().get("project_list_width"), cols - 40)
+
+    def test_a_saved_width_is_read_back_on_start_and_a_missing_or_unusable_one_gives_34(self):
+        self.assertEqual(self.widths([], config={"project_list_width": 50}), [50])
+        self.assertEqual(self.widths([], config={"project_list_width": 24}), [24])
+        for bad in ("wide", None, [50], {"w": 50}, "50px"):
+            with self.subTest(saved=bad):
+                self.config.write_text("{}")
+                self.assertEqual(self.widths([], config={"project_list_width": bad}), [34])
+        self.config.write_text("{}")
+        self.assertEqual(self.widths([]), [34], "nothing saved")
+
+    def test_a_saved_width_out_of_bounds_is_kept_within_them_on_start(self):
+        for saved in (5, 200):
+            with self.subTest(saved=saved):
+                self.config.write_text("{}")
+                w, = self.widths([], config={"project_list_width": saved})
+                self.assertGreaterEqual(w, 24)
+                self.assertLessEqual(w, self.SIZE[0] - 40)
+
+    def test_dragging_the_divider_puts_it_where_the_mouse_is_let_go(self):
+        divider = 33  # the list's last column, at the width it starts at
+        got = self.widths([self.drag(divider, 49)])
+        self.assertEqual(got, [34, 50], "the divider is in the column the mouse was let go in")
+        self.assertEqual(self.saved_config().get("project_list_width"), 50)
+        got = self.widths([self.drag(49, 29)])  # from the saved 50
+        self.assertEqual(got, [50, 30])
+        self.assertEqual(self.saved_config().get("project_list_width"), 30)
+
+    def test_a_drag_is_held_to_the_same_bounds(self):
+        self.assertEqual(self.widths([self.drag(33, 5)]), [34, 24])
+        self.config.write_text("{}")
+        self.assertEqual(self.widths([self.drag(33, 115)]), [34, 80])
+        self.assertEqual(self.saved_config().get("project_list_width"), 80)
+
+    def test_a_press_and_release_away_from_the_divider_leaves_the_width(self):
+        self.assertEqual(self.widths([self.drag(10, 60)]), [34, 34])  # starts on a list row, not the divider
+        self.assertEqual(self.widths([self.drag(70, 50)]), [34, 34])  # starts in the details
+        self.assertNotIn("project_list_width", self.saved_config())
+
+    def test_a_drag_starts_from_the_lists_last_column_the_divider_or_the_details_first_column(self):
+        """The divider is hard to hit on its own, so a press in the column either side of it starts the
+        drag too: list_width - 2 (the list's), list_width - 1 (the divider), list_width (the details pane's)."""
+        for grab in (32, 33, 34):  # at the width it starts at, 34
+            with self.subTest(grab=grab):
+                self.config.write_text("{}")
+                self.assertEqual(self.widths([self.drag(grab, 49)]), [34, 50], "the divider goes where the mouse is let go")
+                self.assertEqual(self.saved_config().get("project_list_width"), 50)
+                self.assertEqual(self.widths([self.drag(grab + 16, 115)]), [50, 80], "from the saved 50, held to the bounds")
+                self.assertEqual(self.saved_config().get("project_list_width"), 80)
+
+    def test_a_press_two_columns_past_the_divider_or_four_inside_it_starts_no_drag(self):
+        for press in (35, 30):  # the details pane's second column, and well inside the list
+            with self.subTest(press=press):
+                self.config.write_text("{}")
+                self.assertEqual(self.widths([self.drag(press, 60)]), [34, 34])
+                self.assertNotIn("project_list_width", self.saved_config())
+
+    def test_dragging_the_divider_selects_and_copies_no_text(self):
+        """Textual's screen starts a text selection on the mouse down, so a divider drag across text would
+        highlight it and copy it when let go. A drag from a grab column selects nothing and copies nothing."""
+        import unittest.mock
+        row = 9  # a project row: its name in the list, a Sub-projects item in the details
+
+        def drag_watching(x0, x1, seen):
+            async def step(pilot):
+                await pilot.mouse_down(offset=(x0, row))
+                await pilot.hover(offset=(x1, row))
+                await pilot.pause()
+                seen["during"] = pilot.app.screen.get_selected_text()
+                await pilot.mouse_up(offset=(x1, row))
+                await pilot.pause()
+                seen["after"] = pilot.app.screen.get_selected_text()
+            return step
+
+        def run(x0, x1):
+            seen, copied = {}, []
+            self.config.write_text("{}")
+            with unittest.mock.patch.object(roost.UI, "clipboard", lambda ui, text: copied.append(text)):
+                app = self.run_on([drag_watching(x0, x1, seen)])
+            return seen, copied, app
+
+        seen, copied, app = run(30, 60)  # the fixture: the same move from a column that isn't a grab column
+        self.assertTrue(seen["after"] and copied, "a plain drag over this row selects and copies text")
+        for grab in (32, 33, 34):
+            with self.subTest(grab=grab):
+                seen, copied, app = run(grab, 60)
+                self.assertEqual(self.saved_config().get("project_list_width"), 61, "the fixture: the divider was dragged")
+                self.assertFalse(seen["during"], "nothing is selected while the divider is dragged")
+                self.assertFalse(seen["after"], "nothing is selected once it's let go")
+                self.assertEqual(copied, [])
+                self.assertNotEqual(app.ui.msg, "Copied the selected text")
+
+    def test_the_keys_dont_resize_the_list_on_another_tab(self):
+        steps = [open_view("Sessions"), self.keys("<", "<", ">", ">", ">"), open_view("Projects")]
+        self.assertEqual(self.widths(steps)[-1], 34)
+        self.assertNotIn("project_list_width", self.saved_config())
+
+    def test_a_less_than_typed_in_the_search_is_text(self):
+        app = self.run_on([self.keys("/", "<")])
+        self.assertEqual(app.ui.pquery, "<")
+        self.assertNotIn("project_list_width", self.saved_config())
+
+    def test_a_click_goes_to_the_list_or_the_details_by_the_current_width(self):
+        """Wider, a click in the columns the list has gained selects that row; narrower, a click in the
+        columns it has given up is the details', not the list's."""
+        seen = {}
+
+        async def ys(pilot):
+            pilot.app.redraw()
+            await pilot.pause()
+            seen["y"] = self.at(screen_text(pilot.app), "Restore drill")
+        self.run_on([self.on_project("fleet"), ys])
+        y = seen["y"]
+        self.assertIsNotNone(y)
+        click = lambda x: (lambda pilot: pilot.click(offset=(x, y)))
+        app = self.run_on([self.keys(">", ">"), self.on_project("fleet"), click(38)])  # 42 wide: column 38 is the list's
+        self.assertEqual(self.chosen(app), "drill")
+        self.config.write_text("{}")
+        app = self.run_on([self.keys("<", "<"), self.on_project("fleet"), click(30)])  # 26 wide: column 30 is the details'
+        self.assertEqual(self.chosen(app), "fleet")
+
+    def test_the_details_fit_the_pane_when_the_list_is_wider(self):
+        """Six > (58 wide): the description in Details still shows in full, wrapped to the narrower pane."""
+        seen = {}
+        app = self.run_on([self.keys(*[">"] * 6), self.on_project("fleet"), self.width(seen, "wide")])
+        self.assertEqual(seen["wide"][0], 58)
+        details = " ".join(l[58:].strip(" │") for l in app.lines)
+        self.assertNotIn("…", " ".join(l[58:] for l in app.lines if "Description" in l or "the quarter" in l))
+        self.assertIn(" ".join(self.DESCRIPTION.split()[-4:]), re.sub(r"\s+", " ", details))
+        for word in self.DESCRIPTION.split():
+            self.assertIn(word, details)
+
+
+
+@unittest.skipUnless(roost.App, "Textual isn't installed here: run the tests with ~/.roost/venv/bin/python")
+class OpenInToggleOnScreen(unittest.TestCase):
+    """#325 on the Textual screen: ctrl+t on any tab flips open_in (tab, window) in config.json and says
+    which on the status line; typed into a search it changes nothing."""
+    keys, select = staticmethod(TextualScreens.keys), staticmethod(TextualScreens.select)
+    SIZE, DESCRIPTION = ResizableList.SIZE, TwoPanes.DESCRIPTION
+    saved_config, run_on = ResizableList.saved_config, ResizableList.run_on
+
+    def setUp(self):
+        import unittest.mock
+        ResizableList.setUp(self)  # the real read_config and save_config, on a temp config.json
+        patcher = unittest.mock.patch.object(roost, "osa", lambda script, *a: None)  # never a real terminal
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_ctrl_t_flips_open_in_on_every_tab(self):
+        expect = "window"
+        for name in [t.name for t in roost.UI.TABS]:
+            with self.subTest(tab=name):
+                seen = {}
+
+                async def look(pilot):
+                    seen["msg"] = pilot.app.ui.msg
+                app = self.run_on([open_view(name), self.keys("ctrl+t"), look])
+                self.assertEqual(self.saved_config().get("open_in"), expect)
+                self.assertEqual(seen["msg"], f"Sessions open in a new {expect}")
+                self.assertTrue(any(f"Sessions open in a new {expect}" in l for l in app.lines), "\n".join(app.lines))
+                expect = "tab" if expect == "window" else "window"
+
+    def test_ctrl_t_in_a_search_leaves_open_in_alone(self):
+        self.run_on([self.keys("slash", "ctrl+t")])
+        self.assertNotIn("open_in", self.saved_config())
